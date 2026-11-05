@@ -17,6 +17,9 @@ MEDIA_COMMANDS = [
     (re.compile(rf"^{FILLER}(?:turn (?:it|the music|the volume) down|volume down|quieter){END}", re.IGNORECASE), "volume_down"),
 ]
 
+OPEN_APP = re.compile(rf"^{FILLER}(?:open(?: up)?|launch|start up|load up|bring up)\s+(?:the |my )?(?P<app>.+?)(?: app| application)?{END}",
+                      re.IGNORECASE)
+
 VOLUME_LEVEL = re.compile(rf"^{FILLER}(?:set |turn |put )?(?:the )?volume (?:to |at |on )?(?P<level>\d{{1,3}})(?: ?%| percent)?{END}",
                           re.IGNORECASE)
 VOLUME_CHANGES = [
@@ -47,4 +50,7 @@ def parse(command: str) -> dict | None:
     for pattern, action in MEDIA_COMMANDS:
         if pattern.match(text):
             return {"action": action}
+    if match := OPEN_APP.match(text):
+        app = match.group("app").strip(" ,.")
+        return {"action": "open_app", "app": app} if app else None
     return None

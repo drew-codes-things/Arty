@@ -27,6 +27,28 @@ WHISPER_MODEL="base.en"
 CACHE="app/build/cache"
 STAGE="app/build/backend"
 PY="$STAGE/python/bin/python3.12"
+SITE="$STAGE/python/lib/python3.12/site-packages"
+HF_CLI_AGENT_FILES=(system skills extensions _skills spaces)
+HF_SKILLS_BLOCK_START="^# Skills directories for AI agents"
+
+strip_hf_agent_tooling() {
+  local hub="$SITE/huggingface_hub"
+  local metadata=("$SITE"/huggingface_hub-*.dist-info/METADATA)
+  local file
+  for file in "${HF_CLI_AGENT_FILES[@]}"; do
+    rm -f "$hub/cli/$file.py"
+  done
+  rm -f "$STAGE/python/bin/hf"
+  sed -i "/$HF_SKILLS_BLOCK_START/,/^\$/d" "$hub/constants.py"
+  sed -i '/^$/,$d' "${metadata[@]}"
+  for file in "${HF_CLI_AGENT_FILES[@]}"; do
+    [ ! -e "$hub/cli/$file.py" ] || { echo "Couldn't remove huggingface_hub/cli/$file.py." >&2; exit 1; }
+  done
+  if grep -q "_SKILLS_" "$hub/constants.py" || grep -q '^$' "${metadata[@]}"; then
+    echo "The bundled huggingface_hub still has its agent tooling (constants.py or METADATA)." >&2
+    exit 1
+  fi
+}
 
 if [ ! -d models/kokoro ] || [ ! -s models/kokoro/kokoro-v1.0.onnx ]; then
   echo "No Kokoro voice model. Run ./download-kokoro.sh first." >&2
@@ -70,6 +92,7 @@ rm -rf "$STAGE"/python/lib/python3.12/site-packages/{pip,setuptools,wheel}
 rm -rf "$STAGE"/python/lib/python3.12/site-packages/{pip,setuptools,wheel}-*.dist-info
 find "$STAGE/python" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE/python" -name '*.pyc' -delete 2>/dev/null || true
+strip_hf_agent_tooling
 
 echo "==> Copying the backend and its assets"
 rsync -a --exclude '__pycache__' --exclude 'tests' server "$STAGE/"

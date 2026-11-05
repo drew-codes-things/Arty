@@ -30,7 +30,24 @@ class HeadsetActions(private val context: Context) {
         is HeadsetAction.SpotifyPlay -> playOnSpotify(action.query)
         is HeadsetAction.Media -> pressMediaKey(mediaKeyCode(action.command))
         is HeadsetAction.Volume -> changeVolume(action.louder)
+        is HeadsetAction.OpenApp -> openApp(action.name)
         is HeadsetAction.Unknown -> UNKNOWN_ACTION
+    }
+
+    private fun launchableApps(): List<LaunchableApp> {
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val packages = context.packageManager
+        return packages.queryIntentActivities(launcher, 0)
+            .map { LaunchableApp(it.loadLabel(packages).toString(), it.activityInfo.packageName) }
+            .filter { it.packageName != context.packageName }
+            .distinctBy { it.packageName }
+    }
+
+    private fun openApp(spoken: String): String {
+        val app = bestAppMatch(spoken, launchableApps()) ?: return appNotFound(spoken)
+        val launch = context.packageManager.getLaunchIntentForPackage(app.packageName)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return appNotFound(spoken)
+        return if (startFirstAvailable(launch)) "" else appNotFound(spoken)
     }
 
     private fun spotifyInstalled(): Boolean = context.packageManager.getLaunchIntentForPackage(SPOTIFY_PACKAGE) != null

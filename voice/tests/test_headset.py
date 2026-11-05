@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import types
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "assistant"))
 os.environ.setdefault("HUB_TOKEN", "hub-test")
@@ -26,6 +27,9 @@ import headset_panels
     ("resume the music", {"action": "media_play"}),
     ("skip this song", {"action": "media_next"}),
     ("turn it down", {"action": "volume_down"}),
+    ("open YouTube", {"action": "open_app", "app": "YouTube"}),
+    ("can you launch the Beat Saber app please", {"action": "open_app", "app": "Beat Saber"}),
+    ("Open up my Meta Quest Browser.", {"action": "open_app", "app": "Meta Quest Browser"}),
 ])
 def test_headset_commands_are_recognised(command, expected):
     assert headset_commands.parse(command) == expected
@@ -90,6 +94,70 @@ def test_a_silent_headset_is_reported(monkeypatch):
 
     handled, audio = run_session(scenario)
     assert handled and audio == [b"RIFF" + headset.NO_REPLY.encode()]
+
+
+def test_the_time_is_answered_without_the_brain_or_the_headset():
+    async def scenario(session, ws):
+        session.clock = lambda: datetime(2026, 11, 5, 17, 44)
+        return await session.act("what's the time?"), ws.sent, ws.audio
+
+    handled, sent, audio = run_session(scenario)
+    assert handled and audio == [b"RIFFIt's 5:44 pm."]
+    assert not any(m["type"] == "action" for m in sent)
+
+
+def test_a_word_is_defined_from_the_dictionary(monkeypatch):
+    async def dictionary(http, term):
+        return f"{term} looked up"
+
+    monkeypatch.setattr(headset.quick_answers, "look_up_word", dictionary)
+
+    async def scenario(session, ws):
+        session.http = object()
+        return await session.act("what does ephemeral mean?"), ws.audio
+
+    handled, audio = run_session(scenario)
+    assert handled and audio == [b"RIFFephemeral looked up"]
+
+
+def test_an_unknown_word_is_left_for_the_brain(monkeypatch):
+    async def nothing(http, term):
+        return None
+
+    monkeypatch.setattr(headset.quick_answers, "look_up_word", nothing)
+
+    async def scenario(session, ws):
+        session.http = object()
+        return await session.act("what does skibidi mean?"), ws.sent
+
+    handled, sent = run_session(scenario)
+    assert handled is False and sent == []
+
+
+def test_a_search_request_asks_the_brain_to_search_the_web(monkeypatch):
+    asked = []
+
+    async def answer(question):
+        asked.append(question)
+
+    async def scenario(session, ws):
+        monkeypatch.setattr(session.assistant, "answer", answer)
+        return await session.act("search up Tesco opening times")
+
+    assert run_session(scenario) is True
+    assert asked == ["Search the web for Tesco opening times and tell me what you find."]
+
+
+def test_open_app_is_sent_to_the_headset():
+    async def scenario(session, ws):
+        acting = asyncio.create_task(session.act("open YouTube"))
+        await asyncio.sleep(0)
+        action = next(m for m in ws.sent if m["type"] == "action")
+        await session.handle_text(json.dumps({"type": "action_result", "id": action["id"], "say": ""}))
+        return await acting, action
+
+    handled, action = run_session(scenario)
+    assert handled and action["action"] == "open_app" and action["app"] == "YouTube"
 
 
 def test_questions_are_left_for_the_brain():

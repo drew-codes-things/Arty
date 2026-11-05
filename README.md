@@ -38,7 +38,10 @@ covering how to install it, how to use it, and what it's been run and tested on.
 - **A Proxmox VE 9 host.** `provision.sh` and `deploy.sh` drive it over SSH with `pct` and `qm`.
 - **A Debian 13 LXC container for the brain** with nesting on (SearXNG runs in Docker inside it), about 6 GB of RAM
   and a GPU passed through. Built and tested on an NVIDIA RTX 3060 (12 GB); `qwen3:14b` fills it. A smaller card runs a
-  smaller model with fewer tools per request.
+  smaller model with fewer tools per request. A bigger card can run a bigger model: any Ollama model that supports tool
+  calling works as the main model, and models over 16B are shown every tool at once (`tool_budget_by_size` in
+  `brain/brain.json`). A 27B to 32B model at 4-bit, such as `qwen3:32b`, needs roughly 20 GB of VRAM, so a 24 GB card;
+  only `qwen3:14b` has been tested.
 - **A Debian 13 VM with XFCE for Arty's own PC** - its browser, Gmail window, terminal and document library.
 - **SSH from the machine you deploy from** to the Proxmox host as root (the SSH host name in `PROXMOX`, `proxmox` by
   default) and to Arty's PC (`DESKTOP`, `ai@<its address>`).

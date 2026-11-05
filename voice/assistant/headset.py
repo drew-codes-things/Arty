@@ -4,11 +4,13 @@ import itertools
 import json
 import logging
 import os
+from datetime import datetime
 
 import aiohttp
 from aiohttp import web
 
 import headset_commands
+import quick_answers
 from arty_voice import BRAIN_KEY, BRAIN_URL, Assistant, Senses
 from headset_panels import REFRESH_SECONDS, Dashboard
 from listening import UtteranceCollector
@@ -46,15 +48,34 @@ class HeadsetSession:
 
     def __init__(self, senses: Senses, http: aiohttp.ClientSession, ws: web.WebSocketResponse):
         self.output = HeadsetOutput(ws)
+        self.http = http
         self.assistant = Assistant(senses, self.output, http, bare_wake=True, act=self.act)
         self.collector = UtteranceCollector()
         self.pending: dict[int, asyncio.Future] = {}
         self.ids = itertools.count(1)
+        self.clock = datetime.now
 
     async def act(self, command: str) -> bool:
-        action = headset_commands.parse(command)
-        if action is None:
-            return False
+        if reply := quick_answers.time_answer(command, self.clock()):
+            await self.assistant.say_all([reply])
+            return True
+        if meaning := await self.definition(command):
+            await self.assistant.say_all([meaning])
+            return True
+        if (action := headset_commands.parse(command)) is not None:
+            return await self.run_on_headset(action)
+        if query := quick_answers.search_query(command):
+            await self.assistant.answer(quick_answers.search_question(query))
+            return True
+        return False
+
+    async def definition(self, command: str) -> str | None:
+        term = quick_answers.word_to_define(command)
+        if term is None or self.http is None:
+            return None
+        return await quick_answers.look_up_word(self.http, term)
+
+    async def run_on_headset(self, action: dict) -> bool:
         log.info("headset command: %s", action["action"])
         action_id = next(self.ids)
         reply = asyncio.get_running_loop().create_future()

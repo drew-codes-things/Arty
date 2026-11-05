@@ -41,6 +41,7 @@ sealed interface HeadsetAction {
     data class SpotifyPlay(val query: String) : HeadsetAction
     data class Media(val command: MediaCommand) : HeadsetAction
     data class Volume(val louder: Boolean) : HeadsetAction
+    data class OpenApp(val name: String) : HeadsetAction
     data class Unknown(val name: String) : HeadsetAction
 }
 
@@ -83,6 +84,9 @@ object HeadsetProtocol {
         "media_previous" -> HeadsetAction.Media(MediaCommand.PREVIOUS)
         "volume_up" -> HeadsetAction.Volume(louder = true)
         "volume_down" -> HeadsetAction.Volume(louder = false)
+        "open_app" -> message.optString("app").trim().let {
+            if (it.isEmpty()) HeadsetAction.Unknown(name) else HeadsetAction.OpenApp(it)
+        }
         else -> HeadsetAction.Unknown(name)
     }
 

@@ -40,6 +40,18 @@ class HeadsetProtocolTest {
     }
 
     @Test
+    fun openAppCarriesTheSpokenName() {
+        assertEquals(
+            ServerMessage.Action(8, HeadsetAction.OpenApp("Beat Saber")),
+            HeadsetProtocol.parse("""{"type":"action","id":8,"action":"open_app","app":" Beat Saber "}"""),
+        )
+        assertEquals(
+            ServerMessage.Action(9, HeadsetAction.Unknown("open_app")),
+            HeadsetProtocol.parse("""{"type":"action","id":9,"action":"open_app","app":""}"""),
+        )
+    }
+
+    @Test
     fun unknownOrEmptyActionsAreStillAnsweredNotDropped() {
         assertEquals(
             ServerMessage.Action(6, HeadsetAction.Unknown("teleport")),

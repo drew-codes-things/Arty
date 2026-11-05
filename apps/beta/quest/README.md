@@ -4,7 +4,7 @@
 
 **Beta.** Arty in your headset, your own virtual reality AI.
 
-**Say "Arty ..." and it answers out loud, with an orb that shows when it's listening, thinking and talking, and panels for your servers, weather, calendar and reminders that you can grab and move.**
+**Say "Arty ..." to ask what a word means, the time, to search something up or to open an app. It answers out loud, with an orb that shows when it's listening, thinking and talking, and panels for your servers, weather, calendar and reminders that you can grab and move.**
 
 [![Kotlin](https://img.shields.io/badge/kotlin-2.1-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Meta Spatial SDK](https://img.shields.io/badge/meta%20spatial%20sdk-0.14-0467DF?style=flat-square&logo=meta&logoColor=white)](https://developers.meta.com/horizon/develop/spatial-sdk)
@@ -29,12 +29,25 @@ all run on the server, so the headset only listens and plays.
 
 Pinch a panel to move it; it stays upright, between 0.5 m and 2.4 m high.
 
+## What it's for
+
+Quick answers while the headset is on. These are handled in code on the voice server
+([`quick_answers.py`](../../../voice/assistant/quick_answers.py)), so they are fast and can't be made up:
+
+| Say | Arty does |
+|---|---|
+| "Arty, what does ephemeral mean?" / "define ubiquitous" | Reads up to two meanings from a free dictionary ([dictionaryapi.dev](https://dictionaryapi.dev)); words it doesn't know, slang and phrases go to the brain instead |
+| "Arty, what's the time?" / "what's the date?" / "what day is it?" | Answers from the voice server's clock |
+| "Arty, search up Tesco opening times" / "look up ..." / "google ..." | Asks the brain to search the web and sums up what it finds |
+| Anything else | Goes to the brain like any other Arty question |
+
 ## Headset commands
 
 The server recognises these and the headset carries them out ([`headset_commands.py`](../../../voice/assistant/headset_commands.py)):
 
 | Say | Headset does |
 |---|---|
+| "Arty, open YouTube" / "launch Beat Saber" | Opens the installed app with that name ("browser" finds Meta Quest Browser); if none matches, Arty says so |
 | "Arty, play Timber by Pitbull on Spotify" | Asks the installed Spotify app to play it (search if it can't play directly) |
 | "Arty, pause" / "resume" / "skip" / "previous" | Media keys |
 | "Arty, turn it up" / "turn it down" | Media volume |
