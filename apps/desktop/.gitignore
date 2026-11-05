@@ -1,0 +1,14 @@
+app/build/backend/
+app/dist/
+arty_config.yaml
+cache/
+character_config.yaml
+chat_history.json
+*.log
+node_modules/
+portal_token
+__pycache__/
+.pytest_cache/
+.venv/
+models/kokoro/
+.arty_token

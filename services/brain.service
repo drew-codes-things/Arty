@@ -1,0 +1,18 @@
+[Unit]
+Description=Assistant brain: memory, instructions, tool loop, background tasks and API (OpenAI-compatible)
+After=network-online.target ollama.service mcpo.service
+Wants=ollama.service mcpo.service
+
+[Service]
+EnvironmentFile=/srv/ai/secrets/mcpo.env
+EnvironmentFile=/srv/ai/secrets/brain.env
+EnvironmentFile=-/srv/ai/secrets/notify.env
+# Listens on the home network for the Arty API and phone-notification buttons; every
+# endpoint except /health and the per-task /hooks links needs an API key.
+Environment=BRAIN_HOST=0.0.0.0
+ExecStart=/usr/bin/python3 /srv/ai/brain/brain.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

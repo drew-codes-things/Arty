@@ -1,0 +1,811 @@
+{
+  "model": "qwen3:14b",
+  "think": "auto",
+  "arty_models": [],
+  "solo_models": [],
+  "system_prompt_file": "/srv/ai/brain/system-prompt.md",
+  "keep_alive": -1,
+  "options": {
+    "temperature": 0.4,
+    "num_ctx": 12288,
+    "num_predict": 2048,
+    "repeat_penalty": 1.1
+  },
+  "persona_file": "/srv/ai/brain/persona.md",
+  "conversations_dir": "/srv/ai/memory/conversations",
+  "recent_exchanges": 3,
+  "auto_memory": true,
+  "allow_toolless_models": false,
+  "max_tool_rounds": 12,
+  "tool_budget": "auto",
+  "tool_budget_by_size": {
+    "4": 24,
+    "16": 40
+  },
+  "always_tools": [
+    "recall_conversations",
+    "ask_user",
+    "memory__create_entities",
+    "memory__add_observations",
+    "memory__search_nodes",
+    "research__web_search",
+    "fetch__fetch",
+    "calculate",
+    "date_maths",
+    "clock_maths",
+    "convert_units",
+    "convert_currency"
+  ],
+  "tool_groups": {
+    "browser": {
+      "description": "your web browser: open sites, click, type, scroll, download, upload, read LinkedIn posts",
+      "keywords": [
+        "website",
+        "site",
+        "browser",
+        "web page",
+        "webpage",
+        "online",
+        "linkedin",
+        "google",
+        "youtube",
+        "play ",
+        "song",
+        "music video",
+        "transcript",
+        "this video",
+        "the video",
+        "youtu.be",
+        "log in",
+        "login",
+        "sign in",
+        "http",
+        "www.",
+        ".com",
+        ".co.uk",
+        ".org",
+        ".xyz",
+        "post",
+        "download",
+        "upload",
+        "form",
+        "posts",
+        "writing style",
+        "my style"
+      ],
+      "tools": [
+        "workspace__browser_*",
+        "workspace__youtube_play",
+        "workspace__youtube_info",
+        "workspace__linkedin_posts"
+      ]
+    },
+    "screen": {
+      "description": "look at and use your desktop yourself: read text on screen, click, type, keys, open apps",
+      "keywords": [
+        "screen",
+        "desktop",
+        "click",
+        "app",
+        "window",
+        "type",
+        "mouse",
+        "screenshot",
+        "look at",
+        "see ",
+        "button",
+        "open "
+      ],
+      "tools": [
+        "workspace__look_at_desktop",
+        "workspace__read_screen_text",
+        "workspace__find_on_screen",
+        "workspace__click",
+        "workspace__type_text",
+        "workspace__press_keys",
+        "workspace__scroll",
+        "workspace__open_app",
+        "workspace__active_window"
+      ]
+    },
+    "windows": {
+      "description": "windows and clipboard: list, focus, close, maximise windows; copy and paste",
+      "keywords": [
+        "window",
+        "clipboard",
+        "copy",
+        "paste",
+        "minimi",
+        "maximi",
+        "close "
+      ],
+      "tools": [
+        "workspace__list_windows",
+        "workspace__window_action",
+        "workspace__get_clipboard",
+        "workspace__set_clipboard",
+        "workspace__screen_size",
+        "workspace__move_mouse"
+      ]
+    },
+    "computer": {
+      "description": "your computer's terminal and files: run commands, read/write/edit files, code",
+      "keywords": [
+        "file",
+        "folder",
+        "code",
+        "script",
+        "run ",
+        "command",
+        "terminal",
+        "install",
+        "project",
+        "write",
+        "edit",
+        "python",
+        "bash",
+        "program",
+        "save"
+      ],
+      "tools": [
+        "workspace__run_command",
+        "workspace__read_terminal",
+        "workspace__list_files",
+        "workspace__read_file",
+        "workspace__write_file",
+        "workspace__edit_file"
+      ]
+    },
+    "documents": {
+      "description": "read documents (PDF, Word, Excel, scans), search your document library, read-only git",
+      "keywords": [
+        "document",
+        "pdf",
+        "word doc",
+        "docx",
+        "spreadsheet",
+        "excel",
+        "xlsx",
+        "csv",
+        "read ",
+        "library",
+        "notes",
+        "git",
+        "repo",
+        "commit",
+        "scan"
+      ],
+      "tools": [
+        "research__read_document",
+        "research__search_library",
+        "research__reindex_library",
+        "research__git"
+      ]
+    },
+    "homelab": {
+      "description": "the user's home server: Proxmox status, websites up/down, your desktop snapshots, Minecraft servers on PufferPanel",
+      "keywords": [
+        "server",
+        "proxmox",
+        "homelab",
+        " vm",
+        "container",
+        "uptime",
+        "status",
+        "down",
+        "backup",
+        "snapshot",
+        "disk",
+        "storage",
+        "ram",
+        "cpu",
+        "backups",
+        "updates",
+        "disk space",
+        "weekly report",
+        "not working",
+        "restart",
+        "broken",
+        "offline",
+        "fix",
+        " ip",
+        "ip address",
+        "minecraft",
+        "game server",
+        "pufferpanel",
+        "puffer"
+      ],
+      "tools": [
+        "homelab__proxmox_status",
+        "homelab__service_status",
+        "homelab__snapshot_desktop",
+        "homelab__list_desktop_snapshots",
+        "homelab__weekly_report",
+        "homelab__diagnose",
+        "homelab__start_guest",
+        "homelab__restart_guest",
+        "homelab__pufferpanel_servers",
+        "homelab__pufferpanel_power"
+      ]
+    },
+    "nextcloud": {
+      "description": "the user's Nextcloud cloud drive: list, search, fetch and upload files",
+      "keywords": [
+        "nextcloud",
+        "cloud",
+        "my files",
+        "drive",
+        "shared"
+      ],
+      "tools": [
+        "homelab__nextcloud_*"
+      ]
+    },
+    "tasks": {
+      "description": "background jobs, schedules, reminders and phone notifications",
+      "keywords": [
+        "remind",
+        "schedule",
+        "every ",
+        "daily",
+        "weekly",
+        "tomorrow",
+        "later",
+        "background",
+        "task",
+        "notify",
+        "notification",
+        "phone",
+        "in an hour",
+        "each morning"
+      ],
+      "tools": [
+        "start_background_task",
+        "schedule_task",
+        "list_scheduled",
+        "cancel_scheduled",
+        "list_tasks",
+        "notify_user"
+      ]
+    },
+    "models": {
+      "description": "AI models: list them, hand a job to another model, switch your main model",
+      "keywords": [
+        "model",
+        "switch to",
+        "qwen",
+        "llama",
+        "mistral",
+        "gemma",
+        "deepseek",
+        "phi",
+        "coder model",
+        "another model",
+        "other model",
+        "second opinion"
+      ],
+      "tools": [
+        "list_models",
+        "ask_other_model",
+        "switch_model"
+      ]
+    },
+    "memory_admin": {
+      "description": "manage your long-term memory: read it all, link things, correct or forget entries",
+      "keywords": [
+        "forget",
+        "memory",
+        "memories",
+        "correct",
+        "wrong",
+        "delete",
+        "remove"
+      ],
+      "tools": [
+        "memory__read_graph",
+        "memory__open_nodes",
+        "memory__create_relations",
+        "memory__delete_*"
+      ]
+    },
+    "thinking": {
+      "description": "step-by-step planning for hard problems, and time zone conversion",
+      "keywords": [
+        "plan",
+        "step by step",
+        "complicated",
+        "complex",
+        "think",
+        "time zone",
+        "timezone",
+        "what time"
+      ],
+      "tools": [
+        "sequential_thinking__*",
+        "time__*"
+      ]
+    },
+    "files": {
+      "description": "convert attached files (images, audio, video) to other formats and give download links",
+      "tools": [
+        "convert_file"
+      ],
+      "keywords": [
+        "convert",
+        "turn it into",
+        "turn this into",
+        "as a png",
+        "as a jpg",
+        "png",
+        "jpg",
+        "jpeg",
+        "webp",
+        "heic",
+        "mp3",
+        "wav",
+        "flac",
+        "m4a",
+        "mp4",
+        "webm",
+        "gif",
+        "resize",
+        "smaller",
+        "compress",
+        "format",
+        "download"
+      ]
+    },
+    "sharing": {
+      "description": "send the user pictures, videos and files: a screenshot or screen recording of your desktop (including a video of you doing something), a file from your computer, a picture from the web",
+      "tools": [
+        "send_screenshot",
+        "send_screen_recording",
+        "start_screen_recording",
+        "stop_screen_recording",
+        "send_file",
+        "send_picture"
+      ],
+      "keywords": [
+        "screenshot",
+        "screen shot",
+        "picture",
+        "photo",
+        "pic ",
+        "image",
+        "video",
+        "record",
+        "recording",
+        "clip",
+        "send me",
+        "show me",
+        "what does it look like",
+        "see it"
+      ]
+    },
+    "make_files": {
+      "description": "make real files and send them: Word documents, PDFs, PowerPoint slides, Excel spreadsheets, CSV, web pages, e-books",
+      "tools": [
+        "make_document"
+      ],
+      "keywords": [
+        "document",
+        "docx",
+        "word doc",
+        "pdf",
+        "powerpoint",
+        "pptx",
+        "presentation",
+        "slides",
+        "slideshow",
+        "spreadsheet",
+        "excel",
+        "xlsx",
+        "csv",
+        "make a doc",
+        "write a doc",
+        "report",
+        "handout",
+        " cv",
+        "resume",
+        "letter",
+        "e-book",
+        "epub"
+      ]
+    },
+    "calendar": {
+      "description": "the user's calendar: events, meetings, appointments",
+      "tools": [
+        "calendar_events",
+        "calendar_add",
+        "calendar_change",
+        "calendar_remove"
+      ],
+      "keywords": [
+        "calendar",
+        "meeting",
+        "appointment",
+        "event",
+        "diary",
+        "busy",
+        "free time",
+        "what's on",
+        "whats on",
+        "plans",
+        "schedule today",
+        "schedule tomorrow",
+        "briefing",
+        "book",
+        "booked",
+        "put in",
+        "add to my",
+        "birthday",
+        "dentist",
+        "doctor",
+        "cancel the",
+        "move the",
+        "reschedule",
+        "on monday",
+        "on tuesday",
+        "on wednesday",
+        "on thursday",
+        "on friday",
+        "on saturday",
+        "on sunday"
+      ]
+    },
+    "lists": {
+      "description": "the user's lists (shopping, to-do, any list)",
+      "tools": [
+        "list_add",
+        "list_show",
+        "list_done",
+        "list_clear"
+      ],
+      "keywords": [
+        "list",
+        "shopping",
+        "groceries",
+        "to-do",
+        "todo",
+        "to do",
+        "add milk",
+        "buy",
+        "tick off",
+        "cross off",
+        "got the"
+      ]
+    },
+    "notes": {
+      "description": "the user's saved notes",
+      "tools": [
+        "note_save",
+        "note_search",
+        "note_delete"
+      ],
+      "keywords": [
+        "note",
+        "notes",
+        "jot",
+        "write down",
+        "save this",
+        "where did i",
+        "what was the"
+      ]
+    },
+    "study": {
+      "description": "deadlines and revision (flashcards, quizzes)",
+      "tools": [
+        "deadline_add",
+        "deadlines_show",
+        "deadline_done",
+        "card_add",
+        "quiz_next",
+        "quiz_mark",
+        "quiz_progress"
+      ],
+      "keywords": [
+        "deadline",
+        "due",
+        "assignment",
+        "coursework",
+        "homework",
+        "exam",
+        "revise",
+        "revision",
+        "quiz",
+        "flashcard",
+        "test me",
+        "study"
+      ]
+    },
+    "weather": {
+      "description": "the weather",
+      "tools": [
+        "weather"
+      ],
+      "keywords": [
+        "weather",
+        "rain",
+        "forecast",
+        "cold",
+        "warm",
+        "umbrella",
+        "coat",
+        "temperature",
+        "sunny",
+        "snow",
+        "wind"
+      ]
+    },
+    "recap": {
+      "description": "what happened this week",
+      "tools": [
+        "week_recap"
+      ],
+      "keywords": [
+        "recap",
+        "linkedin",
+        "post idea",
+        "what did i do",
+        "what have i done",
+        "my week",
+        "what happened this week",
+        "how was my week",
+        "summary of my week",
+        "summarise my week"
+      ]
+    },
+    "email": {
+      "description": "the user's Gmail: unread emails, searching, reading whole emails, drafting replies (never sending)",
+      "tools": [
+        "workspace__gmail_unread",
+        "workspace__gmail_search",
+        "workspace__gmail_read",
+        "workspace__email_draft_link"
+      ],
+      "keywords": [
+        "email",
+        "emails",
+        "gmail",
+        "inbox",
+        "mail",
+        "reply to",
+        "unread",
+        "e-mail",
+        "emails from",
+        "email from",
+        "message from"
+      ]
+    },
+    "reckoning": {
+      "description": "exact sums, date and clock maths, unit conversions and exchange rates",
+      "tools": [
+        "calculate",
+        "date_maths",
+        "clock_maths",
+        "convert_units",
+        "convert_currency",
+        "date_facts",
+        "currency_facts"
+      ],
+      "keywords": [
+        "how many days",
+        "days until",
+        "days between",
+        "weeks until",
+        "what day",
+        "weekday",
+        "what time will",
+        "arrive",
+        "finish",
+        "convert",
+        "in celsius",
+        "in fahrenheit",
+        "km",
+        "miles",
+        "kg",
+        "pounds",
+        "litres",
+        "pints",
+        "mph",
+        "exchange rate",
+        "dollars",
+        "euros",
+        "currency",
+        "how much is",
+        "%",
+        "percent",
+        "calculate",
+        "work out",
+        "divided"
+      ]
+    }
+  },
+  "approval": {
+    "domains": [
+      "linkedin.com",
+      "facebook.com",
+      "instagram.com",
+      "x.com",
+      "twitter.com",
+      "threads.net",
+      "tiktok.com",
+      "reddit.com",
+      "discord.com",
+      "bsky.app",
+      "mastodon.social",
+      "youtube.com",
+      "whatsapp.com",
+      "messenger.com",
+      "mail.google.com",
+      "outlook.live.com",
+      "outlook.office.com",
+      "github.com",
+      "gitlab.com",
+      "indeed.com",
+      "amazon.co.uk",
+      "amazon.com",
+      "ebay.co.uk",
+      "ebay.com",
+      "paypal.com"
+    ],
+    "commit_words": [
+      "post",
+      "send",
+      "submit",
+      "publish",
+      "share",
+      "comment",
+      "reply",
+      "connect",
+      "follow",
+      "message",
+      "apply",
+      "repost",
+      "retweet",
+      "tweet",
+      "like",
+      "invite",
+      "accept",
+      "confirm",
+      "delete",
+      "remove",
+      "upload"
+    ],
+    "money_words": [
+      "buy",
+      "pay",
+      "checkout",
+      "purchase",
+      "order",
+      "subscribe",
+      "donate",
+      "bid",
+      "book"
+    ],
+    "command_patterns": [
+      "\\bgit\\s+push\\b",
+      "\\b(ssh|scp|rsync|sftp)\\b",
+      "\\bcurl\\b.*\\s(-X\\s*(POST|PUT|PATCH|DELETE)|--data|-d\\s|-F\\s)",
+      "\\b(mail|sendmail|mutt|msmtp)\\b"
+    ],
+    "always": [
+      "homelab__start_guest",
+      "homelab__restart_guest",
+      "homelab__pufferpanel_power"
+    ],
+    "draft_words": [
+      "start",
+      "new",
+      "create",
+      "write",
+      "draft",
+      "open",
+      "view",
+      "show",
+      "see",
+      "more",
+      "edit"
+    ]
+  },
+  "background": {
+    "max_rounds": 30,
+    "snapshot_before_desktop_work": true
+  },
+  "weather": {
+    "place": "London",
+    "latitude": 51.507,
+    "longitude": -0.128
+  },
+  "lookups": [
+    {
+      "pattern": "\\b(new|unread|any) (e-?mails?|mail)\\b|\\bmy (inbox|e-?mails?)\\b|\\bcheck (my )?(e-?mails?|inbox|mail)\\b",
+      "tool": "workspace__gmail_unread",
+      "arguments": {
+        "max_emails": 15
+      }
+    },
+    {
+      "pattern": "\\b(minecraft|game servers?|pufferpanel|puffer)\\b",
+      "tool": "homelab__pufferpanel_servers"
+    },
+    {
+      "pattern": "\\b(ips?|ip address(es)?|vms?|containers?|proxmox|servmox|homelab|server status|servers?)\\b",
+      "tool": "homelab__proxmox_status"
+    },
+    {
+      "pattern": "^(?!.*\\b((on|in) your (computer|desktop|pc|terminal)|run (a |the )?command)\\b).*?\\b(is (it|\\w+) (down|up|working)|websites?|services? (down|up|status)|uptime)\\b",
+      "tool": "homelab__service_status"
+    },
+    {
+      "pattern": "\\b(weather|forecast|rain(ing|y)?|snow(ing)?|temperature|umbrella|coat|sunny|windy)\\b",
+      "tool": "weather",
+      "arguments": {
+        "days": 2
+      }
+    },
+    {
+      "pattern": "\\b(calendar|what'?s on|my (day|week)|appointments?|schedule for|busy (today|tomorrow))\\b",
+      "tool": "calendar_events",
+      "skip_for_changes": true,
+      "arguments": {
+        "days": 7
+      }
+    },
+    {
+      "pattern": "\\b(deadlines?|due (date|soon|in)|assignments?|coursework)\\b",
+      "tool": "deadlines_show",
+      "skip_for_changes": true
+    },
+    {
+      "pattern": "\\b(shopping list|to-?do list|my lists?|what'?s on my list)\\b",
+      "tool": "list_show",
+      "skip_for_changes": true
+    },
+    {
+      "pattern": "\\b(revision progress|how('?s| is) my revision|quiz progress)\\b",
+      "tool": "quiz_progress"
+    },
+    {
+      "pattern": "\\b(how many (days|weeks|sleeps)|how long (until|till|to|is it until)|(days|weeks) (until|till|to go|left|between)|what day (of the week )?(is|was|will|does)|which day (is|was|does)|what('s| is) the date|what date (is|will|was)|when is (easter|christmas|halloween|bonfire night|new year)|\\d+ (days|weeks|months) (from|after|ago)|in \\d+ (days|weeks|months))\\b",
+      "tool": "date_facts",
+      "arguments": {
+        "text": "{message}"
+      }
+    },
+    {
+      "pattern": "(?:[$£€]\\s?\\d|\\b\\d[\\d,.]*\\s*(?:us dollars?|dollars?|bucks|pounds?|quid|sterling|euros?|yen|usd|gbp|eur|cad|aud|jpy|chf)\\b).{0,20}\\b(?:in|to|into)\\s+(?:us dollars?|dollars?|bucks|pounds?|quid|sterling|euros?|yen|usd|gbp|eur|cad|aud|jpy|chf)\\b",
+      "tool": "currency_facts",
+      "arguments": {
+        "text": "{message}"
+      }
+    },
+    {
+      "pattern": "\\b(look at|check|see|describe|what('s| is) on) (your|the) (desktop|screen|wallpaper)\\b|\\bwhat does your (desktop|wallpaper|screen) look like\\b",
+      "tool": "workspace__look_at_desktop",
+      "arguments": {
+        "question": "{message}"
+      }
+    }
+  ],
+  "expiry_watch": {
+    "domains": [],
+    "certificates": []
+  },
+  "user_name": "",
+  "desktop_look": {
+    "tinker": true,
+    "every_hours": 6,
+    "hours": [
+      9,
+      22
+    ]
+  },
+  "email_watch": {
+    "enabled": true,
+    "quiet_hours": [
+      22,
+      8
+    ]
+  }
+}

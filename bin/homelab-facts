@@ -1,0 +1,25 @@
+#!/bin/bash
+# Writes facts about the Proxmox host that Arty's read-only account can't ask Proxmox for, for its
+# weekly report: how many updates are waiting (listing them needs Sys.Modify) and when each guest was
+# last backed up (backup files are only shown to accounts that may make backups).
+# Runs daily from homelab-facts.timer, after Proxmox's own nightly package list refresh.
+set -euo pipefail
+out=/DataStarServ/ai/state/host-facts.json
+mkdir -p "$(dirname "$out")"
+list=$(apt list --upgradable 2>/dev/null | tail -n +2 || true)
+count=$(printf '%s\n' "$list" | grep -c . || true)
+security=$(printf '%s\n' "$list" | grep -c -- '-security' || true)
+backups=$(for storage in $(pvesm status --content backup | awk 'NR>1 {print $1}'); do
+  pvesh get "/nodes/$(hostname)/storage/$storage/content" --content backup --output-format json
+  echo
+done | python3 -c '
+import json, sys
+latest = {}
+for line in sys.stdin:
+    for item in json.loads(line) if line.strip() else []:
+        vmid = str(item.get("vmid"))
+        latest[vmid] = max(latest.get(vmid, 0), item.get("ctime", 0))
+print(json.dumps(latest))')
+printf '{"time": %s, "updates": {"count": %s, "security": %s}, "backups": %s}\n' "$(date +%s)" "$count" "$security" "$backups" > "$out.tmp"
+chmod 644 "$out.tmp"
+mv "$out.tmp" "$out"

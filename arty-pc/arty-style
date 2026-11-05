@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Arty's own look on its desktop: draws a wallpaper (gradient, pattern, motto) with ImageMagick and sets the theme,
+icons and terminal colours to match. The brain chooses the look (brain/desktop_look.py) and runs this with the
+choice as base64 JSON, e.g. arty-style eyJuYW1lIjogLi4ufQ==. Appearance settings only; prints what was applied.
+"""
+import base64
+import json
+import os
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+WALLPAPERS = Path.home() / "Pictures" / "arty"
+KEEP_WALLPAPERS = 3
+COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
+PATTERNS = ("nodes", "grid", "contours", "plain")
+MOTTO_CHARS = re.compile(r"[^A-Za-z0-9 ,.'!?&:-]")
+MOTTO_LENGTH = 48
+DEFAULT_SIZE = (1920, 1080)
+NODE_COUNT = 30
+NODE_LINK_SHARE = 0.2      # nodes closer than this share of the width are linked
+MOTTO_CORNER = (0.35, 0.72)  # where the motto sits: from these shares of the width and height to the corner
+GRID_STEP = 64
+FOREGROUND = "#d8dee9"
+ZOOMED = 5                 # xfdesktop image-style
+
+
+def xfconf(channel: str, prop: str, kind: str, value) -> None:
+    subprocess.run(["xfconf-query", "-c", channel, "-p", prop, "-n", "-t", kind, "-s", str(value)], check=True)
+
+
+def screen_size() -> tuple[int, int]:
+    output = subprocess.run(["xrandr"], capture_output=True, text=True).stdout
+    found = re.search(r"current (\d+) x (\d+)", output)
+    return (int(found.group(1)), int(found.group(2))) if found else DEFAULT_SIZE
+
+
+def monitors() -> list[str]:
+    """Output names ("Virtual-1"): the last word of each line after xrandr's "Monitors: N" heading."""
+    output = subprocess.run(["xrandr", "--listmonitors"], capture_output=True, text=True).stdout
+    return [line.split()[-1] for line in output.splitlines()[1:] if line.split()] or ["Virtual-1"]
+
+
+def pattern_drawing(pattern: str, accent: str, width: int, height: int, rng: random.Random) -> list[str]:
+    """ImageMagick -draw primitives for the pattern, in the accent colour."""
+    if pattern == "nodes":
+        points = []
+        while len(points) < NODE_COUNT:
+            x, y = rng.uniform(0.05, 0.95), rng.uniform(0.05, 0.95)
+            if not (x > MOTTO_CORNER[0] and y > MOTTO_CORNER[1]):  # keep lines out of the motto
+                points.append((x * width, y * height))
+        reach = NODE_LINK_SHARE * width
+        lines = [f"line {a[0]:.0f},{a[1]:.0f} {b[0]:.0f},{b[1]:.0f}"
+                 for index, a in enumerate(points) for b in points[index + 1:]
+                 if ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 < reach]
+        dots = [f"circle {x:.0f},{y:.0f} {x + rng.uniform(2, 5):.0f},{y:.0f}" for x, y in points]
+        return [f"stroke '{accent}' stroke-opacity 0.28 stroke-width 1.2 fill none " + " ".join(lines),
+                f"stroke none fill '{accent}' fill-opacity 0.75 " + " ".join(dots)]
+    if pattern == "grid":
+        lines = [f"line {x},0 {x},{height}" for x in range(0, width, GRID_STEP)]
+        lines += [f"line 0,{y} {width},{y}" for y in range(0, height, GRID_STEP)]
+        lit = [f"rectangle {x + 1},{y + 1} {x + GRID_STEP - 1},{y + GRID_STEP - 1}"
+               for x, y in ((rng.randrange(0, width // GRID_STEP) * GRID_STEP, rng.randrange(0, height // GRID_STEP) * GRID_STEP)
+                            for _ in range(12))]
+        return [f"stroke '{accent}' stroke-opacity 0.09 stroke-width 1 fill none " + " ".join(lines),
+                f"stroke none fill '{accent}' fill-opacity 0.12 " + " ".join(lit)]
+    if pattern == "contours":
+        centre_x, centre_y = rng.uniform(0.2, 0.8) * width, rng.uniform(0.2, 0.8) * height
+        rings = [f"ellipse {centre_x + step * 9:.0f},{centre_y - step * 5:.0f} {step * 70 + 40},{step * 45 + 25} 0,360"
+                 for step in range(1, 14)]
+        return [f"stroke '{accent}' stroke-opacity 0.16 stroke-width 1.5 fill none " + " ".join(rings)]
+    return []
+
+
+def wallpaper(look: dict, seed: int) -> Path:
+    width, height = screen_size()
+    rng = random.Random(seed)
+    WALLPAPERS.mkdir(parents=True, exist_ok=True)
+    target = WALLPAPERS / f"arty-{seed}.png"
+    start, end = look["background"]
+    command = ["magick", "-size", f"{width}x{height}", "-define", "gradient:angle=135", f"gradient:{start}-{end}"]
+    for primitives in pattern_drawing(look["pattern"], look["accent"], width, height, rng):
+        command += ["-draw", primitives]
+    motto = look.get("motto", "")
+    if motto:
+        command += ["-gravity", "SouthEast", "-font", "DejaVu-Sans", "-fill", look["accent"],
+                    "-pointsize", "15", "-kerning", "6", "-annotate", "+64+112", "A R T Y",
+                    "-fill", FOREGROUND, "-pointsize", "30", "-kerning", "0", "-annotate", "+64+64", motto]
+    subprocess.run(command + [str(target)], check=True)
+    for old in sorted(WALLPAPERS.glob("arty-*.png"), key=lambda path: path.stat().st_mtime)[:-KEEP_WALLPAPERS]:
+        old.unlink()
+    return target
+
+
+def set_wallpaper(image: Path) -> None:
+    workspaces = int(subprocess.run(["xfconf-query", "-c", "xfwm4", "-p", "/general/workspace_count"],
+                                    capture_output=True, text=True).stdout.strip() or 1)
+    for monitor in monitors():
+        for workspace in range(workspaces):
+            base = f"/backdrop/screen0/monitor{monitor}/workspace{workspace}"
+            xfconf("xfce4-desktop", f"{base}/last-image", "string", image)
+            xfconf("xfce4-desktop", f"{base}/image-style", "int", ZOOMED)
+
+
+def set_theme(look: dict) -> list[str]:
+    applied = []
+    if (Path("/usr/share/themes") / look["gtk_theme"]).is_dir():
+        xfconf("xsettings", "/Net/ThemeName", "string", look["gtk_theme"])
+        applied.append(f"theme {look['gtk_theme']}")
+        if (Path("/usr/share/themes") / look["gtk_theme"] / "xfwm4").is_dir():
+            xfconf("xfwm4", "/general/theme", "string", look["gtk_theme"])
+    if (Path("/usr/share/icons") / look["icon_theme"]).is_dir():
+        xfconf("xsettings", "/Net/IconThemeName", "string", look["icon_theme"])
+        applied.append(f"icons {look['icon_theme']}")
+    xfconf("xfce4-terminal", "/color-background", "string", look["background"][0])
+    xfconf("xfce4-terminal", "/color-foreground", "string", FOREGROUND)
+    xfconf("xfce4-terminal", "/color-cursor", "string", look["accent"])
+    xfconf("xfce4-terminal", "/color-cursor-use-default", "bool", "false")
+    applied.append("terminal colours")
+    return applied
+
+
+def checked(look: dict) -> dict:
+    """The look with anything unsafe or malformed refused, so nothing odd reaches ImageMagick or xfconf."""
+    background = look.get("background") or []
+    if len(background) != 2 or not all(COLOUR.match(str(colour)) for colour in background) or not COLOUR.match(str(look.get("accent", ""))):
+        raise ValueError("colours must be #rrggbb")
+    if look.get("pattern") not in PATTERNS:
+        raise ValueError(f"pattern must be one of {', '.join(PATTERNS)}")
+    for key in ("gtk_theme", "icon_theme"):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", str(look.get(key, ""))):
+            raise ValueError(f"bad {key}")
+    motto = MOTTO_CHARS.sub("", str(look.get("motto", ""))).strip()[:MOTTO_LENGTH]
+    return {**look, "motto": motto.lstrip("@")}
+
+
+def use_desktop_session():
+    """Run over SSH (the brain's run_command), there's no display or session bus: use the desktop's."""
+    os.environ.setdefault("DISPLAY", ":0")
+    os.environ.setdefault("XAUTHORITY", str(Path.home() / ".Xauthority"))
+    bus = Path(f"/run/user/{os.getuid()}/bus")
+    if bus.exists():
+        os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={bus}")
+
+
+def main() -> int:
+    use_desktop_session()
+    if len(sys.argv) != 2:
+        print("usage: arty-style <base64 JSON look>", file=sys.stderr)
+        return 2
+    try:
+        look = checked(json.loads(base64.b64decode(sys.argv[1])))
+    except (ValueError, json.JSONDecodeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    seed = int(look.get("seed") or random.randrange(1, 10 ** 9))
+    image = wallpaper(look, seed)
+    set_wallpaper(image)
+    applied = set_theme(look)
+    print(json.dumps({"ok": True, "look": look.get("name", ""), "wallpaper": str(image), "applied": applied}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

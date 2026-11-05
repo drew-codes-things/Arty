@@ -1,0 +1,14 @@
+[Unit]
+Description=Give Arty's AI container whichever GPU is fitted (NVIDIA or AMD)
+# After the NVIDIA device nodes are made (if there's an NVIDIA card), before Proxmox starts the guests.
+After=systemd-modules-load.service systemd-udev-settle.service nvidia-devices.service pve-cluster.service
+Wants=nvidia-devices.service
+Before=pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/arty-gpu-select
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

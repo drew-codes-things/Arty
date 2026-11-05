@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>my-voice</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main>
+    <div class="top">
+      <h1>my-voice</h1>
+      <form method="post" action="/logout"><button type="submit">Log out</button></form>
+    </div>
+
+    <section class="card">
+      <div class="switch-row">
+        <div>
+          <h2>Hey Arty</h2>
+          <p class="muted" id="wakeNote">Loading…</p>
+        </div>
+        <label class="switch" for="wakeToggle">
+          <input type="checkbox" id="wakeToggle" role="switch" disabled />
+          <span class="slider" aria-hidden="true"></span>
+          <span class="sr-only">Wake words on</span>
+        </label>
+      </div>
+      <p class="muted">Or say <strong>"Arty off"</strong> and <strong>"Arty on"</strong>. While it's off, Arty only listens for "Arty on".</p>
+    </section>
+
+    <section class="card">
+      <h2>Link this PC</h2>
+      <p>Use the server's microphone on this PC and hear Arty's replies here. The download is one script with this PC's key built in.</p>
+      <form id="downloadForm" method="post" action="/download">
+        <input type="hidden" name="system" id="system" value="debian" />
+        <label for="name">Name for this PC</label>
+        <input id="name" name="name" maxlength="60" value="My PC" />
+        <button class="primary" id="downloadBtn" type="submit">Download for Debian</button>
+      </form>
+      <p class="muted">Detected: <span id="detected">…</span>. Not right? <a href="#" id="otherLink">Download for Windows instead</a>.</p>
+    </section>
+
+    <section class="card">
+      <h2>How to install</h2>
+      <details id="debianSteps">
+        <summary>Debian</summary>
+        <ol>
+          <li>Download the script above (<code>my-voice-setup.sh</code>).</li>
+          <li>Open a terminal and run <code>bash ~/Downloads/my-voice-setup.sh</code> as your normal user. It asks for your password once to install two packages.</li>
+          <li>In your sound settings, or in the app you're using, pick the input <strong>Server mic (my-voice)</strong>.</li>
+          <li>That's it - it starts by itself when you log in, and Arty's replies play through this PC.</li>
+        </ol>
+        <p class="muted">To remove it: <code>bash ~/Downloads/my-voice-setup.sh --uninstall</code>. Log: <code>~/.local/share/my-voice/my-voice.log</code></p>
+      </details>
+      <details id="windowsSteps">
+        <summary>Windows</summary>
+        <ol>
+          <li>Install <a href="https://vb-audio.com/Cable/" rel="noopener noreferrer" target="_blank">VB-CABLE</a> (free): unzip it, right-click <code>VBCABLE_Setup_x64.exe</code> → Run as administrator → Install Driver, then restart. This gives Windows the extra microphone.</li>
+          <li>Download the script above (<code>my-voice-setup.ps1</code>).</li>
+          <li>Open PowerShell and run <code>powershell -ExecutionPolicy Bypass -File "$HOME\Downloads\my-voice-setup.ps1"</code>. It installs Python for your user if you don't have it.</li>
+          <li>In Windows sound settings, or in the app you're using, pick the microphone <strong>CABLE Output (VB-Audio Virtual Cable)</strong>.</li>
+          <li>That's it - it starts with Windows, and Arty's replies play through your default speakers.</li>
+        </ol>
+        <p class="muted">To remove it: run the same command with <code>-Uninstall</code> on the end. Log: <code>%LOCALAPPDATA%\my-voice\my-voice.log</code></p>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Linked devices</h2>
+      <p class="muted" id="status">Loading…</p>
+      <ul class="devices" id="devices"></ul>
+      <p class="muted">Removing a device stops it straight away. Each download makes a new key, so remove old ones you no longer use.</p>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

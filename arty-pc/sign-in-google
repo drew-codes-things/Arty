@@ -1,0 +1,16 @@
+#!/bin/sh
+# "Sign in to Google (Gmail)", and how the agent opens the Gmail window: opens Google's sign-in (or the given page)
+# in Arty's Gmail window, an ordinary Google Chrome on its own profile that no program drives (Google signs out
+# browsers driven through the debugging port). Arty reads Gmail there through its reader extension. If the window
+# is already open, this adds a tab to it.
+#
+# Google Chrome rather than Chromium: Google ended Chromium's session every time it restarted. Chrome ignores
+# --load-extension, so the reader extension was added once to this profile from chrome://extensions (Developer
+# mode, Load unpacked: ~/.local/browser-agent/gmail-extension); Chrome keeps it and runs the code from there.
+set -u
+CHROME=/usr/bin/google-chrome
+PROFILE="$HOME/.gmail-chrome"
+[ -x "$CHROME" ] || { notify-send "Sign in to Google" "Google Chrome not found" 2>/dev/null; exit 1; }
+# Starting fresh: drop Chrome's cached copy of the extension's code, or it keeps running an old version.
+pgrep -f -- "[u]ser-data-dir=$PROFILE" >/dev/null || rm -rf "$PROFILE/Default/Service Worker"
+exec "$CHROME" --user-data-dir="$PROFILE" --password-store=basic --no-first-run "${1:-https://accounts.google.com/}"

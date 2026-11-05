@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<resources>
+  <item type="id" name="orb_panel" />
+  <item type="id" name="servers_panel" />
+  <item type="id" name="today_panel" />
+</resources>

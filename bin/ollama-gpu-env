@@ -1,0 +1,12 @@
+#!/bin/sh
+# Picks Ollama's GPU backend from the devices the container was given (see arty-gpu-select on the host):
+# CUDA for NVIDIA (Ollama's default), Vulkan for AMD, so swapping cards needs no fiddling.
+# Runs before Ollama starts (ollama.service.d/gpu.conf) and writes the environment it reads.
+ENV_FILE=/run/ollama-gpu.env
+if [ -c /dev/nvidia0 ]; then
+  echo "# NVIDIA: CUDA" > "$ENV_FILE"
+elif ls /dev/dri/renderD* >/dev/null 2>&1; then
+  echo "OLLAMA_VULKAN=1" > "$ENV_FILE"
+else
+  echo "# no GPU: CPU" > "$ENV_FILE"
+fi

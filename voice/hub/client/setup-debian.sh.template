@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEVICE_NAME="__DEVICE_NAME__"
+APP_DIR="$HOME/.local/share/my-voice"
+UNIT_DIR="$HOME/.config/systemd/user"
+UNIT="$UNIT_DIR/my-voice.service"
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run this as your normal user, not root (it asks for sudo only to install packages)." >&2
+  exit 1
+fi
+
+if [ "${1:-}" = "--uninstall" ]; then
+  systemctl --user disable --now my-voice.service 2>/dev/null || true
+  rm -f "$UNIT"
+  systemctl --user daemon-reload
+  rm -rf "$APP_DIR"
+  echo "my-voice removed from this PC."
+  exit 0
+fi
+
+echo "Setting up my-voice for $DEVICE_NAME..."
+needed=()
+for pkg in python3-venv pulseaudio-utils; do
+  dpkg -s "$pkg" >/dev/null 2>&1 || needed+=("$pkg")
+done
+if [ ${#needed[@]} -gt 0 ]; then
+  echo "Installing ${needed[*]} (needs your password)..."
+  sudo apt-get install -y "${needed[@]}"
+fi
+if ! pactl info >/dev/null 2>&1; then
+  echo "PipeWire/PulseAudio isn't running in this session - log in to your desktop and run this again." >&2
+  exit 1
+fi
+
+mkdir -p "$APP_DIR" "$UNIT_DIR"
+[ -x "$APP_DIR/venv/bin/python" ] || python3 -m venv "$APP_DIR/venv"
+"$APP_DIR/venv/bin/pip" install -q --upgrade "websockets>=14"
+
+echo "__CLIENT_B64__" | base64 -d > "$APP_DIR/my_voice_client.py"
+umask 077
+echo "__CONFIG_B64__" | base64 -d > "$APP_DIR/config.json"
+chmod 600 "$APP_DIR/config.json"
+
+cat > "$UNIT" <<UNIT
+[Unit]
+Description=my-voice: the server mic and Arty's voice on this PC
+After=pipewire-pulse.service
+
+[Service]
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/my_voice_client.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+
+systemctl --user daemon-reload
+systemctl --user enable my-voice.service >/dev/null
+systemctl --user restart my-voice.service
+sleep 3
+if systemctl --user is-active --quiet my-voice.service; then
+  echo
+  echo "Done. In your sound settings (or the app you're using), pick the input:"
+  echo "    Server mic (my-voice)"
+  echo "Arty's replies will play through this PC's speakers."
+  echo "It starts by itself when you log in. Log: $APP_DIR/my-voice.log"
+  echo "To remove it: bash $(basename "$0") --uninstall"
+else
+  echo "my-voice didn't start - see: journalctl --user -u my-voice -n 30" >&2
+  exit 1
+fi

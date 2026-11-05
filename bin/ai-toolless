@@ -1,0 +1,23 @@
+#!/bin/sh
+# ai-toolless on|off: let models without tool support run Arty (persona and memory, no tools).
+set -eu
+CONFIG=/srv/ai/brain/brain.json
+current=$(jq -r '.allow_toolless_models // false' "$CONFIG")
+case "${1:-}" in
+  on) value=true ;;
+  off) value=false ;;
+  *) echo "Usage: ai-toolless on|off   (now: $([ "$current" = true ] && echo on || echo off))"; exit 0 ;;
+esac
+updated=$(mktemp)
+jq --argjson v "$value" '.allow_toolless_models = $v' "$CONFIG" > "$updated"
+install -m 644 "$updated" "$CONFIG"
+rm -f "$updated"
+if [ "$value" = true ]; then
+  echo "On: models without tools can run Arty (persona and memory only). They show as 'Arty (model, no tools)' in the dashboard."
+else
+  echo "Off: only tool-capable models can run Arty."
+  main=$(jq -r .model "$CONFIG")
+  if ! ollama show "$main" | sed -n '/Capabilities/,/^[[:space:]]*$/p' | grep -qw tools; then
+    echo "Warning: Arty's main model ($main) has no tools; switch with: ai-use qwen3:14b"
+  fi
+fi

@@ -1,0 +1,81 @@
+param([switch]$Uninstall)
+$ErrorActionPreference = 'Stop'
+
+$DeviceName = '__DEVICE_NAME__'
+$AppDir = Join-Path $env:LOCALAPPDATA 'my-voice'
+$Shortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'my-voice.lnk'
+
+function Stop-MyVoice {
+    Get-CimInstance Win32_Process -Filter "Name like 'python%'" |
+        Where-Object { $_.CommandLine -like '*my_voice_client.py*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+if ($Uninstall) {
+    Stop-MyVoice
+    Remove-Item $Shortcut -ErrorAction SilentlyContinue
+    Remove-Item $AppDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host 'my-voice removed from this PC.'
+    exit 0
+}
+
+Write-Host "Setting up my-voice for $DeviceName..."
+
+function Find-Python {
+    foreach ($candidate in @('py', 'python')) {
+        try {
+            $path = & $candidate -3 -c 'import sys; print(sys.executable)' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $path) { return $path.Trim() }
+        } catch { }
+    }
+    $installed = Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if ($installed) { return $installed.FullName }
+    return $null
+}
+
+$Python = Find-Python
+if (-not $Python) {
+    Write-Host 'Installing Python 3.12 for your user (winget)...'
+    winget install -e --id Python.Python.3.12 --scope user --silent --accept-package-agreements --accept-source-agreements
+    $Python = Find-Python
+    if (-not $Python) { throw 'Python could not be installed - install it from https://www.python.org and run this again.' }
+}
+
+New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+$VenvPython = Join-Path $AppDir 'venv\Scripts\python.exe'
+if (-not (Test-Path $VenvPython)) { & $Python -m venv (Join-Path $AppDir 'venv') }
+& $VenvPython -m pip install -q --upgrade 'websockets>=14' sounddevice numpy
+if ($LASTEXITCODE -ne 0) { throw 'Installing the Python packages failed.' }
+
+[IO.File]::WriteAllBytes((Join-Path $AppDir 'my_voice_client.py'), [Convert]::FromBase64String('__CLIENT_B64__'))
+$ConfigPath = Join-Path $AppDir 'config.json'
+[IO.File]::WriteAllBytes($ConfigPath, [Convert]::FromBase64String('__CONFIG_B64__'))
+icacls $ConfigPath /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+
+$HasCable = & $VenvPython -c "import sounddevice; print(any(d['name'].startswith('CABLE Input') for d in sounddevice.query_devices()))"
+if ($HasCable -ne 'True') {
+    Write-Host ''
+    Write-Host 'One more step: install VB-CABLE (free), which gives Windows the extra microphone.' -ForegroundColor Yellow
+    Write-Host 'Download it, run VBCABLE_Setup_x64.exe as administrator, restart, then run this setup again.'
+    Start-Process 'https://vb-audio.com/Cable/'
+}
+
+$Pythonw = Join-Path $AppDir 'venv\Scripts\pythonw.exe'
+$Client = Join-Path $AppDir 'my_voice_client.py'
+$Shell = New-Object -ComObject WScript.Shell
+$Link = $Shell.CreateShortcut($Shortcut)
+$Link.TargetPath = $Pythonw
+$Link.Arguments = "`"$Client`""
+$Link.WorkingDirectory = $AppDir
+$Link.Save()
+
+Stop-MyVoice
+Start-Process -FilePath $Pythonw -ArgumentList "`"$Client`"" -WorkingDirectory $AppDir -WindowStyle Hidden
+
+Write-Host ''
+Write-Host 'Done. In Windows sound settings (or your app), pick the microphone:'
+Write-Host '    CABLE Output (VB-Audio Virtual Cable)'
+Write-Host "Arty's replies play through your default speakers. It starts with Windows."
+Write-Host "Log: $AppDir\my-voice.log"
+Write-Host 'To remove it: run this script again with -Uninstall'

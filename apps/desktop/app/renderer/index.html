@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http://127.0.0.1:8765; media-src data: blob:; img-src 'self' data: blob:; style-src 'self'; font-src 'self'">
+  <title>Arty</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="panel" class="panel">
+    <header class="bar">
+      <img class="bar-mark" src="arty-symbol.png" alt="">
+      <div class="bar-title">
+        <span class="name">Arty</span>
+        <div class="model-picker">
+          <button id="model" class="model" title="Which model Arty thinks with" aria-haspopup="listbox" aria-expanded="false">
+            <span id="model-name">Arty</span>
+            <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
+          <div id="model-menu" class="model-menu" role="listbox" aria-label="Models" hidden></div>
+        </div>
+      </div>
+      <div class="bar-actions">
+        <button id="hands" class="chip" title="Let Arty use this computer" aria-label="Let Arty use this computer">
+          <svg viewBox="0 0 24 24"><path d="M5 3l14 7-6 2-2 6z"/></svg>
+        </button>
+        <button id="wake" class="chip" title="Listen for &quot;Arty, …&quot;" aria-label="Wake word">
+          <svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg>
+        </button>
+        <button id="read" class="chip" title="Read new notifications aloud (app and headline only)" aria-label="Read notifications aloud">
+          <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
+        </button>
+        <button id="upd" class="chip" title="Updates: everything Arty has sent you" aria-label="Updates">
+          <svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>
+        </button>
+        <button id="cal" class="chip" title="Your calendar" aria-label="Calendar">
+          <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
+        </button>
+        <span class="divider"></span>
+        <button id="forget" class="icon-button" title="New conversation" aria-label="New conversation">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button id="hide" class="icon-button" title="Hide (Ctrl+Shift+A)" aria-label="Hide">
+          <svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <button id="orb" class="orb" data-state="idle" title="Tap to talk · tap while Arty speaks to stop it">
+        <img src="arty-symbol.png" alt="Arty">
+      </button>
+      <div id="state" class="state">Ready</div>
+    </section>
+
+    <section id="log" class="log" aria-live="polite"></section>
+    <section id="updates" class="log updates" hidden>
+      <div id="update-list"></div>
+    </section>
+    <section id="calendar" class="log calendar" hidden>
+      <form id="event-form" class="event-form">
+        <input id="event-title" placeholder="What? e.g. Dentist" required>
+        <input id="event-when" placeholder="When? e.g. Tuesday 3pm" required>
+        <button type="submit" class="add">Add</button>
+      </form>
+      <div id="event-status" class="event-status" hidden></div>
+      <div id="events"></div>
+    </section>
+
+    <section id="connect" class="connect" hidden>
+      <form id="connect-form" class="connect-form" autocomplete="off">
+        <h2>Connect to Arty</h2>
+        <p class="connect-help">Enter your Arty server's address and API key. The key is in <code>/srv/ai/secrets/arty-api.txt</code> on the server.</p>
+        <label>Address on your home network
+          <input id="connect-base" placeholder="http://192.168.1.50:8081/v1" required spellcheck="false">
+        </label>
+        <label>API key
+          <input id="connect-key" type="password" required spellcheck="false">
+        </label>
+        <details>
+          <summary>Away from home (optional)</summary>
+          <label>Address through Cloudflare
+            <input id="connect-remote" placeholder="https://arty.example.com/v1" spellcheck="false">
+          </label>
+          <label>Cloudflare Access client ID
+            <input id="connect-id" spellcheck="false">
+          </label>
+          <label>Cloudflare Access client secret
+            <input id="connect-secret" type="password" spellcheck="false">
+          </label>
+        </details>
+        <div id="connect-status" class="connect-status" role="status"></div>
+        <div class="connect-actions">
+          <button id="connect-cancel" type="button" class="cancel" hidden>Cancel</button>
+          <button id="connect-save" type="submit" class="add">Connect</button>
+        </div>
+      </form>
+    </section>
+
+    <form id="composer" class="composer">
+      <div class="input-box">
+        <textarea id="input" rows="1" placeholder="Message Arty"></textarea>
+        <div class="input-actions">
+          <button id="look" type="button" class="round" title="Ask about my screen (Ctrl+Alt+Space)" aria-label="Ask about my screen">
+            <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+          <button id="mic" type="button" class="round" title="Talk (Ctrl+Shift+Space)" aria-label="Talk">
+            <svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg>
+          </button>
+          <button id="send" type="submit" class="round send" title="Send" aria-label="Send">
+            <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </form>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

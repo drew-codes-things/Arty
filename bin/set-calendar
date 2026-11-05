@@ -1,0 +1,26 @@
+#!/bin/bash
+# Connects Arty to your Google Calendar. Run it from the laptop, in your own terminal:
+#   ~/Projects/arty/bin/set-calendar
+# For each calendar: Google Calendar (web) > Settings > the calendar under "Settings for my calendars" >
+# "Integrate calendar" > copy "Secret address in iCal format". That link lets anyone holding it read the
+# calendar, so this script never prints it and stores it root-only on CT 104 (/srv/ai/secrets/calendar.env).
+set -euo pipefail
+PROXMOX=${PROXMOX:-proxmox}
+CT=${CT:-104}
+links=()
+echo "Paste each calendar's secret iCal address, then press Enter on an empty line when done."
+while true; do
+  read -rsp "Calendar link (hidden, Enter when done): " link
+  echo
+  [ -z "$link" ] && break
+  case "$link" in
+    https://calendar.google.com/calendar/ical/*private-*.ics) links+=("$link"); echo "  added (${#links[@]})" ;;
+    *) echo "  That isn't a Google secret iCal address (it should end in /basic.ics after 'private-'); skipped." ;;
+  esac
+done
+[ ${#links[@]} -eq 0 ] && { echo "Nothing added."; exit 1; }
+joined=$(IFS=,; echo "${links[*]}")
+# Through stdin, so the links never appear in a process list or shell history.
+printf 'CALENDAR_ICS_URLS=%s\n' "$joined" | ssh "$PROXMOX" "pct exec $CT -- bash -c 'umask 077; cat > /srv/ai/secrets/calendar.env.tmp && mv /srv/ai/secrets/calendar.env.tmp /srv/ai/secrets/calendar.env'"
+echo "Saved. Checking Arty can read it:"
+ssh "$PROXMOX" "pct exec $CT -- bash -c '. /srv/ai/secrets/brain.env; curl -s -X POST -H \"Authorization: Bearer \$ARTY_API_KEY\" -H \"Content-Type: application/json\" -d \"{\\\"arguments\\\":{\\\"days\\\":7}}\" http://127.0.0.1:8081/v1/tools/calendar_events'" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("result"))'

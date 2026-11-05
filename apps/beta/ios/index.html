@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Arty">
+  <meta name="theme-color" content="#0A0A0B">
+  <meta name="format-detection" content="telephone=no">
+  <title>Arty</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <section id="setup" class="setup" hidden></section>
+
+  <div id="shell" class="shell" hidden>
+    <header class="top">
+      <button id="open-chats" class="icon-button" type="button" aria-label="Chats">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      </button>
+      <h1 id="title" class="title">Arty</h1>
+      <button id="new-chat" class="icon-button" type="button" aria-label="New chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </header>
+
+    <main id="views" class="views">
+      <section id="view-chat" class="view chat-view"></section>
+      <section id="view-updates" class="view" hidden></section>
+      <section id="view-tasks" class="view" hidden></section>
+      <section id="view-calendar" class="view" hidden></section>
+      <section id="view-more" class="view" hidden></section>
+    </main>
+
+    <nav class="tabs" aria-label="Sections">
+      <button class="tab" type="button" data-view="chat" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg><span>Chat</span>
+      </button>
+      <button class="tab" type="button" data-view="updates">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20h4"/></svg><span>Updates</span>
+        <b id="updates-badge" class="badge" hidden></b>
+      </button>
+      <button class="tab" type="button" data-view="tasks">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h3M11 6h8M5 12h3M11 12h8M5 18h3M11 18h8"/></svg><span>Tasks</span>
+      </button>
+      <button class="tab" type="button" data-view="calendar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></svg><span>Calendar</span>
+      </button>
+      <button class="tab" type="button" data-view="more">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg><span>More</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-panel">
+      <div class="drawer-head">
+        <h2>Chats</h2>
+        <button id="close-chats" class="icon-button" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <ul id="chat-list" class="chat-list"></ul>
+    </div>
+    <button id="drawer-scrim" class="drawer-scrim" type="button" aria-label="Close chats"></button>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -1,0 +1,4 @@
+#!/bin/sh
+ollama list
+echo
+echo "Remove one with: ollama rm <model>"

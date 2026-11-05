@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sign in to websites
+Comment=Pause Arty's browser and open it normally so you can sign in to websites (LinkedIn...; Google has its own shortcut). Close the window when done.
+Exec=/home/ai/.local/bin/sign-in-browser
+Icon=web-browser
+Terminal=false
+Categories=Network;

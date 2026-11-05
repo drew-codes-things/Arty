@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Security watch for the homelab, run on the Proxmox host every 10 minutes by homelab-security.timer.
+
+It alerts the user through Arty (POST /hooks/notify on the brain: the phone and desktop apps only) about:
+- an SSH login (host or any running container) from an address that has never logged in before;
+- a burst of failed SSH logins (FAILED_BURST or more from one address in one run);
+- a new device on the home network (an nmap ping scan every SCAN_EVERY seconds);
+- a new open port on one of the servers (a port scan once a day, against the ports seen before).
+The first run only learns what's normal and sends nothing. State: /var/lib/homelab-security/state.json.
+Settings (brain address, alert token, network, extra server addresses): /etc/homelab/arty.env.
+"""
+import ipaddress
+import json
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+import xml.etree.ElementTree as ElementTree
+from pathlib import Path
+
+CONFIG = Path("/etc/homelab/arty.env")
+STATE = Path("/var/lib/homelab-security/state.json")
+FAILED_BURST = 10
+BURST_COOLDOWN = 3600
+SCAN_EVERY = 30 * 60
+PORTS_EVERY = 24 * 3600
+COMMAND_SECONDS = 25
+SCAN_SECONDS = 600
+ACCEPTED = re.compile(r"Accepted (\w+) for (\S+) from (\S+)")
+FAILED = re.compile(r"(?:Failed password for (?:invalid user )?|Invalid user )(\S+) from (\S+)")
+
+
+def config() -> dict:
+    values = {}
+    for line in CONFIG.read_text().splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip().strip('"')
+    return values
+
+
+def run(args, seconds=COMMAND_SECONDS) -> str:
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=seconds).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return ""  # a container that doesn't answer is skipped this time
+
+
+def alert(settings: dict, title: str, message: str, urgent: bool = False):
+    body = json.dumps({"title": title, "message": message, "urgent": urgent}).encode()
+    request = urllib.request.Request(f"{settings['BRAIN_URL'].rstrip('/')}/hooks/notify?token={settings['ALERT_TOKEN']}",
+                                     data=body, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=30).read()
+    except OSError as error:
+        print(f"couldn't alert ({error}): {title}: {message}", file=sys.stderr)
+
+
+def running_containers() -> list[tuple[str, str]]:
+    """(id, name) of each running container."""
+    rows = run(["pct", "list"]).splitlines()[1:]
+    return [(r.split()[0], r.split()[-1]) for r in rows if len(r.split()) >= 3 and r.split()[1] == "running"]
+
+
+def ssh_log(since: float) -> list[tuple[str, str]]:
+    """(machine, log line) for SSH log lines since `since`, from the host and every running container."""
+    window = ["journalctl", "--since", f"@{int(since)}", "-o", "cat", "--no-pager", "-t", "sshd", "-t", "sshd-session"]
+    lines = [("servmox", line) for line in run(window).splitlines()]
+    for vmid, name in running_containers():
+        lines += [(name, line) for line in run(["pct", "exec", vmid, "--", *window]).splitlines()]
+    return lines
+
+
+def check_ssh(settings: dict, state: dict, learning: bool):
+    since = state.get("ssh_checked", time.time() - (24 * 3600 if learning else 600))
+    now = time.time()
+    known = set(state.get("ssh_sources", []))
+    failures: dict[str, int] = {}
+    for machine, line in ssh_log(since):
+        if match := ACCEPTED.search(line):
+            method, user, source = match.groups()
+            if source not in known:
+                known.add(source)
+                if not learning:
+                    alert(settings, "🔐 New SSH login",
+                          f"{user} logged in to {machine} from {source} ({method}). This address hasn't logged in before. "
+                          "If that wasn't you, change that account's password or key now.", urgent=True)
+        elif match := FAILED.search(line):
+            failures[match.group(2)] = failures.get(match.group(2), 0) + 1
+    cooldowns = state.get("burst_alerted", {})
+    for source, count in failures.items():
+        if count >= FAILED_BURST and not learning and now - cooldowns.get(source, 0) > BURST_COOLDOWN:
+            cooldowns[source] = now
+            outside = not ipaddress.ip_address(source).is_private if re.match(r"^[\d.:a-f]+$", source) else True
+            alert(settings, "🚨 Failed SSH logins", f"{count} failed SSH logins from {source} in the last few minutes"
+                  + (" (from the internet)." if outside else " (from inside your network)."), urgent=True)
+    state.update(ssh_checked=now, ssh_sources=sorted(known), burst_alerted=cooldowns)
+
+
+def scan_devices(network: str) -> dict[str, dict]:
+    """MAC -> {ip, vendor} for every device answering on the network."""
+    xml = run(["nmap", "-sn", "-n", "-oX", "-", network], SCAN_SECONDS)
+    devices = {}
+    try:
+        root = ElementTree.fromstring(xml) if xml else None
+    except ElementTree.ParseError:
+        return devices
+    for host in (root.findall("host") if root is not None else []):
+        ip = next((a.get("addr") for a in host.findall("address") if a.get("addrtype") == "ipv4"), None)
+        mac = next((a for a in host.findall("address") if a.get("addrtype") == "mac"), None)
+        if ip and mac is not None:
+            devices[mac.get("addr").lower()] = {"ip": ip, "vendor": mac.get("vendor") or "unknown maker"}
+    return devices
+
+
+def check_devices(settings: dict, state: dict, learning: bool):
+    if time.time() - state.get("devices_scanned", 0) < SCAN_EVERY:
+        return
+    found = scan_devices(settings.get("NETWORK", "192.168.1.0/24"))
+    if not found:
+        return  # a failed scan must not look like every device leaving
+    known = state.get("devices", {})
+    for mac, device in found.items():
+        if mac not in known and not learning:
+            alert(settings, "📶 New device on your network",
+                  f"{device['ip']}, made by {device['vendor']} (hardware address {mac}). If you don't recognise it, check your Wi-Fi.")
+        known[mac] = {**device, "seen": time.time()}
+    state.update(devices=known, devices_scanned=time.time())
+
+
+def server_addresses(settings: dict) -> list[str]:
+    """The host, every container's fixed address, and any extra servers listed in the settings (VMs)."""
+    addresses = set(filter(None, settings.get("EXTRA_SERVERS", "").split(",")))
+    addresses.add(settings.get("HOST_ADDRESS", "192.168.1.253"))
+    for vmid, _ in running_containers():
+        if match := re.search(r"ip=(\d+\.\d+\.\d+\.\d+)", run(["pct", "config", vmid])):
+            addresses.add(match.group(1))
+    return sorted(addresses)
+
+
+def check_ports(settings: dict, state: dict, learning: bool):
+    if time.time() - state.get("ports_scanned", 0) < PORTS_EVERY:
+        return
+    baseline = state.get("ports", {})
+    for address in server_addresses(settings):
+        xml = run(["nmap", "-n", "-Pn", "-T4", "--top-ports", "1000", "-oX", "-", address], SCAN_SECONDS)
+        try:
+            root = ElementTree.fromstring(xml)
+        except ElementTree.ParseError:
+            continue
+        open_ports = sorted(int(p.get("portid")) for p in root.iter("port")
+                            if (p.find("state") is not None and p.find("state").get("state") == "open"))
+        before = set(baseline.get(address, []))
+        new = [p for p in open_ports if p not in before]
+        if new and address in baseline and not learning:
+            alert(settings, "🔓 New open port", f"{address} now has port{'s' if len(new) > 1 else ''} {', '.join(map(str, new))} open, "
+                  "which wasn't open before. If you didn't set that up, find out what's listening.")
+        baseline[address] = sorted(before | set(open_ports))
+    state.update(ports=baseline, ports_scanned=time.time())
+
+
+def main() -> int:
+    settings = config()
+    learning = not STATE.exists()
+    state = json.loads(STATE.read_text()) if not learning else {}
+    for check in (check_ssh, check_devices, check_ports):
+        try:
+            check(settings, state, learning)
+        except Exception as error:  # one failing check mustn't stop the others
+            print(f"{check.__name__} failed: {error}", file=sys.stderr)
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = STATE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state))
+    temporary.replace(STATE)
+    if learning:
+        print(f"learned: {len(state.get('ssh_sources', []))} SSH sources, {len(state.get('devices', {}))} devices, "
+              f"{len(state.get('ports', {}))} servers' ports")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

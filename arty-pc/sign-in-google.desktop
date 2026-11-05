@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sign in to Google (Gmail)
+Comment=Open Google sign-in in Arty's Gmail window. Leave the window open; Arty reads Gmail there.
+Exec=/home/ai/.local/bin/sign-in-google
+Icon=mail-client
+Terminal=false
+Categories=Network;

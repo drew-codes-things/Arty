@@ -1,0 +1,60 @@
+#!/bin/bash
+# Gives Arty's AI container (CT 104) whichever GPU is in the host, so swapping cards needs no fiddling.
+# Runs at boot before the guests start (arty-gpu-select.service), and by hand: arty-gpu-select [--dry-run].
+#   NVIDIA (/dev/nvidia0 present, e.g. the RTX 3060): passes the NVIDIA device nodes; Ollama uses CUDA.
+#   AMD (an amdgpu render node, e.g. the RX 570): passes the render node; Ollama uses Vulkan.
+#   Neither: no devices; Ollama runs on the CPU.
+# Inside the container, ollama-gpu-env picks Ollama's backend from the devices it was given.
+set -euo pipefail
+CT=${CT:-104}
+CT_RENDER_GID=992   # "render" group inside the container
+CT_VIDEO_GID=44     # "video" group inside the container
+CONF=/etc/pve/lxc/$CT.conf
+DRY_RUN=false
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=true
+
+say() { echo "$*"; logger -t arty-gpu-select -- "$*"; }
+
+nvidia_devices() {
+  local node
+  for node in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-caps/nvidia-cap*; do
+    [ -c "$node" ] && echo "$node"
+  done
+}
+
+amd_devices() {  # the first amdgpu render node, and the card node of the same GPU
+  local render card
+  for render in /sys/class/drm/renderD*; do
+    [ "$(basename "$(readlink -f "$render/device/driver")")" = amdgpu ] || continue
+    echo "/dev/dri/$(basename "$render"),gid=$CT_RENDER_GID"
+    card=$(ls -d "$render"/device/drm/card* 2>/dev/null | head -1)
+    [ -n "$card" ] && echo "/dev/dri/$(basename "$card"),gid=$CT_VIDEO_GID"
+    return
+  done
+}
+
+if [ -c /dev/nvidia0 ]; then
+  kind=NVIDIA; mapfile -t wanted < <(nvidia_devices)
+else
+  mapfile -t wanted < <(amd_devices)
+  if [ ${#wanted[@]} -gt 0 ]; then kind=AMD; else kind="no GPU (CPU only)"; fi
+fi
+
+mapfile -t current < <(grep -E '^dev[0-9]+:' "$CONF" | sed -E 's/^dev[0-9]+: *//')
+if [ "${wanted[*]:-}" = "${current[*]:-}" ]; then
+  say "CT $CT already has the $kind devices"
+  exit 0
+fi
+say "CT $CT: switching to $kind (${wanted[*]:-none}; was ${current[*]:-none})"
+$DRY_RUN && exit 0
+
+if [ "$(pct status "$CT" | awk '{print $2}')" = running ]; then
+  say "CT $CT is running: stop it and run arty-gpu-select again (it runs by itself at boot)"
+  exit 1
+fi
+old=$(grep -oE '^dev[0-9]+' "$CONF" | paste -sd, -)
+[ -n "$old" ] && pct set "$CT" -delete "$old"
+args=()
+for index in "${!wanted[@]}"; do args+=("-dev$index" "${wanted[$index]}"); done
+[ ${#args[@]} -gt 0 ] && pct set "$CT" "${args[@]}"
+say "CT $CT now has the $kind devices"

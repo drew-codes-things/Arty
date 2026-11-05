@@ -1,0 +1,240 @@
+package app.arty.core
+
+import com.sun.net.httpserver.HttpServer
+import org.json.JSONObject
+import java.net.InetSocketAddress
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/** Runs the client against a tiny local HTTP server that records requests and replies with canned JSON. */
+class ArtyClientTest {
+    private data class Seen(val method: String, val path: String, val headers: Map<String, String>, val body: String)
+
+    private lateinit var server: HttpServer
+    private val seen = mutableListOf<Seen>()
+    private val routes = mutableMapOf<String, Pair<Int, String>>()
+
+    private val client get() = ArtyClient(
+        ArtyConfig("http://127.0.0.1:${server.address.port}/", "test-key", "access-id", "access-secret"),
+    )
+
+    @BeforeTest
+    fun start() {
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            val headers = exchange.requestHeaders.entries.associate { it.key.lowercase() to it.value.first() }
+            val body = exchange.requestBody.readBytes().decodeToString()
+            seen += Seen(exchange.requestMethod, exchange.requestURI.toString(), headers, body)
+            val (status, reply) = routes["${exchange.requestMethod} ${exchange.requestURI}"] ?: (404 to """{"error":{"message":"not found"}}""")
+            val bytes = reply.toByteArray()
+            exchange.sendResponseHeaders(status, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        server.start()
+    }
+
+    @AfterTest
+    fun stop() = server.stop(0)
+
+    @Test
+    fun `sends the API key and Cloudflare Access headers`() {
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"assistant-core"},{"id":"arty/qwen2.5:3b","name":"Arty (qwen2.5:3b)"}]}"""
+        val models = client.models()
+        assertEquals(listOf("assistant-core", "Arty (qwen2.5:3b)"), models.map { it.name })
+        val headers = seen.single().headers
+        assertEquals("Bearer test-key", headers["authorization"])
+        assertEquals("access-id", headers["cf-access-client-id"])
+        assertEquals("access-secret", headers["cf-access-client-secret"])
+    }
+
+    @Test
+    fun `reads each model's name and description`() {
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"assistant-core","model":"qwen3:14b","description":"14.8B · all tools"},{"id":"arty/qwen2.5:7b"}]}"""
+        val models = client.models()
+        assertEquals(ModelOption("assistant-core", "assistant-core", "qwen3:14b", "14.8B · all tools"), models[0])
+        assertEquals(ModelOption("arty/qwen2.5:7b", "arty/qwen2.5:7b"), models[1])
+    }
+
+    @Test
+    fun `starts a chat job with the history and model, then reads the answer`() {
+        routes["POST /v1/chat/jobs"] = 202 to """{"id":"job1","status":"running"}"""
+        routes["GET /v1/chat/jobs/job1"] = 200 to """{"id":"job1","status":"done","answer":"Hi","tools_used":["research__web_search"]}"""
+        val id = client.startChat(listOf(ChatMessage("user", "hello"), ChatMessage("assistant", "hey"), ChatMessage("user", "again")), "assistant-core")
+        assertEquals("job1", id)
+        val sent = JSONObject(seen.first().body)
+        assertEquals("assistant-core", sent.getString("model"))
+        assertEquals(3, sent.getJSONArray("messages").length())
+        assertEquals("again", sent.getJSONArray("messages").getJSONObject(2).getString("content"))
+        val job = client.chatJob(id)
+        assertTrue(job.finished)
+        assertEquals("Hi", job.answer)
+        assertEquals(listOf("research__web_search"), job.toolsUsed)
+    }
+
+    @Test
+    fun `a running job is not finished (with its first sentences so far) and a failed one carries its error`() {
+        routes["GET /v1/chat/jobs/a"] = 200 to """{"id":"a","status":"running","partial":"Paris is the capital."}"""
+        routes["GET /v1/chat/jobs/b"] = 200 to """{"id":"b","status":"failed","error":"model crashed"}"""
+        val running = client.chatJob("a")
+        assertEquals(false, running.finished)
+        assertEquals("Paris is the capital.", running.partial)
+        val failed = client.chatJob("b")
+        assertTrue(failed.finished)
+        assertNull(failed.answer)
+        assertEquals("model crashed", failed.error)
+    }
+
+    @Test
+    fun `parses waiting tasks and posts decisions to the right path`() {
+        routes["GET /v1/tasks?limit=50"] = 200 to """{"tasks":[
+            {"id":4,"title":"Check feed","instructions":"x","status":"waiting","result":null,
+             "waiting":{"kind":"user","message":"Please sign in"},"updated":1.5},
+            {"id":3,"title":"Reminder","instructions":"y","status":"done","result":"ok","waiting":null,"updated":1.0}]}"""
+        routes["POST /v1/tasks/4/done"] = 200 to """{"message":"Thanks, Arty is carrying on."}"""
+        val tasks = client.tasks()
+        assertEquals("user", tasks[0].waitingKind)
+        assertEquals("Please sign in", tasks[0].waitingMessage)
+        assertNull(tasks[1].waitingKind)
+        assertEquals("Thanks, Arty is carrying on.", client.decideTask(4, "done"))
+    }
+
+    @Test
+    fun `schedules without a next run parse as null`() {
+        routes["GET /v1/schedules"] = 200 to """{"schedules":[{"id":1,"title":"t","instructions":"i","description":"once","next_run":null,"enabled":0}]}"""
+        val schedule = client.schedules().single()
+        assertNull(schedule.nextRun)
+        assertEquals(false, schedule.enabled)
+    }
+
+    @Test
+    fun `reads memory entities`() {
+        routes["GET /v1/memory"] = 200 to """{"entities":[{"name":"Drew","entityType":"person","observations":["likes Linux"]}],"relations":[]}"""
+        val entity = client.memory().single()
+        assertEquals("Drew", entity.name)
+        assertEquals(listOf("likes Linux"), entity.observations)
+    }
+
+    @Test
+    fun `uses the brain's own error message`() {
+        routes["POST /v1/schedules"] = 400 to """{"error":{"message":"Couldn't schedule it: That time has already passed."}}"""
+        val error = assertFailsWith<ArtyException> { client.createSchedule("x", "2020-01-01 10:00") }
+        assertEquals(400, error.status)
+        assertEquals("Couldn't schedule it: That time has already passed.", error.message)
+    }
+
+    @Test
+    fun `explains a gateway error and an access block in plain words`() {
+        routes["GET /v1/tasks?limit=50"] = 502 to "<html>Bad gateway</html>"
+        assertTrue(assertFailsWith<ArtyException> { client.tasks() }.message!!.contains("may be off"))
+        routes["GET /v1/memory"] = 403 to "<html>Forbidden</html>"
+        assertTrue(assertFailsWith<ArtyException> { client.memory() }.message!!.contains("Access refused"))
+    }
+
+    @Test
+    fun `an unreachable server is status 0`() {
+        val port = server.address.port
+        server.stop(0)
+        val error = assertFailsWith<ArtyException> {
+            ArtyClient(ArtyConfig("http://127.0.0.1:$port", "k"), connectTimeoutMs = 2000).models()
+        }
+        assertEquals(0, error.status)
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).also { it.start() }
+    }
+
+    @Test
+    fun `uploads a file raw with its name and type`() {
+        routes["POST /v1/files"] = 201 to """{"id":"f1","name":"my song.wav","mime":"audio/wav","kind":"audio","size":4}"""
+        val attachment = client.upload("my song.wav", "audio/wav", 4, "RIFF".byteInputStream())
+        assertEquals(Attachment("f1", "my song.wav", "audio/wav", "audio", 4), attachment)
+        val request = seen.single()
+        assertEquals("RIFF", request.body)
+        assertEquals("audio/wav", request.headers["content-type"])
+        assertEquals("my+song.wav", request.headers["x-filename"])
+        assertEquals("Bearer test-key", request.headers["authorization"])
+    }
+
+    @Test
+    fun `refuses files over the size limit without sending them`() {
+        val error = assertFailsWith<ArtyException> { client.upload("big.mp4", "video/mp4", ArtyClient.MAX_UPLOAD_BYTES + 1, "".byteInputStream()) }
+        assertEquals(413, error.status)
+        assertTrue(seen.isEmpty())
+    }
+
+    @Test
+    fun `sends attachments as file content parts`() {
+        routes["POST /v1/chat/jobs"] = 202 to """{"id":"job2","status":"running"}"""
+        val photo = Attachment("f9", "cat.jpg", "image/jpeg", "image", 10)
+        client.startChat(listOf(ChatMessage("user", "what is this?", listOf(photo))), "assistant-core")
+        val parts = JSONObject(seen.single().body).getJSONArray("messages").getJSONObject(0).getJSONArray("content")
+        assertEquals("what is this?", parts.getJSONObject(0).getString("text"))
+        assertEquals("file", parts.getJSONObject(1).getString("type"))
+        assertEquals("f9", parts.getJSONObject(1).getJSONObject("file").getString("file_id"))
+    }
+
+    @Test
+    fun `downloads through the app's own server whatever host the link names`() {
+        routes["GET /arty-files/f1/tok/cat.png"] = 200 to "PNGDATA"
+        val out = java.io.ByteArrayOutputStream()
+        client.download("https://192.168.1.13:8443/arty-files/f1/tok/cat.png", out)
+        assertEquals("PNGDATA", out.toString())
+        assertEquals("access-id", seen.single().headers["cf-access-client-id"])
+    }
+
+    @Test
+    fun `a link that only mentions arty-files is not fetched`() {
+        listOf("https://x/arty-files/../v1/memory", "https://x/arty-files/%2e%2e/v1/a/b", "/arty-files/a/b/").forEach { link ->
+            val error = assertFailsWith<ArtyException> { client.download(link, java.io.ByteArrayOutputStream()) }
+            assertEquals("That isn't a file from Arty.", error.message, link)
+        }
+        assertTrue(seen.isEmpty())
+    }
+
+    @Test
+    fun `an expired download says so`() {
+        val error = assertFailsWith<ArtyException> { client.download("https://x/arty-files/gone/tok/a.png", java.io.ByteArrayOutputStream()) }
+        assertTrue(error.message!!.contains("24 hours"))
+    }
+
+    @Test
+    fun `reads the announcements feed and where to continue from`() {
+        routes["GET /v1/announcements?after=4&wait=50"] = 200 to
+            """{"announcements":[{"id":5,"kind":"approval","title":"Arty wants approval","message":"Post this?","task_id":9,"actions":["approve","deny"],"created":1}],"last":5}"""
+        val feed = client.announcements(4, 50)
+        assertEquals(5, feed.last)
+        val item = feed.announcements.single()
+        assertEquals(9L, item.taskId)
+        assertEquals(listOf("approve", "deny"), item.actions)
+    }
+
+    @Test
+    fun `an empty feed keeps the place`() {
+        routes["GET /v1/announcements?after=0&wait=0"] = 200 to """{"announcements":[],"last":12}"""
+        val feed = client.announcements(0)
+        assertTrue(feed.announcements.isEmpty())
+        assertEquals(12, feed.last)
+    }
+
+    @Test
+    fun `reads calendar events, Arty's with an id and Google's without`() {
+        routes["GET /v1/calendar?days=7"] = 200 to """{"events":[
+            {"id":3,"title":"Dentist","start":"2026-10-27T15:00:00+00:00","end":"2026-10-27T15:30:00+00:00","all_day":false,"location":"High St","repeats":false,"calendar":"Arty"},
+            {"title":"Bank holiday","start":"2026-12-25T00:00:00+00:00","end":"2026-12-26T00:00:00+00:00","all_day":true,"location":"","calendar":"UK holidays"}],"problems":[]}"""
+        val events = client.calendar(7)
+        assertEquals(3L, events[0].id)
+        assertNull(events[1].id)
+        assertTrue(events[1].allDay)
+    }
+
+    @Test
+    fun `adds an event from plain words`() {
+        routes["POST /v1/calendar"] = 201 to """{"message":"Added to the calendar: #4 Tue 27 Oct 15:00-16:00: Gym."}"""
+        assertTrue(client.addEvent("Gym", "Tuesday 3pm").startsWith("Added"))
+        val sent = JSONObject(seen.single().body)
+        assertEquals("Tuesday 3pm", sent.getString("when"))
+    }
+}

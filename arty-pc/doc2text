@@ -1,0 +1,33 @@
+#!/bin/bash
+# doc2text FILE: print a document's text to stdout, whatever its format.
+# Used by the assistant's read_document and library tools. Exit 2 = unsupported.
+set -uo pipefail
+file=${1:?usage: doc2text FILE}
+[ -f "$file" ] || { echo "no such file: $file" >&2; exit 1; }
+
+ocr_pdf() {
+  local dir; dir=$(mktemp -d)
+  pdftoppm -r 200 -png "$file" "$dir/page"
+  for page in "$dir"/page*.png; do tesseract "$page" - 2>/dev/null; done
+  rm -rf "$dir"
+}
+
+lower=${file,,}
+case "$lower" in
+  *.pdf)
+    out=$(pdftotext -layout "$file" - 2>/dev/null)
+    # Scanned PDFs have (almost) no text layer, so read the page images instead.
+    if [ "$(printf '%s' "$out" | tr -d '[:space:]' | wc -c)" -lt 50 ]; then ocr_pdf; else printf '%s\n' "$out"; fi ;;
+  *.docx|*.odt|*.epub|*.rtf|*.html|*.htm|*.md|*.markdown|*.rst|*.org|*.tex|*.ipynb|*.pptx)
+    pandoc --wrap=none -t plain "$file" ;;
+  *.xlsx|*.xlsm)
+    xlsx2csv --all --sheetdelimiter '=== sheet: %s ===' "$file" ;;
+  *.png|*.jpg|*.jpeg|*.webp|*.tif|*.tiff|*.bmp|*.gif)
+    tesseract "$file" - 2>/dev/null ;;
+  *)
+    if file -b --mime-type "$file" | grep -q -E '^(text/|application/(json|xml|javascript|x-sh))'; then
+      cat "$file"
+    else
+      echo "unsupported document type: $(file -b "$file")" >&2; exit 2
+    fi ;;
+esac

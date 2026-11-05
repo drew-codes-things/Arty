@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice calls with Arty listen hands-free, which needs the microphone directly. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Reminders, briefings, approvals and homelab alerts as phone notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Instant notifications: an always-on connection to Arty, restarted after a reboot. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- "Call my mum" / "text Sam ...": finds who in your contacts to open the dialler or a text (never reads anything else). -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Android 11+ only lets apps see the speech recogniser and text-to-speech engines they declare. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Arty">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- "Share to Arty" from other apps: the shared text becomes the message. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!-- Photos, videos, audio, PDFs and other files shared from any app become attachments. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- The home-screen widget. -->
+        <activity android:name=".SetupActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <receiver android:name=".widget.ArtyWidget" android:exported="true" android:label="Arty">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/arty_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".notify.LiveConnection"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a connection to the user's own self-hosted assistant so its reminders and approval requests arrive instantly" />
+        </service>
+        <!-- Records lectures with the screen off. -->
+        <service
+            android:name=".lectures.LectureRecorder"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+        <receiver android:name=".notify.StartAfterBoot" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- "Talk to Arty" quick-settings tile. -->
+        <service
+            android:name=".widget.TalkTile"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="Talk to Arty"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Approve / Deny buttons on approval notifications. -->
+        <receiver android:name=".notify.DecisionReceiver" android:exported="false" />
+    </application>
+</manifest>

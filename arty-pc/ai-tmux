@@ -1,0 +1,14 @@
+#!/bin/sh
+mkdir -p ~/.assistant ~/projects
+touch ~/.assistant/terminal.log
+if ! tmux has-session -t assistant 2>/dev/null; then
+  tmux new-session -d -s assistant -n work -x 200 -y 50 -c ~/projects \
+    "printf \"\\033]2;assistant\\033\\\\\"; tail -n 300 -F ~/.assistant/terminal.log 2>/dev/null"
+  tmux split-window -v -l 40% -t assistant:work -c ~/projects
+  tmux set -t assistant pane-border-status top
+  tmux set -t assistant pane-border-format " #{?pane_index,you,assistant} "
+  tmux set -t assistant mouse on
+  tmux set -t assistant history-limit 20000
+  tmux select-pane -t assistant:work.1
+fi
+exec tmux attach -t assistant

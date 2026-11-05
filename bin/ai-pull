@@ -1,0 +1,24 @@
+#!/bin/sh
+if [ $# -eq 0 ]; then
+  cat <<'HELP'
+Usage: ai-pull <model> [more models...]
+
+Downloads models from ollama.com into /srv/ai/ollama. Good fits for the RTX 3060 (12 GB):
+  qwen3:14b         the Assistant's brain: chat, code and tool use (recommended first, 12k context)
+  qwen2.5:7b        a faster brain with room for a 16k context
+  qwen2.5vl:7b      vision, so look_at_desktop can see the screen
+  llama3.1:8b       general chat
+  qwen2.5-coder:14b code: Arty can run on it, and hands coding jobs to it
+Models above 14B run partly on the CPU and are slow.
+Browse everything at https://ollama.com/search
+
+Installed now:
+HELP
+  ollama list
+  exit 0
+fi
+for model in "$@"; do
+  ollama pull "$model" || exit 1
+done
+echo
+ollama list

@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+CONFIG=/srv/ai/brain/brain.json
+current=$(jq -r .model "$CONFIG")
+
+if [ $# -ne 1 ]; then
+  echo "Usage: ai-use <model>"
+  echo "Switches Arty to another Ollama model, downloading it if needed."
+  echo "Current model: $current"
+  exit 0
+fi
+
+model=$1
+if [ "$model" = "$current" ]; then
+  echo "Arty already uses $model."
+  exit 0
+fi
+allowed=$(jq -r '(.arty_models // []) | join(", ")' "$CONFIG")
+if [ -n "$allowed" ] && ! jq -e --arg model "$model" '(.arty_models // []) | index($model) != null or index($model | sub(":latest$"; "")) != null' "$CONFIG" >/dev/null; then
+  echo "Not switching: $model isn't one of Arty's models ($allowed)."
+  echo "It's still there as a plain chat in Open WebUI, or add it to arty_models in $CONFIG."
+  exit 1
+fi
+if ! ollama show "$model" >/dev/null 2>&1; then
+  echo "Downloading $model..."
+  ollama pull "$model"
+fi
+
+capabilities=$(ollama show "$model" | sed -n '/Capabilities/,/^[[:space:]]*$/p' | awk 'NR>1 {print $1}')
+if ! echo "$capabilities" | grep -qx tools; then
+  if [ "$(jq -r '.allow_toolless_models // false' "$CONFIG")" != true ]; then
+    echo "Not switching: $model can't use tools, so Arty would lose memory saving, its computer and the browser."
+    echo "Pick a model with the 'tools' tag on https://ollama.com/search?c=tools, or allow it anyway with: ai-toolless on"
+    exit 1
+  fi
+  echo "Note: $model can't use tools; Arty will chat with its persona and memory only."
+fi
+
+updated=$(mktemp)
+jq --arg model "$model" '.model = $model' "$CONFIG" > "$updated"
+install -m 644 "$updated" "$CONFIG"
+rm -f "$updated"
+echo "Arty now uses $model (from your next message). Previous model: $current"
+echo "$capabilities" | grep -qx vision && echo "$model can also see images."
+echo "Switch back any time with: ai-use $current"

@@ -1,0 +1,22 @@
+#!/bin/sh
+# "Sign in to websites": pause Arty's automated browser and open the same Google Chrome and profile
+# as an ordinary window, so sites that refuse automated browsers (Google) accept the sign-in.
+# When this window closes, Arty's browser (the same Google Chrome, plus a localhost-only debugging port for
+# the agent) starts again with the saved logins.
+set -u
+AGENT="$HOME/.local/browser-agent"
+PROFILE="$HOME/.browser-profile"
+# The same Google Chrome the agent uses; basic password store so the agent can read the cookies.
+CHROME=/usr/bin/google-chrome
+[ -x "$CHROME" ] || { notify-send "Sign in to websites" "Google Chrome not found" 2>/dev/null; exit 1; }
+
+touch "$AGENT/paused"
+trap 'rm -f "$AGENT/paused"' EXIT INT TERM
+pkill -f "[b]rowser_agent.py" 2>/dev/null
+# Close Arty's own Chrome (the agent leaves it running) the polite way, so it saves its cookies,
+# then wait for it to let go of the profile.
+pkill -TERM -f -- "[r]emote-debugging-port=9223" 2>/dev/null
+for _ in $(seq 1 30); do pgrep -f -- "[u]ser-data-dir=$PROFILE" >/dev/null || break; sleep 0.5; done
+rm -f "$PROFILE/SingletonLock"
+
+"$CHROME" --user-data-dir="$PROFILE" --password-store=basic --no-first-run --start-maximized "${1:-https://accounts.google.com/}"

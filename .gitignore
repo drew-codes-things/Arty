@@ -1,0 +1,5 @@
+__pycache__/
+
+# Built installers live next to their app but aren't committed (the APK has the API key and Access token in it).
+apps/*/release/
+

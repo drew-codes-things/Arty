@@ -1,0 +1,81 @@
+# Arty Desktop settings. The first run copies this to arty_config.yaml (not in git);
+# change that copy. setup-linux.sh fills in brain.api_key for you.
+
+# Arty's brain on the homelab: thinking, persona, memory and its own tools.
+brain:
+  base_url: ""
+  remote_url: ""               # used away from home, e.g. "https://arty.example.com/v1" behind Cloudflare Access
+  access_client_id: ""         # a Cloudflare Access service token for remote_url
+  access_client_secret: ""
+  api_key: ""                 # the Arty API key (setup-linux.sh copies it in)
+  model: "assistant-core"     # or "arty/<model>" to pick one of the brain's models
+  timeout_seconds: 600        # long jobs on this computer can take a while
+  history_turns: 12           # exchanges kept as context for the next message
+  max_tool_rounds: 60         # steps one request may take on this computer
+
+history_file: chat_history.json
+
+# Arty using this computer: screenshots, mouse, keyboard, apps, files and commands.
+# Risky actions (deleting, sending, installing, secrets) are asked about first.
+computer:
+  enabled: true
+  ask_before_mouse_and_keyboard: false   # true: ask once per request before clicking or typing
+
+tools:
+  enabled: true
+  clipboard: true
+  open_url: true
+  clipboard_chars: 2000
+
+# Reading the screen. Uses the brain's vision model directly.
+vision:
+  enabled: true
+  model: "qwen2.5vl:7b"
+  max_tokens: 300
+  max_edge: 1024
+
+# What Arty knows about right now, added to each message.
+context:
+  enabled: true
+  time: true
+  frontmost_app: true
+  battery: true
+
+# Speech to text, on this computer.
+asr:
+  model: "base.en"
+  input_device: auto
+  device: "cpu"
+  compute_type: "int8"
+  offline: true
+
+# Text to speech, on this computer.
+tts:
+  provider: kokoro
+  kokoro:
+    model_path: "models/kokoro/kokoro-v1.0.onnx"
+    voices_path: "models/kokoro/voices-v1.0.bin"
+    voice: "bm_george"        # British. Others: bm_daniel, bm_lewis, bf_emma, bf_isabella
+    speed: 1.05
+    pitch: 0             # semitones up (+) or down (-)
+    lang: "en-gb"
+
+bridge:
+  host: "127.0.0.1"
+  port: 8765
+
+listen:
+  max_seconds: 15             # never listens longer than this
+  pause_ms: 900               # a pause this long after you've spoken ends it
+
+wake:
+  words: ["arty", "artie", "arti", "hearty"]   # how Whisper might spell the name
+  listen_seconds: 10
+  margin_db: 10
+
+# Talk over Arty to interrupt it.
+barge_in:
+  enabled: true
+  margin_db: 8.0
+  speech_ms: 300
+  silence_ms: 800

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "memory": {"command": "mcp-server-memory", "env": {"MEMORY_FILE_PATH": "/srv/ai/memory/memory.json"}},
+    "time": {"command": "mcp-server-time", "args": ["--local-timezone", "Europe/London"]},
+    "fetch": {"command": "mcp-server-fetch"},
+    "sequential-thinking": {"command": "mcp-server-sequential-thinking"},
+    "workspace": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/workspace_server.py"]},
+    "research": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/research_server.py"]},
+    "homelab": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/homelab_server.py"]}
+  }
+}

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Arty</string>
+    <string name="widget_description">Talk to or call Arty, and see its latest message</string>
+</resources>

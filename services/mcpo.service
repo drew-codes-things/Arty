@@ -1,0 +1,14 @@
+[Unit]
+Description=MCP tool hub (mcpo) for Open WebUI and API clients
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/srv/ai/secrets/mcpo.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/mcpo --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/mcpo.json --api-key ${MCPO_API_KEY}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

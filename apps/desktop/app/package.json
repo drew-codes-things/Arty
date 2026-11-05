@@ -1,0 +1,68 @@
+{
+  "name": "arty",
+  "version": "1.0.0",
+  "description": "Arty on your desktop: talk to it, and let it use your computer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/",
+    "dist": "electron-builder --linux dir",
+    "appimage": "electron-builder --linux AppImage"
+  },
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "productName": "Arty",
+  "build": {
+    "appId": "app.arty.desktop",
+    "productName": "Arty",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "dependencies.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "executableName": "arty",
+      "category": "Utility",
+      "icon": "build/icon.png",
+      "synopsis": "Transparent desktop VRM avatar assistant",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "appImage": {
+      "artifactName": "Arty-${version}-${arch}.AppImage"
+    },
+    "afterPack": "build/afterPack.js"
+  },
+  "author": "Drew"
+}
