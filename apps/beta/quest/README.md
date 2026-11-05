@@ -2,7 +2,9 @@
 
 # Arty for Quest
 
-**Arty in your headset - say "Arty ..." and it answers out loud, with an orb that shows when it's listening, thinking and talking, and panels for your servers, weather, calendar and reminders that you can grab and move.**
+**Beta.** Arty in your headset, your own virtual reality AI.
+
+**Say "Arty ..." and it answers out loud, with an orb that shows when it's listening, thinking and talking, and panels for your servers, weather, calendar and reminders that you can grab and move.**
 
 [![Kotlin](https://img.shields.io/badge/kotlin-2.1-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Meta Spatial SDK](https://img.shields.io/badge/meta%20spatial%20sdk-0.14-0467DF?style=flat-square&logo=meta&logoColor=white)](https://developers.meta.com/horizon/develop/spatial-sdk)

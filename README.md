@@ -74,7 +74,7 @@ alerts - only ever go to **Updates** in the phone and desktop apps.
 | [`apps/desktop/`](apps/desktop/) | Arty Desktop - voice, a small window and hands on your Linux PC, with the AppImage in `release/` |
 | [`apps/android/`](apps/android/) | Arty for Android - chat, Updates, tasks, schedules and memory, with the APKs in `release/` |
 | [`apps/beta/ios/`](apps/beta/ios/) | **Beta.** Arty for iPhone - a Home Screen web app, served by the brain at `/ios/` |
-| [`apps/beta/quest/`](apps/beta/quest/) | **Beta.** Arty for Quest 3 and 3S - an orb and panels in passthrough, talking through the voice server |
+| [`apps/beta/quest/`](apps/beta/quest/) | **Beta.** Arty for Quest 3 and 3S, your own virtual reality AI - an orb and panels in passthrough, talking through the voice server |
 | [`voice/`](voice/) | The room mic and speakers hub, and the "Hey Arty" voice assistant |
 | [`extensions/gmail/`](extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
 | [`extensions/browser/`](extensions/browser/) | Chrome extension that lets Arty Desktop use your own browser |
@@ -98,7 +98,7 @@ The beta apps are built and unit-tested but haven't been tried on a real iPhone 
   searchable `~/library` of documents, and a desktop look it picks itself.
 - **Approvals** - anything that sends, buys, deletes or touches the homelab waits for your Approve / Deny.
 - **Safe browsing** - logins, CAPTCHAs and bot checks are reported back to you, never got around.
-- **Everywhere** - desktop app, Android, iPhone and Quest (beta), voice, Telegram and Discord, all sharing one memory.
+- **Everywhere** - desktop app, Android, iPhone and Quest (beta: your own virtual reality AI), voice, Telegram and Discord, all sharing one memory.
 - **Works with [starfire.ai](https://github.com/drew-codes-things/starfire.ai)** - add Arty to starfire as an
   OpenAI-compatible provider and chat with it in the browser, next to your plain Ollama models.
 

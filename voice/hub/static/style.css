@@ -4,9 +4,14 @@
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0; background: var(--ink); color: var(--text);
+  margin: 0; color: var(--text); min-height: 100vh;
+  background:
+    radial-gradient(120% 70% at 0% 0%, rgba(160, 20, 28, .38), transparent 60%) fixed,
+    linear-gradient(165deg, #1c0608 0%, #0d0b0c 42%, #070708 100%) fixed,
+    var(--ink);
   font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+::selection { background: rgba(229, 56, 59, .35); color: #fff; }
 main { max-width: 640px; margin: 0 auto; padding: 32px 16px 64px; }
 h1 { font-size: 1.4rem; font-weight: 600; margin: 0; }
 h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 10px; }
@@ -14,7 +19,10 @@ p, li { color: var(--dim); }
 a { color: var(--red); }
 code { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: .88em; word-break: break-all; }
 .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 18px; }
+.card {
+  background: rgba(20, 20, 22, .78); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 18px;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
 label { display: block; color: var(--dim); font-size: .85rem; margin: 10px 0 4px; }
 input { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
 button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); padding: 6px 12px; }
