@@ -99,6 +99,8 @@ The beta apps are built and unit-tested but haven't been tried on a real iPhone 
 - **Approvals** - anything that sends, buys, deletes or touches the homelab waits for your Approve / Deny.
 - **Safe browsing** - logins, CAPTCHAs and bot checks are reported back to you, never got around.
 - **Everywhere** - desktop app, Android, iPhone and Quest (beta), voice, Telegram and Discord, all sharing one memory.
+- **Works with [starfire.ai](https://github.com/drew-codes-things/starfire.ai)** - add Arty to starfire as an
+  OpenAI-compatible provider and chat with it in the browser, next to your plain Ollama models.
 
 ---
 
@@ -277,6 +279,9 @@ Restart with `systemctl restart mcpo brain` after changing them.
 ## Using It
 
 - **Chat**: any of the apps, or your own code through [the Arty API](docs/API.md).
+- **In the browser**: [starfire.ai](https://github.com/drew-codes-things/starfire.ai) works with Arty. In starfire,
+  Settings → Connections → "Add API provider" → "Other (OpenAI-compatible)", with the brain's address
+  (`http://<AI_ADDRESS>:8081/v1`) and `ARTY_API_KEY`, then pick `assistant-core` (Arty's main model).
 - **Models**: on the brain's container, `ai-pull <model>` downloads one (no arguments: suggestions), `ai-models`
   lists them and `ai-use <model>` switches Arty's main model. Or tell Arty "switch to <model>" in any app; only models
   in `arty_models` in `brain.json` are accepted. Only models that can use tools can run Arty, unless you run
