@@ -5,7 +5,8 @@ from urllib.parse import urlparse
 from process.config import load_config
 
 _brain = load_config().get("brain") or {}
-LOCAL_URL = str(_brain.get("base_url") or "http://192.168.1.13:8081/v1").rstrip("/")
+DEFAULT_LOCAL_URL = "http://127.0.0.1:8081/v1"
+LOCAL_URL = str(_brain.get("base_url") or DEFAULT_LOCAL_URL).rstrip("/")
 REMOTE_URL = str(_brain.get("remote_url") or "").rstrip("/")
 ACCESS_CLIENT_ID = str(_brain.get("access_client_id") or "")
 ACCESS_CLIENT_SECRET = str(_brain.get("access_client_secret") or "")

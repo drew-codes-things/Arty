@@ -55,7 +55,7 @@ import web_app
 
 LISTEN_HOST = os.environ.get("BRAIN_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("BRAIN_PORT", "8081"))
-PUBLIC_URL = os.environ.get("BRAIN_PUBLIC_URL", "http://192.168.1.13:8081").rstrip("/")
+PUBLIC_URL = (os.environ.get("BRAIN_PUBLIC_URL") or f"http://127.0.0.1:{LISTEN_PORT}").rstrip("/")
 BRAIN_KEY = os.environ["BRAIN_API_KEY"]
 APP_KEY = os.environ.get("ARTY_API_KEY", "")
 ALERT_TOKEN = os.environ.get("ALERT_TOKEN", "")  # Uptime Kuma's webhook puts this in its URL

@@ -24,7 +24,7 @@ both run locally, and with your say-so it can look at the screen, open apps, cli
 ## How It Works
 
 ```
-app/ (Electron window)  ──HTTP──▶  server/arty_server.py (127.0.0.1:8765)  ──▶  Arty's brain (192.168.1.13:8081)
+app/ (Electron window)  ──HTTP──▶  server/arty_server.py (127.0.0.1:8765)  ──▶  Arty's brain (192.0.2.13:8081)
                                      voice in/out, runs the brain's            persona, memory, models,
                                      computer_* tool calls here                web, homelab, its own VM
 ```

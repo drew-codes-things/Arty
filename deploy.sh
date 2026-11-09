@@ -3,9 +3,13 @@
 # The live main model and the ai-toolless setting in brain.json are kept, so changes made on the server survive a deploy.
 set -euo pipefail
 cd "$(dirname "$0")"
+HOSTS_FILE=${ARTY_HOSTS_FILE:-./hosts.env}
+if [ -f "$HOSTS_FILE" ]; then
+  . "$HOSTS_FILE"
+fi
 PROXMOX=${PROXMOX:-proxmox}
 CT=${CT:-104}
-DESKTOP=${DESKTOP:-ai@192.168.1.14}
+DESKTOP=${DESKTOP:-ai@${DESKTOP_ADDRESS:?set DESKTOP_ADDRESS, see hosts.env.example}}
 PUFFER_DIR=/DataStarServ/pufferpanel/servers/servers
 ARTY_DISCORD_ID=${ARTY_DISCORD_ID-d124cac6}
 ARTY_TELEGRAM_ID=${ARTY_TELEGRAM_ID-7a7e8c6c}

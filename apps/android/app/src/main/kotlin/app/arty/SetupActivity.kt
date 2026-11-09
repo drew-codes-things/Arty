@@ -150,7 +150,7 @@ private fun SetupScreen(existing: ArtyConfig?, onConnected: (ArtyConfig) -> Unit
             "Enter where your Arty brain is and its API key. They're kept encrypted on this phone, and only sent to that address.",
             style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextDim,
         )
-        SetupField("Brain address", address, { address = it }, "https://arty.example.com or http://192.168.1.13:8081", KeyboardType.Uri)
+        SetupField("Brain address", address, { address = it }, "https://arty.example.com or http://arty-server:8081", KeyboardType.Uri)
         SetupField("API key", apiKey, { apiKey = it }, "The brain's Arty API key", KeyboardType.Password, secret = true)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {

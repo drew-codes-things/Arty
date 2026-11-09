@@ -42,7 +42,7 @@ apps.
    ```
    DISCORD_BOT_TOKEN=...
    DISCORD_OWNER_ID=<your Discord user id>
-   BRAIN_URL=http://192.168.1.13:8081/v1/chat/completions
+   BRAIN_URL=http://192.0.2.13:8081/v1/chat/completions
    ARTY_API_KEY=...
    ```
 

@@ -20,7 +20,7 @@ from installers import build_installer
 HERE = Path(__file__).resolve().parent
 DATA_DIR = os.environ.get("HUB_DATA_DIR", "/var/lib/my-voice")
 PORT = int(os.environ.get("HUB_PORT", "8780"))
-PUBLIC_URL = os.environ.get("HUB_PUBLIC_URL", f"http://192.168.1.15:{PORT}")
+PUBLIC_URL = os.environ.get("HUB_PUBLIC_URL", f"http://127.0.0.1:{PORT}")
 MIC_DEVICE = os.environ.get("HUB_MIC_DEVICE", "plughw:CARD=Mic,DEV=0")
 SPEAKER_DEVICE = os.environ.get("HUB_SPEAKER_DEVICE", "plughw:CARD=PCH,DEV=0")
 MIXER_CARD = os.environ.get("HUB_MIXER_CARD", "PCH")

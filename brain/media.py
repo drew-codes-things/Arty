@@ -30,7 +30,7 @@ WHISPER_PYTHON = os.environ.get("WHISPER_PYTHON", "/srv/ai/media/venv/bin/python
 TRANSCRIBE_SCRIPT = Path(__file__).with_name("transcribe.py")
 DOWNLOAD_PREFIX = "arty-files"
 # Download links go through Caddy's HTTPS front end: browsers block http downloads started from an https page.
-FILES_PUBLIC_URL = os.environ.get("BRAIN_FILES_URL", "https://192.168.1.13:8443").rstrip("/")
+FILES_PUBLIC_URL = (os.environ.get("BRAIN_FILES_URL") or f"http://127.0.0.1:{os.environ.get('BRAIN_PORT', '8081')}").rstrip("/")
 FILE_TTL_SECONDS = 24 * 3600
 MAX_UPLOAD_BYTES = 95 * 1024 * 1024  # Cloudflare's free plan refuses request bodies over 100 MB
 ANALYSIS_CHARS = 12_000

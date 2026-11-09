@@ -117,7 +117,10 @@ def scan_devices(network: str) -> dict[str, dict]:
 def check_devices(settings: dict, state: dict, learning: bool):
     if time.time() - state.get("devices_scanned", 0) < SCAN_EVERY:
         return
-    found = scan_devices(settings.get("NETWORK", "192.168.1.0/24"))
+    network = settings.get("NETWORK")
+    if not network:
+        return
+    found = scan_devices(network)
     if not found:
         return  # a failed scan must not look like every device leaving
     known = state.get("devices", {})
@@ -132,7 +135,8 @@ def check_devices(settings: dict, state: dict, learning: bool):
 def server_addresses(settings: dict) -> list[str]:
     """The host, every container's fixed address, and any extra servers listed in the settings (VMs)."""
     addresses = set(filter(None, settings.get("EXTRA_SERVERS", "").split(",")))
-    addresses.add(settings.get("HOST_ADDRESS", "192.168.1.253"))
+    if settings.get("HOST_ADDRESS"):
+        addresses.add(settings["HOST_ADDRESS"])
     for vmid, _ in running_containers():
         if match := re.search(r"ip=(\d+\.\d+\.\d+\.\d+)", run(["pct", "config", vmid])):
             addresses.add(match.group(1))

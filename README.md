@@ -192,14 +192,19 @@ Then put your server addresses in the files listed in [Your Own Servers](#your-o
 
 ### 4. Provision
 
-From this repository, with the settings for your network:
+Nothing about your network is built in. Copy `hosts.env.example` to `hosts.env` and put your own addresses in it
+(it is read by `provision.sh` and `deploy.sh` and is never committed). The addresses in this guide are examples from
+the range reserved for documentation, 192.0.2.0/24: replace them with yours. Then, from this repository:
 
 ```bash
-CT=104 DESKTOP_VMID=105 AI_ADDRESS=192.168.1.13 DESKTOP_ADDRESS=192.168.1.14 \
-HOST_ADDRESS=192.168.1.253 NETWORK=192.168.1.0/24 TIMEZONE=Europe/London \
+cp hosts.env.example hosts.env      # then edit it
+CT=104 DESKTOP_VMID=105 TIMEZONE=Europe/London \
 HEAL_GUESTS="" NEXTCLOUD_CT="" SET_BACKUP_JOBS=no \
 ./provision.sh
 ```
+
+You can also pass `AI_ADDRESS`, `DESKTOP_ADDRESS`, `HOST_ADDRESS` and `NETWORK` on the command line instead. The
+scripts stop and say which one is missing.
 
 It's safe to re-run. It installs the tools on Arty's PC, makes a Proxmox user that can read status everywhere and
 snapshot only Arty's PC, starts SearXNG and the HTTPS proxy, sets up the host's daily facts and security watch, picks
@@ -208,8 +213,8 @@ the GPU at every boot, installs the speech-to-text tools and makes the Arty API 
 | Setting | What it does | Leave unset to |
 |---|---|---|
 | `CT`, `DESKTOP_VMID` | The brain's container and Arty's PC | use 104 and 105 |
-| `AI_ADDRESS`, `DESKTOP_ADDRESS` | Their LAN addresses | use 192.168.1.13 and .14 |
-| `HOST_ADDRESS`, `NETWORK` | The Proxmox host and your LAN, for the security watch | use 192.168.1.253 and 192.168.1.0/24 |
+| `AI_ADDRESS`, `DESKTOP_ADDRESS` | Their LAN addresses (required) | stop and ask for them |
+| `HOST_ADDRESS`, `NETWORK` | The Proxmox host and your LAN, for the security watch (required) | stop and ask for them |
 | `HEAL_GUESTS` | Guests Arty may start or restart after you tap Fix | use 100-103 and Arty's PC; `""` gives none |
 | `NEXTCLOUD_CT` | The container running Nextcloud in Docker, for Arty's own account | use 100; `""` skips it |
 | `SET_BACKUP_JOBS` | Rewrite the vzdump jobs to back up the brain and Arty's PC | rewrite them; `no` leaves your jobs alone |
@@ -218,7 +223,7 @@ the GPU at every boot, installs the speech-to-text tools and makes the Arty API 
 ### 5. Deploy
 
 ```bash
-CT=104 DESKTOP=ai@192.168.1.14 ARTY_DISCORD_ID= ARTY_TELEGRAM_ID= ./deploy.sh
+CT=104 ARTY_DISCORD_ID= ARTY_TELEGRAM_ID= ./deploy.sh
 ```
 
 It copies the brain, the tool servers, the iPhone app and the services to the container, the scripts to Arty's PC,
@@ -260,13 +265,15 @@ Away from home, the phone apps need [the Cloudflare link](docs/cloudflare.md).
 
 ## Your Own Servers
 
-Every address has a setting. The defaults are the author's homelab, so set the ones you use:
+Every address is a setting and none is built in. The brain's own links, the chat bots and the voice assistant assume
+everything runs on the same machine (127.0.0.1) until you tell them otherwise, and a homelab service whose address
+is not set (Proxmox, Uptime Kuma, Nextcloud, PufferPanel, Arty's PC) simply says it is not set up. Set the ones you use:
 
 | Setting | Where | Used for |
 |---|---|---|
 | `BRAIN_PUBLIC_URL` | `/srv/ai/secrets/brain.env` | The brain's own address in links it hands out |
 | `BRAIN_FILES_URL` | `/srv/ai/secrets/brain.env` | The HTTPS address that serves files Arty makes for you |
-| `WORKSPACE_HOST` | `/srv/ai/secrets/mcpo.env` | Arty's PC |
+| `WORKSPACE_HOST` | `/srv/ai/secrets/workspace.env` (its own file: tool servers start with a minimal environment) | Arty's PC |
 | `PVE_URL` | `/srv/ai/secrets/homelab.env` | The Proxmox API |
 | `UPTIME_KUMA_URL`, `UPTIME_KUMA_API_KEY` | `/srv/ai/secrets/homelab.env` | Server status |
 | `NEXTCLOUD_URL` | `/srv/ai/secrets/homelab.env` | Nextcloud |

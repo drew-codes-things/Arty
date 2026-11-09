@@ -125,7 +125,7 @@ fun SetupForm(state: QuestState, onSave: (String, String) -> Unit, onCancel: () 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Heading("Connect to Arty")
         Line(SETUP_HELP, DimText)
-        SetupField("Headset address, e.g. ws://192.168.1.16:8790/ws/headset", address, { address = it }, secret = false)
+        SetupField("Headset address, e.g. ws://arty-server:8790/ws/headset", address, { address = it }, secret = false)
         SetupField("Headset key", key, { key = it }, secret = true)
         if (state.setupProblem.isNotBlank()) Text(state.setupProblem, color = ArtyRed, fontSize = 15.sp, maxLines = 3)
         Spacer(Modifier.weight(1f))

@@ -14,8 +14,8 @@ from listening import WHISPER_RATE, Downsampler, UtteranceCollector, to_float
 from speaking import NOT_FOR_ME, SentenceBuffer, Voice, might_be_ignored, plain_speech
 from wake import find_switch, find_wake, has_words, is_filler
 
-HUB_URL = os.environ.get("HUB_URL", "http://192.168.1.15:8780").rstrip("/")
-BRAIN_URL = os.environ.get("BRAIN_URL", "http://192.168.1.13:8081/v1").rstrip("/")
+HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8780").rstrip("/")
+BRAIN_URL = os.environ.get("BRAIN_URL", "http://127.0.0.1:8081/v1").rstrip("/")
 HUB_TOKEN = os.environ["HUB_TOKEN"]
 BRAIN_KEY = os.environ["ARTY_API_KEY"]
 VOICE_MODEL = os.environ.get("VOICE_MODEL", "/opt/ai-arty/models/en_GB-alan-medium.onnx")

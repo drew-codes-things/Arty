@@ -12,7 +12,7 @@
 
 ## Overview
 
-At home, everything reaches the brain on its LAN address (`http://192.168.1.13:8081`): Arty Desktop, the Telegram
+At home, everything reaches the brain on its LAN address (`http://192.0.2.13:8081`): Arty Desktop, the Telegram
 and Discord bots and Open WebUI. The phone also needs it from anywhere, so the brain is published through a
 Cloudflare Tunnel and locked down twice:
 
@@ -36,7 +36,7 @@ You need a domain on Cloudflare and a Zero Trust account (the free plan is enoug
 1. **Tunnel.** Zero Trust > Networks > Tunnels > Create a tunnel (Cloudflared). Install `cloudflared` on a machine on
    the LAN (here core-sys, CT 100) and run the command it shows. That installs a `cloudflared` service with the
    tunnel's token, and the tunnel is managed from the dashboard, with no local config file.
-2. **Route.** In the tunnel's Public Hostnames, add `arty.<your domain>` with service `http://192.168.1.13:8081` (the
+2. **Route.** In the tunnel's Public Hostnames, add `arty.<your domain>` with service `http://192.0.2.13:8081` (the
    brain).
 3. **Service token.** Zero Trust > Access > Service credentials > Create a service token, named e.g. "Arty Android
    app". Copy the Client ID and Client Secret now; the secret is only shown once.

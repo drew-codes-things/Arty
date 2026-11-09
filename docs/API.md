@@ -1,14 +1,14 @@
 # Arty API
 
-Everything Arty can do, for your own apps. Home network: http://192.168.1.13:8081. Anywhere: https://arty.example.com, which also needs the Cloudflare Access service-token headers (`CF-Access-Client-Id`, `CF-Access-Client-Secret`).
+Everything Arty can do, for your own apps. Home network: http://192.0.2.13:8081. Anywhere: https://arty.example.com, which also needs the Cloudflare Access service-token headers (`CF-Access-Client-Id`, `CF-Access-Client-Secret`).
 
-- Base URL: `http://192.168.1.13:8081`
+- Base URL: `http://192.0.2.13:8081`
 - Key: `Authorization: Bearer <ARTY_API_KEY>`. The key is in `/srv/ai/secrets/arty-api.txt` on CT 104 (`pct exec 104 -- cat /srv/ai/secrets/arty-api.txt`).
 - Errors: `{"error": {"message": "..."}}` with a matching HTTP status.
 
 ## Chat (OpenAI-compatible)
 
-Any OpenAI client library works: set `base_url` to `http://192.168.1.13:8081/v1` and the key above.
+Any OpenAI client library works: set `base_url` to `http://192.0.2.13:8081/v1` and the key above.
 
 `POST /v1/chat/completions`
 
@@ -28,7 +28,7 @@ Any OpenAI client library works: set `base_url` to `http://192.168.1.13:8081/v1`
 - `POST /v1/files`: upload one file as the raw request body, with `Content-Type` and its name URL-encoded in `X-Filename`. Max 95 MB (Cloudflare's limit). Returns `{"id", "name", "mime", "kind", "size", "download"}` (201); `kind` is `image`, `audio`, `video` or `other`. The same content uploaded again gets the same id.
 - `GET /v1/files/{id}`: the same details. Files are deleted 24 hours after upload.
 - Attach files to a chat message as content parts: `{"type": "file", "file": {"file_id": "..."}}`. `image_url` parts with `data:` URLs and `input_audio` parts work too. Arty sees a description of images, a description of video frames plus a transcript of the soundtrack, and a transcript of audio. Each is worked out once per file and reused on later turns.
-- Arty can convert attachments (`convert_file`: images via ImageMagick, audio/video via ffmpeg) and replies with a download link: `https://192.168.1.13:8443/arty-files/{id}/{token}/{name}` (through Caddy, so it works from https pages). The token in the link is the only credential, like the task hooks; `/arty-files/...` on the brain's own address (or via Cloudflare) serves the same file.
+- Arty can convert attachments (`convert_file`: images via ImageMagick, audio/video via ffmpeg) and replies with a download link: `https://192.0.2.13:8443/arty-files/{id}/{token}/{name}` (through Caddy, so it works from https pages). The token in the link is the only credential, like the task hooks; `/arty-files/...` on the brain's own address (or via Cloudflare) serves the same file.
 - Apps that send their own tools can add `X-Arty-Skip-Groups: browser,screen,windows` (tool group names from brain.json) so Arty doesn't also offer its own versions; the desktop app does, since it drives the user's own browser and screen.
 - Images no longer go straight to the vision model. Send `X-Arty-Direct-Vision: 1` (or `"arty_direct_vision": true`) for the old behaviour: a precise question about a picture answered by the vision model alone, without Arty's persona or tools (the desktop app's screen reading uses this).
 - starfire.ai uploads audio and video you attach there to `/v1/files` and sends them as file parts; photos arrive as images.

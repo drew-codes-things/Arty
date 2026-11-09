@@ -15,7 +15,7 @@
 
 ## Overview
 
-Arty works on a computer of its own, VM 105 `ai-desktop` (192.168.1.14), rather than yours. The brain reaches it
+Arty works on a computer of its own, VM 105 `ai-desktop` (192.0.2.14), rather than yours. The brain reaches it
 over SSH (`mcp/remote.py`) to browse, read email and documents, and run commands - and you can watch or help from
 the Proxmox console at any time.
 

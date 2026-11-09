@@ -2,13 +2,13 @@
 
 The USB mic and the speakers are plugged into the Proxmox host. Only one container can hold the mic, so:
 
-- **my-voice (CT 108, 192.168.1.15)** owns the mic and the speakers. `hub/voice_hub.py` streams the mic over a
+- **my-voice (CT 108, 192.0.2.15)** owns the mic and the speakers. `hub/voice_hub.py` streams the mic over a
   WebSocket (48 kHz, 16-bit mono) and plays anything the assistant says on the server speakers and on every linked PC.
-  Its website, http://192.168.1.15:8780, has its own account: the first visit asks you to choose an email and
+  Its website, http://192.0.2.15:8780, has its own account: the first visit asks you to choose an email and
   password (`/var/lib/my-voice/accounts.json`, bcrypt), kept the same as your starfire.ai login. It gives each PC a
   one-file setup script with its own key. Keys are stored hashed and can be removed from
   the page.
-- **ai-arty (CT 109, 192.168.1.16)** runs `assistant/arty_voice.py`. It listens to the hub's mic stream, uses VAD to
+- **ai-arty (CT 109, 192.0.2.16)** runs `assistant/arty_voice.py`. It listens to the hub's mic stream, uses VAD to
   find speech, checks the start of each phrase for "Hey Arty" with whisper `tiny.en`, transcribes the request with
   `small.en`, streams the answer from Arty's brain (CT 104, `ARTY_API_KEY`) and speaks it sentence by sentence with
   Piper (`en_GB-alan-medium`) through the hub's `/speak`. It ignores the mic while it is talking, and for 6 s after
@@ -28,7 +28,7 @@ empty body returns the current level. Master was found at 0% and muted on 2026-1
 
 ## Quest headset
 
-`assistant/headset.py` runs inside the same process on ai-arty, port 8790: `ws://192.168.1.16:8790/ws/headset`,
+`assistant/headset.py` runs inside the same process on ai-arty, port 8790: `ws://192.0.2.16:8790/ws/headset`,
 with `HEADSET_TOKEN` (in `/etc/arty-voice/secrets.env`) as a Bearer key. The headset streams its mic as 16 kHz
 16-bit mono PCM and gets back Arty's voice (WAV), orb states (`idle`, `listening`, `thinking`, `speaking`, `off`) and
 actions. Each headset has its own conversation and wake switch, and it also wakes on a bare "Arty ...". Commands for

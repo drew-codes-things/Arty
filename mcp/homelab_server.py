@@ -26,19 +26,19 @@ from remote import text as remote_text
 
 load_env_file(os.environ.get("HOMELAB_ENV", "/srv/ai/secrets/homelab.env"))
 
-PVE_URL = os.environ.get("PVE_URL", "https://192.168.1.253:8006")
+PVE_URL = os.environ.get("PVE_URL", "").rstrip("/")
 PVE_NODE = os.environ.get("PVE_NODE", "servmox")
 PVE_TOKEN = os.environ.get("PVE_TOKEN", "")
 PVE_CA = os.environ.get("PVE_CA", "/srv/ai/secrets/pve-root-ca.pem")
 DESKTOP_VMID = int(os.environ.get("DESKTOP_VMID", "105"))
 SNAPSHOT_PREFIX = "arty_"
 SNAPSHOTS_KEPT = int(os.environ.get("DESKTOP_SNAPSHOTS_KEPT", "3"))
-KUMA_URL = os.environ.get("UPTIME_KUMA_URL", "http://192.168.1.11:3001")
+KUMA_URL = os.environ.get("UPTIME_KUMA_URL", "").rstrip("/")
 KUMA_KEY = os.environ.get("UPTIME_KUMA_API_KEY", "")
-NC_URL = os.environ.get("NEXTCLOUD_URL", "http://192.168.1.10:8080").rstrip("/")
+NC_URL = os.environ.get("NEXTCLOUD_URL", "").rstrip("/")
 NC_USER = os.environ.get("NEXTCLOUD_USER", "")
 NC_PASSWORD = os.environ.get("NEXTCLOUD_APP_PASSWORD", "")
-PUFFER_URL = os.environ.get("PUFFERPANEL_URL", "http://192.168.1.10:8090").rstrip("/")
+PUFFER_URL = os.environ.get("PUFFERPANEL_URL", "").rstrip("/")
 PUFFER_CLIENT_ID = os.environ.get("PUFFERPANEL_CLIENT_ID", "")
 PUFFER_CLIENT_SECRET = os.environ.get("PUFFERPANEL_CLIENT_SECRET", "")
 PUFFER_ACTIONS = ("start", "stop", "restart")
@@ -54,8 +54,8 @@ _puffer_token = {"value": "", "expires": 0.0}
 
 
 def _pve(method: str, path: str, params: dict | None = None):
-    if not PVE_TOKEN:
-        raise RuntimeError("Proxmox access isn't set up (PVE_TOKEN missing).")
+    if not (PVE_URL and PVE_TOKEN):
+        raise RuntimeError("Proxmox access isn't set up (PVE_URL / PVE_TOKEN missing).")
     data = urllib.parse.urlencode(params).encode() if params and method != "GET" else None
     url = f"{PVE_URL}/api2/json{path}" + (f"?{urllib.parse.urlencode(params)}" if params and method == "GET" else "")
     request = urllib.request.Request(url, data=data, method=method, headers={"Authorization": f"PVEAPIToken={PVE_TOKEN}"})
@@ -284,8 +284,8 @@ def restart_guest(vmid: int) -> str:
 def _puffer_access_token() -> str:
     if _puffer_token["value"] and time.time() < _puffer_token["expires"]:
         return _puffer_token["value"]
-    if not (PUFFER_CLIENT_ID and PUFFER_CLIENT_SECRET):
-        raise RuntimeError("PufferPanel access isn't set up (PUFFERPANEL_CLIENT_ID / PUFFERPANEL_CLIENT_SECRET missing).")
+    if not (PUFFER_URL and PUFFER_CLIENT_ID and PUFFER_CLIENT_SECRET):
+        raise RuntimeError("PufferPanel access isn't set up (PUFFERPANEL_URL / PUFFERPANEL_CLIENT_ID / PUFFERPANEL_CLIENT_SECRET missing).")
     form = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": PUFFER_CLIENT_ID,
                                    "client_secret": PUFFER_CLIENT_SECRET}).encode()
     request = urllib.request.Request(f"{PUFFER_URL}/oauth2/token", data=form, method="POST",
@@ -411,9 +411,9 @@ def list_desktop_snapshots() -> str:
 
 @mcp.tool(description="Whether the user's websites and services are up, from Uptime Kuma: each monitor's state and response time.")
 def service_status() -> str:
-    if not KUMA_KEY:
+    if not (KUMA_URL and KUMA_KEY):
         # Small models keep retrying a tool that only says "not set up", so answer with what is available.
-        return ("Uptime Kuma isn't connected yet (it needs an API key), so here is the Proxmox server status instead:\n"
+        return ("Uptime Kuma isn't connected yet (it needs an address and an API key), so here is the Proxmox server status instead:\n"
                 + proxmox_status())
     request = urllib.request.Request(f"{KUMA_URL}/metrics", headers={"Authorization": "Basic " + base64.b64encode(f":{KUMA_KEY}".encode()).decode()})
     try:
@@ -441,8 +441,8 @@ def _dav_path(path: str) -> str:
 
 
 def _dav(method: str, path: str, body: bytes | None = None, headers: dict | None = None) -> bytes:
-    if not (NC_USER and NC_PASSWORD):
-        raise RuntimeError("Nextcloud isn't set up (NEXTCLOUD_USER / NEXTCLOUD_APP_PASSWORD missing).")
+    if not (NC_URL and NC_USER and NC_PASSWORD):
+        raise RuntimeError("Nextcloud isn't set up (NEXTCLOUD_URL / NEXTCLOUD_USER / NEXTCLOUD_APP_PASSWORD missing).")
     auth = base64.b64encode(f"{NC_USER}:{NC_PASSWORD}".encode()).decode()
     request = urllib.request.Request(NC_URL + path, data=body, method=method, headers={"Authorization": f"Basic {auth}", **(headers or {})})
     try:

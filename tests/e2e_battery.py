@@ -1,8 +1,6 @@
 """End-to-end battery: real requests through the brain's chat jobs (as the phone sends them), each answer
 checked for the failure types seen in testing. Prints a table, then each answer to read.
 
-    ARTY_URL=http://192.168.1.13:8081/v1 ARTY_KEY=... python3 tests/e2e_battery.py
-
 It makes real reminders, a calendar event and list items named TESTBATTERY, and archives the turns: remove
 them afterwards (the reminders would go off). Needs the requests package."""
 import os
@@ -11,13 +9,15 @@ import time
 
 import requests
 
-BASE_URL = os.environ.get("ARTY_URL", "http://192.168.1.13:8081/v1").rstrip("/")
+BASE_URL = os.environ.get("ARTY_URL", "").rstrip("/")
+if not BASE_URL or "ARTY_KEY" not in os.environ:
+    raise SystemExit("set ARTY_URL (for example http://arty-server:8081/v1) and ARTY_KEY, then run this again")
 H = {"Authorization": f"Bearer {os.environ['ARTY_KEY']}"}
 CASES = [
     # (message, tools one of which must be used (or None), words the answer should mention (any))
     ("what's 12 times 15?", ["calculator"], ["180"]),
     ("what is 15% of 80?", ["calculator"], ["12"]),
-    ("what are all the IPs of my servers?", ["homelab__proxmox_status"], ["192.168.1.10", "192.168.1.13"]),
+    ("what are all the IPs of my servers?", ["homelab__proxmox_status"], ["CT", "VM"]),
     ("is my minecraft server running?", ["homelab__proxmox_status", "homelab__service_status"], ["minecraft"]),
     ("will it rain tomorrow?", ["weather"], ["rain", "%"]),
     ("what's on my calendar this week?", ["calendar_events"], ["calendar", "nothing", "no "]),

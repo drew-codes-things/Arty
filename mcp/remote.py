@@ -8,7 +8,7 @@ import os
 import shlex
 import subprocess
 
-HOST = os.environ.get("WORKSPACE_HOST", "192.168.1.14")
+SETTINGS_FILE = os.environ.get("WORKSPACE_ENV", "/srv/ai/secrets/workspace.env")
 USER = os.environ.get("WORKSPACE_USER", "ai")
 KEY = os.environ.get("WORKSPACE_KEY", "/srv/ai/mcp/workspace_key")
 KNOWN_HOSTS = os.environ.get("WORKSPACE_KNOWN_HOSTS", "/srv/ai/mcp/workspace_known_hosts")
@@ -26,13 +26,21 @@ def clip(text: str, limit: int = OUTPUT_LIMIT) -> str:
     return f"{text[:half]}\n... [{len(text) - limit} characters cut] ...\n{text[-half:]}"
 
 
+def desktop_host() -> str:
+    load_env_file(SETTINGS_FILE)
+    return os.environ.get("WORKSPACE_HOST", "")
+
+
 def ssh(command: str, stdin: bytes | None = None, timeout: int = DEFAULT_TIMEOUT) -> tuple[int, bytes]:
+    host = desktop_host()
+    if not host:
+        return 1, b"The desktop VM isn't set up (WORKSPACE_HOST missing)."
     args = [
         "ssh", "-T", "-i", KEY,
         "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=6", "-o", "LogLevel=ERROR",
         "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
         "-o", "ControlMaster=auto", "-o", "ControlPath=/tmp/workspace-ssh-%C", "-o", "ControlPersist=120",
-        f"{USER}@{HOST}", command,
+        f"{USER}@{host}", command,
     ]
     try:
         done = subprocess.run(args, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout + SSH_GRACE_SECONDS)

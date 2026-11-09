@@ -17,7 +17,7 @@
 ## Overview
 
 A native Quest 3 / 3S app (Kotlin, Meta Spatial SDK, Jetpack Compose panels) in passthrough. It connects to ai-arty's
-headset socket (`voice/assistant/headset.py`, e.g. `ws://192.168.1.16:8790/ws/headset`) with the headset key, streams the
+headset socket (`voice/assistant/headset.py`, e.g. `ws://192.0.2.16:8790/ws/headset`) with the headset key, streams the
 microphone as 16 kHz mono PCM, and plays Arty's spoken replies. Wake word, speech-to-text, the brain and text-to-speech
 all run on the server, so the headset only listens and plays.
 
@@ -63,7 +63,7 @@ The first time it opens, the orb panel asks for two things, typed with the heads
 
 | Field | What to enter |
 |---|---|
-| Headset address | Your voice server's headset socket, e.g. `ws://192.168.1.16:8790/ws/headset` |
+| Headset address | Your voice server's headset socket, e.g. `ws://192.0.2.16:8790/ws/headset` |
 | Headset key | `HEADSET_TOKEN` from `/etc/arty-voice/secrets.env` on the voice server |
 
 `ws://` is only accepted on your home network (private addresses and `.local`, `.lan` or `.home.arpa` names); use
@@ -74,7 +74,7 @@ wake-word switch changes them later, and a refused key opens the form again.
 For your own headset you can build them in instead, from `~/.arty-android.properties`:
 
 ```
-quest.headsetUrl=ws://192.168.1.16:8790/ws/headset
+quest.headsetUrl=ws://192.0.2.16:8790/ws/headset
 quest.headsetToken=<HEADSET_TOKEN>
 ```
 

@@ -3,13 +3,18 @@
 # Secrets are generated on the server and written straight into root-only files in
 # /srv/ai/secrets on CT 104; none are printed.
 set -euo pipefail
+cd "$(dirname "$0")"
+HOSTS_FILE=${ARTY_HOSTS_FILE:-./hosts.env}
+if [ -f "$HOSTS_FILE" ]; then
+  . "$HOSTS_FILE"
+fi
 PROXMOX=${PROXMOX:-proxmox}
 CT=${CT:-104}
 DESKTOP_VMID=${DESKTOP_VMID:-105}
-AI_ADDRESS=${AI_ADDRESS:-192.168.1.13}
-DESKTOP_ADDRESS=${DESKTOP_ADDRESS:-192.168.1.14}
-HOST_ADDRESS=${HOST_ADDRESS:-192.168.1.253}
-NETWORK=${NETWORK:-192.168.1.0/24}
+AI_ADDRESS=${AI_ADDRESS:?set AI_ADDRESS, see hosts.env.example}
+DESKTOP_ADDRESS=${DESKTOP_ADDRESS:?set DESKTOP_ADDRESS, see hosts.env.example}
+HOST_ADDRESS=${HOST_ADDRESS:?set HOST_ADDRESS, see hosts.env.example}
+NETWORK=${NETWORK:?set NETWORK, see hosts.env.example}
 DESKTOP=${DESKTOP:-ai@$DESKTOP_ADDRESS}
 HEAL_GUESTS=${HEAL_GUESTS-100 101 102 103 $DESKTOP_VMID}
 NEXTCLOUD_CT=${NEXTCLOUD_CT-100}

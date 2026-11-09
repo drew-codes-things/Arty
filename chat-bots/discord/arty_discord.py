@@ -52,7 +52,7 @@ if not os.environ.get("DISCORD_BOT_TOKEN"):
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 OWNER_ID = int(os.environ["DISCORD_OWNER_ID"])
 API_KEY = os.environ["ARTY_API_KEY"]
-BRAIN_URL = os.environ.get("BRAIN_URL", "http://192.168.1.13:8081/v1/chat/completions")
+BRAIN_URL = os.environ.get("BRAIN_URL", "http://127.0.0.1:8081/v1/chat/completions")
 BRAIN_BASE = BRAIN_URL.split("/v1/", 1)[0]
 DOWNLOAD_LINK = re.compile(r"!?\[([^\]]*)\]\((https?://[^)\s]+?(/arty-files/[^)\s]+))\)")
 DISCORD_FILE_BYTES = 10 * 1024 * 1024

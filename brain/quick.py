@@ -80,7 +80,6 @@ def asks_for_ips(text: str) -> bool:
 
 
 def ip_list(proxmox_status: str) -> str | None:
-    """"Name: address" lines from proxmox_status ("CT 100 core-sys (192.168.1.10): running ..."), or None."""
     found = re.findall(r"^(Host \S+|(?:CT|VM) \d+ \S+) \((\d+\.\d+\.\d+\.\d+)\)", proxmox_status, re.MULTILINE)
     if not found:
         return None

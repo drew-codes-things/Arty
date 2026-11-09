@@ -62,7 +62,7 @@ load_config(HERE / "config.env")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API_KEY = os.environ.get("ARTY_API_KEY", "")
 PAIR_CODE = os.environ.get("TELEGRAM_PAIR_CODE", "")
-BRAIN_URL = os.environ.get("BRAIN_URL", "http://192.168.1.13:8081/v1/chat/completions")
+BRAIN_URL = os.environ.get("BRAIN_URL", "http://127.0.0.1:8081/v1/chat/completions")
 BRAIN_BASE = BRAIN_URL.split("/v1/", 1)[0]
 TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024  # bots may only download files up to 20 MB
 DOWNLOAD_LINK = re.compile(r"!?\[([^\]]*)\]\((https?://[^)\s]+?(/arty-files/[^)\s]+))\)")

@@ -12,7 +12,7 @@ LOCAL_SCHEMES = ("http", "https")
 REMOTE_SCHEMES = ("https",)
 REFUSED_STATUSES = (401, 403)
 OK_STATUS = 200
-EXAMPLE_ADDRESS = "http://192.168.1.50:8081/v1"
+EXAMPLE_ADDRESS = "http://arty-server:8081/v1"
 EXAMPLE_REMOTE_ADDRESS = "https://arty.example.com/v1"
 
 
