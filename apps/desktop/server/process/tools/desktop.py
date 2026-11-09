@@ -6,6 +6,7 @@ System controls use what Plasma and Debian already have: wpctl (volume), MPRIS o
 (media), org.kde.ScreenBrightness, nmcli, bluetoothctl, loginctl, notify-send, and
 org.freedesktop.Notifications for do-not-disturb.
 """
+import functools
 import json
 import os
 import re
@@ -14,7 +15,7 @@ import tempfile
 import time
 import uuid
 
-from process.tools import session
+from process.tools import session, shell, win_system
 
 KWIN_REPLY_SECONDS = 3.0
 COMMAND_SECONDS = 10
@@ -27,8 +28,18 @@ class DesktopError(RuntimeError):
     """Something on the desktop said no; the message goes back to Arty."""
 
 
+def _on_windows(function):
+    @functools.wraps(function)
+    def choose(*args, **kwargs):
+        if shell.is_windows():
+            return getattr(win_system, function.__name__)(*args, **kwargs)
+        return function(*args, **kwargs)
+    return choose
+
+
 def available():
-    return session.kind() == "wayland" and session.have("qdbus6") and "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "")
+    return shell.is_windows() or (session.kind() == "wayland" and session.have("qdbus6")
+                                  and "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", ""))
 
 
 def _run(args, timeout=COMMAND_SECONDS):
@@ -88,6 +99,7 @@ def _kwin(body, args):
         os.unlink(path)
 
 
+@_on_windows
 def desktop_windows():
     try:
         listed = _kwin("result = {windows: windows().map(describe), desktops: workspace.desktops.length, "
@@ -127,6 +139,7 @@ else {
 """
 
 
+@_on_windows
 def desktop_window(action, window="", x=None, y=None, width=None, height=None, desktop=None):
     if action not in WINDOW_ACTIONS:
         return f"action must be one of: {', '.join(WINDOW_ACTIONS)}."
@@ -141,6 +154,7 @@ def desktop_window(action, window="", x=None, y=None, width=None, height=None, d
     return f"Done: {action.replace('_', ' ')} on {done['app']} ({done['title'][:60]})."
 
 
+@_on_windows
 def desktop_switch(desktop):
     try:
         outcome = _kwin("const d = workspace.desktops[args.desktop - 1]; if (d) { workspace.currentDesktop = d; result = true; } "
@@ -159,6 +173,7 @@ def _volume_state():
     return level, "MUTED" in text
 
 
+@_on_windows
 def system_volume(level=None, change=None, mute=None):
     try:
         if level is not None:
@@ -190,6 +205,7 @@ def _player_property(player, prop):
 MEDIA_METHODS = {"play_pause": "PlayPause", "play": "Play", "pause": "Pause", "next": "Next", "previous": "Previous", "stop": "Stop"}
 
 
+@_on_windows
 def system_media(action="status"):
     try:
         players = _players()
@@ -218,6 +234,7 @@ def system_media(action="status"):
     return f"{name}: {state.group(1) if state else 'unknown'}, {what}."
 
 
+@_on_windows
 def system_brightness(percent=None):
     destination = ["qdbus6", "org.kde.ScreenBrightness", BRIGHTNESS_PATH]
     try:
@@ -231,6 +248,7 @@ def system_brightness(percent=None):
     return f"Screen brightness is {round(current / maximum * 100)}%."
 
 
+@_on_windows
 def system_wifi(state="status"):
     try:
         if state in ("on", "off"):
@@ -243,6 +261,7 @@ def system_wifi(state="status"):
     return f"Wi-Fi is {'on' if radio == 'enabled' else 'off'}" + (f", connected to {connected}." if connected else ".")
 
 
+@_on_windows
 def system_bluetooth(state="status"):
     try:
         if state in ("on", "off"):
@@ -256,6 +275,7 @@ def system_bluetooth(state="status"):
     return f"Bluetooth is {'on' if powered else 'off'}" + (f", connected to {', '.join(names)}." if names else ".")
 
 
+@_on_windows
 def system_lock():
     try:
         _run(["loginctl", "lock-session"])
@@ -267,6 +287,7 @@ def system_lock():
 _dnd = {"connection": None, "cookie": None}
 
 
+@_on_windows
 def system_do_not_disturb(on=True):
     """Holds a notification inhibition on a connection of our own: it lasts while that connection does."""
     from jeepney import DBusAddress, new_method_call
@@ -287,6 +308,7 @@ def system_do_not_disturb(on=True):
     return "Do not disturb is on: notifications are held back." if on else "Do not disturb is off."
 
 
+@_on_windows
 def system_status():
     parts = []
     try:
@@ -315,6 +337,7 @@ def system_status():
     return "This computer: " + ", ".join(parts) + "."
 
 
+@_on_windows
 def desktop_notify(title, message=""):
     try:
         _run(["notify-send", "--app-name=Arty", str(title)[:120], str(message)[:500]])

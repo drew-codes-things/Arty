@@ -2,11 +2,12 @@
 
 # Arty Desktop
 
-**Arty on your Linux PC - talk to it or type, hear it answer, and let it use your computer for you, from a small always-on-top window.**
+**Arty on your Linux or Windows PC - talk to it or type, hear it answer, and let it use your computer for you, from a small always-on-top window.**
 
 [![Electron](https://img.shields.io/badge/electron-44-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Python](https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Linux](https://img.shields.io/badge/linux-KDE%20Plasma-1D99F3?style=flat-square&logo=kde&logoColor=white)](https://kde.org/plasma-desktop/)
+[![Windows](https://img.shields.io/badge/windows-10%20and%2011-0078D4?style=flat-square&logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../../LICENSE)
 
 </div>
@@ -56,16 +57,18 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
 
 ## Download
 
-Download `Arty-1.0.0-x86_64.AppImage` from the [Releases](../../../../releases) page (it's also built into
-`release/` from source) - one file with its own Python, the voice and speech models and a starter config, so it runs
-on a PC that has never seen this project.
+Download the file for your system from the [Releases](../../../../releases) page (it's also built into
+`release/` from source). Each is one file with its own Python, the voice and speech models and a starter config, so it
+runs on a PC that has never seen this project.
 
-> **For now Arty Desktop only works properly on Debian 13 with KDE Plasma.** Windows support may be coming soon.
+> **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11.**
+
+### Linux
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.0.0-x86_64.AppImage
-./Arty-1.0.0-x86_64.AppImage
+chmod +x Arty-1.1.0-x86_64.AppImage
+./Arty-1.1.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -74,9 +77,23 @@ install them through your desktop's password prompt (pkexec with apt, dnf, pacma
 service to use them. "Don't ask again" remembers the choice in `~/.config/Arty/skipped-dependencies.json`. A run from
 source also reinstalls the Python packages whenever `server/requirements-linux.txt` changes.
 
+### Windows
+
+Run `Arty-Setup-1.1.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
+the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
+not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
+**Run anyway**.
+
+On Windows Arty looks at the screen with Pillow and clicks, types and scrolls with the Win32 `SendInput` call, so there
+is nothing extra to install. Commands run in Windows PowerShell, and anything destructive (deleting, killing
+processes, registry and firewall changes, downloads, installs) asks you first. Windows blocks input into programs
+running as administrator, so Arty cannot click or type in those. Reading other apps' notifications aloud is not
+possible on Windows (it needs a packaged-app listener), so that one tool is Linux only; Arty's own notifications work.
+"Start with the PC" in the tray menu uses Windows' own login items.
+
 The first run opens a **Connect to Arty** screen: enter your brain's address (`http://<brain address>:8081/v1`) and
 the Arty API key, and, for use away from home, the Cloudflare address and Access token. Arty checks them against your
-brain before saving them to `~/.config/Arty/arty_config.yaml` (readable by you only), then restarts its local service
+brain before saving them to `~/.config/Arty/arty_config.yaml` on Linux or `%APPDATA%\Arty\arty_config.yaml` on Windows (readable by you only), then restarts its local service
 to use them. **Connect to another Arty…** in the tray menu changes them later.
 
 ## Setup From Source
@@ -86,11 +103,20 @@ to use them. **Connect to another Arty…** in the tray menu changes them later.
 cd app && npm start     # starts the local service too
 ```
 
+On Windows, from PowerShell:
+
+```powershell
+.\setup-windows.ps1     # Python venv, Kokoro voice model, Electron
+cd app; npm start       # starts the local service too
+```
+
 Settings are in `arty_config.yaml` (created from `arty_config.example.yaml` on first run, and not in git).
 `brain.api_key` is the Arty API key. If you move the folder, `./fix-venv.sh` repairs the venv's paths.
 
 Building the installer: `./build-app.sh` (needs rsync and network access; it downloads a standalone Python 3.12),
-then copy `app/dist/Arty-*.AppImage` to `release/`.
+then copy `app/dist/Arty-*.AppImage` to `release/`. On Windows, `.\build-installer.ps1` (needs Node.js and the
+Microsoft Visual C++ runtime on the build machine; it downloads Python 3.12 and the models) writes
+`app\dist\Arty-Setup-*.exe`.
 
 ## Running the Tests
 
@@ -100,6 +126,9 @@ then copy `app/dist/Arty-*.AppImage` to `release/`.
 cd app && npm test      # the desktop app's dependency checks
 ```
 
+On Windows use `.venv\Scripts\python.exe` in place of `.venv/bin/python`; the suite skips the Linux-only tests there
+and runs the real PowerShell ones.
+
 ---
 
 ## Tested On
@@ -107,6 +136,10 @@ cd app && npm test      # the desktop app's dependency checks
 Debian 13 (trixie), KDE Plasma 6.3.6 in a Wayland session (the window runs through XWayland,
 `--ozone-platform=x11`), Linux 6.12, on an Intel Core i5-7300U laptop. Electron 44, Node 20.19.2, Python 3.13.5 for
 the source setup and the AppImage's bundled Python 3.12.14, with the brain on the homelab over the LAN.
+
+Windows 10 Pro 22H2 (build 19041) in a virtual machine, with the installer's bundled Python 3.12.10 and Electron 44.
+Typing, clicking, screenshots, window moves and the command tool were run on its real desktop. A machine with a
+microphone, speakers, Wi-Fi, Bluetooth, a screen with brightness control and a Windows 11 install have not been tried.
 
 ## License
 

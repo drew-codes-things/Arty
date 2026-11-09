@@ -105,6 +105,7 @@ def test_typing_slows_down_for_characters_the_layout_lacks(monkeypatch):
     assert sent[1][-1] == "caf\u00e9 \u2603"
 
 
+@pytest.mark.usefixtures("linux")
 def test_a_link_opens_in_the_browser_they_named(monkeypatch):
     started = []
     chrome = {"id": "google-chrome", "path": Path("/usr/share/applications/google-chrome.desktop"),
@@ -132,6 +133,7 @@ def test_typing_in_a_secrets_app_is_refused(monkeypatch):
     assert "passwords live" in computer.computer_click(x=1, y=1)
 
 
+@pytest.mark.usefixtures("linux")
 def test_controls_report_what_is_missing(monkeypatch):
     monkeypatch.setattr(session, "kind", lambda: "wayland")
     monkeypatch.setattr(portal, "available", lambda: False)
@@ -143,6 +145,7 @@ def test_controls_report_what_is_missing(monkeypatch):
     assert not status["screen"] and not status["control"] and len(status["missing"]) == 2
 
 
+@pytest.mark.usefixtures("linux")
 def test_input_tool_follows_the_session(monkeypatch):
     installed = {"xdotool", "ydotool"}
     monkeypatch.setattr(session, "have", lambda tool: tool in installed)
@@ -168,6 +171,7 @@ def test_screenshot_tools_follow_the_session(monkeypatch):
     assert computer._shot_commands("x.png") == []
 
 
+@pytest.mark.usefixtures("linux")
 def test_apps_are_found_by_name_or_id(tmp_path, monkeypatch):
     apps = tmp_path / "applications"
     apps.mkdir()

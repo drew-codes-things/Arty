@@ -3,12 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const dependencies = require('./dependencies');
+const platform = require('./platform');
 
 // The window stays on top and goes where it was left, which a native Wayland window
 // can't ask KDE for, so it runs as an X11 client (XWayland). The flag has to be on the
 // command line, so a development run restarts itself with it. ARTY_WAYLAND=1 opts out.
 const insideAppImage = /\/\.mount_/.test(process.execPath);
-if (app.commandLine.getSwitchValue('ozone-platform') !== 'x11' && !process.env.ARTY_WAYLAND && !insideAppImage) {
+if (process.platform === 'linux' && app.commandLine.getSwitchValue('ozone-platform') !== 'x11' && !process.env.ARTY_WAYLAND && !insideAppImage) {
   app.relaunch({ args: [...process.argv.slice(1), '--ozone-platform=x11'] });
   app.exit(0);
 }
@@ -46,10 +47,10 @@ let solidity = DEFAULT_SOLIDITY;
 function backend() {
   if (app.isPackaged) {
     const root = path.join(process.resourcesPath, 'backend');
-    return { root, data: app.getPath('userData'), python: path.join(root, 'python', 'bin', 'python3'), script: path.join(root, 'server', 'arty_server.py') };
+    return { root, data: app.getPath('userData'), python: platform.pythonExecutable(root, true), script: path.join(root, 'server', 'arty_server.py') };
   }
   const root = path.resolve(__dirname, '..');
-  return { root, data: root, python: path.join(root, '.venv', 'bin', 'python'), script: path.join(root, 'server', 'arty_server.py') };
+  return { root, data: root, python: platform.pythonExecutable(root, false), script: path.join(root, 'server', 'arty_server.py') };
 }
 
 /** The local service's access token (see only_local_callers in server/arty_server.py). */
@@ -74,7 +75,7 @@ async function startBridge() {
   if (await bridgeAlive()) return; // a dev run or an earlier copy already has it
   const { root, data, python, script } = backend();
   if (!fs.existsSync(python) || !fs.existsSync(script)) {
-    dialog.showErrorBox('Arty can’t find its local service', `Expected:\n  ${python}\n  ${script}\n\nRun ./setup-linux.sh in the project folder.`);
+    dialog.showErrorBox('Arty can’t find its local service', `Expected:\n  ${python}\n  ${script}\n\nRun ${platform.setupCommand()} in the project folder.`);
     return;
   }
   const logPath = path.join(app.getPath('userData'), 'service.log');
@@ -90,6 +91,7 @@ async function startBridge() {
   }
   bridge = spawn(python, [script], {
     cwd: root,
+    windowsHide: true,
     stdio: ['ignore', output, output],
     env: { ...process.env, PYTHONUNBUFFERED: '1', ARTY_ROOT: root, ARTY_DATA: data },
   });
@@ -119,7 +121,7 @@ function run(command, args, options = {}) {
 async function updatePythonPackages() {
   if (app.isPackaged) return;
   const { root, python } = backend();
-  const requirements = path.join(root, 'server', 'requirements-linux.txt');
+  const requirements = path.join(root, 'server', platform.requirementsName());
   const stamp = path.join(root, '.venv', '.arty-requirements');
   if (!fs.existsSync(python) || !fs.existsSync(requirements) || !dependencies.requirementsChanged(requirements, stamp)) return;
   console.log('Arty: installing the local service\'s Python packages (requirements changed)');
@@ -223,8 +225,16 @@ function autostartCommand() {
   return `"${path.join(__dirname, 'node_modules', '.bin', 'electron')}" "${__dirname}" --ozone-platform=x11`;
 }
 
+function autostartEnabled() {
+  return platform.usesLoginItems() ? app.getLoginItemSettings().openAtLogin : fs.existsSync(autostartFile());
+}
+
 function setAutostart(enabled) {
   try {
+    if (platform.usesLoginItems()) {
+      app.setLoginItemSettings({ openAtLogin: enabled });
+      return;
+    }
     if (!enabled) {
       fs.rmSync(autostartFile(), { force: true });
       return;
@@ -306,7 +316,8 @@ function showAndLook() {
 /** Ctrl+Alt+E: Arty explains what was copied (or, failing that, what is highlighted). Only read on request. */
 function showAndExplain() {
   if (!win) return;
-  const copied = clipboard.readText().trim() || clipboard.readText('selection').trim();
+  const highlighted = process.platform === 'linux' ? clipboard.readText('selection') : '';
+  const copied = clipboard.readText().trim() || highlighted.trim();
   win.show();
   win.focus();
   win.webContents.send('explain', copied.slice(0, EXPLAIN_MAX_CHARS));
@@ -338,7 +349,7 @@ function buildTray() {
         click: () => setSolidity(choice.solidity),
       })),
     },
-    { label: 'Start with the PC', type: 'checkbox', checked: fs.existsSync(autostartFile()), click: (item) => setAutostart(item.checked) },
+    { label: 'Start with the PC', type: 'checkbox', checked: autostartEnabled(), click: (item) => setAutostart(item.checked) },
     { label: 'Connect to another Arty…', click: () => { win.show(); win.focus(); win.webContents.send('connect'); } },
     { type: 'separator' },
     { label: 'Quit Arty', click: () => app.quit() },

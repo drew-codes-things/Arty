@@ -9,11 +9,16 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+
+from process.tools import shell, win_desktop
 
 
 def kind():
     """"x11", "wayland", or "" when there is no desktop session (a headless
     server running only Telegram, for one)."""
+    if sys.platform == "win32":
+        return "windows"
     declared = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
     if declared in ("x11", "wayland"):
         return declared
@@ -40,7 +45,7 @@ def spawn(command):
     """Start a program and leave it running. True if it started."""
     try:
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True)
+                                stderr=subprocess.DEVNULL, **shell.process_options())
     except OSError:
         return False
     try:
@@ -81,6 +86,8 @@ def front_window():
     X11 answers through xprop. Wayland has no way to ask, except KDE with
     kdotool installed. (xprop under Wayland only sees X11 windows, and would
     name the wrong one whenever a Wayland app has focus.)"""
+    if kind() == "windows":
+        return win_desktop.front_window()
     if kind() == "x11":
         root = run(["xprop", "-root", "_NET_ACTIVE_WINDOW"])
         found = _WINDOW_ID.search(root or "")
@@ -96,6 +103,8 @@ def front_window():
 
 def window_titles():
     """Titles of the open windows by app, {} where the desktop won't say."""
+    if kind() == "windows":
+        return win_desktop.window_titles()
     if kind() != "x11":
         return {}
     listing = run(["xprop", "-root", "_NET_CLIENT_LIST"])

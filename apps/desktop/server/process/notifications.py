@@ -6,12 +6,9 @@ most recent few in memory only. Nothing is stored on disk or sent anywhere unles
 asks Arty about their notifications (desktop_notifications) or turns on reading them aloud.
 """
 import collections
+import sys
 import threading
 import time
-
-from jeepney import DBusAddress, MessageType, new_method_call
-from jeepney.bus_messages import MatchRule
-from jeepney.io.blocking import open_dbus_connection
 
 KEEP = 50
 IGNORED_APPS = {"arty", "arty desktop", "notify-send", ""}
@@ -31,7 +28,15 @@ def _record(app_name, summary, body, kind="app", **extra):
         _changed.notify_all()
 
 
+def _can_watch():
+    return sys.platform.startswith("linux")
+
+
 def _watch():
+    from jeepney import DBusAddress, MessageType, new_method_call
+    from jeepney.bus_messages import MatchRule
+    from jeepney.io.blocking import open_dbus_connection
+
     monitoring = DBusAddress("/org/freedesktop/DBus", bus_name="org.freedesktop.DBus", interface="org.freedesktop.DBus.Monitoring")
     rule = MatchRule(type="method_call", interface="org.freedesktop.Notifications", member="Notify").serialise()
     while True:
@@ -57,6 +62,9 @@ def start():
     if _started:
         return
     _started = True
+    if not _can_watch():
+        print("[notifications] reading other apps' notifications isn't available on this system", flush=True)
+        return
     threading.Thread(target=_watch, name="notifications", daemon=True).start()
 
 
@@ -82,6 +90,9 @@ def record_announcement(item):
 def desktop_notifications(limit=10):
     """The tool: the latest notifications from other apps, newest last."""
     items = [n for n in _recent if n["kind"] == "app"][-max(1, min(int(limit or 10), KEEP)):]
+    if not items and not _can_watch():
+        system = {"win32": "Windows"}.get(sys.platform, "this system")
+        return f"Reading other apps' notifications isn't available on {system} yet, so I can't tell you what you missed."
     if not items:
         return "No notifications since Arty started."
     lines = []

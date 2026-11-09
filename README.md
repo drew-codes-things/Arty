@@ -113,10 +113,11 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.0.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-1.1.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.1.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
 | `Arty-shareable.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
 
-> **For now Arty Desktop only works properly on Debian 13 with KDE Plasma.** Windows support may be coming soon.
+> **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (below).

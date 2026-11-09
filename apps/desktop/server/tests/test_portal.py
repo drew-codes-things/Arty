@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from process.tools import computer, portal, session
 
+pytestmark = pytest.mark.usefixtures("linux")
+
 RETURN, TAB, CONTROL, SHIFT = 0xFF0D, 0xFF09, 0xFFE3, 0xFFE1
 
 

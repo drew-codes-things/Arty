@@ -1,0 +1,12 @@
+faster-whisper>=1.0.3
+av<19
+openai>=1.40
+requests>=2.31
+PyYAML>=6.0
+fastapi>=0.115
+uvicorn>=0.30
+sounddevice>=0.4.6
+soundfile>=0.12
+numpy>=1.26
+kokoro-onnx>=0.4.7
+pillow>=10.0

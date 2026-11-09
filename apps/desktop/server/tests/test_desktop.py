@@ -4,8 +4,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from process import notifications
 from process.tools import desktop
+
+pytestmark = pytest.mark.usefixtures("linux")
 
 
 def test_asks_before_closing_a_window_or_cutting_wifi():

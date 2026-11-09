@@ -3,11 +3,14 @@ add the section, and leave everything else in the file alone."""
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from process import config
+
+NO_PERMISSION_BITS = pytest.mark.skipif(sys.platform == "win32", reason="Windows has no Unix permission bits; the file sits in the user's own profile folder")
 
 BASE = """llm:
   model: "arty"   # the brain
@@ -47,6 +50,7 @@ def test_adds_a_missing_key_and_section(tmp_path, monkeypatch):
     assert d["computer"]["enabled"] is False
 
 
+@NO_PERMISSION_BITS
 def test_the_config_stays_readable_by_this_user_only(tmp_path, monkeypatch):
     path = write(tmp_path, monkeypatch, BASE)
     path.chmod(0o644)
@@ -54,6 +58,7 @@ def test_the_config_stays_readable_by_this_user_only(tmp_path, monkeypatch):
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+@NO_PERMISSION_BITS
 def test_a_seeded_config_is_readable_by_this_user_only(tmp_path, monkeypatch):
     starter = tmp_path / "example.yaml"
     starter.write_text(BASE)

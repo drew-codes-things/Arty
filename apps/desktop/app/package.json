@@ -1,13 +1,14 @@
 {
   "name": "arty",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Arty on your desktop: talk to it, and let it use your computer",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/",
     "dist": "electron-builder --linux dir",
-    "appimage": "electron-builder --linux AppImage"
+    "appimage": "electron-builder --linux AppImage",
+    "installer": "electron-builder --win nsis --x64"
   },
   "license": "MIT",
   "dependencies": {},
@@ -26,6 +27,7 @@
     "files": [
       "main.js",
       "dependencies.js",
+      "platform.js",
       "preload.js",
       "renderer/**/*",
       "assets/**/*"
@@ -62,7 +64,26 @@
     "appImage": {
       "artifactName": "Arty-${version}-${arch}.AppImage"
     },
-    "afterPack": "build/afterPack.js"
+    "afterPack": "build/afterPack.js",
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Arty-Setup-${version}.exe",
+      "shortcutName": "Arty",
+      "runAfterFinish": true
+    }
   },
   "author": "Drew"
 }

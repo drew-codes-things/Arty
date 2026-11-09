@@ -17,6 +17,8 @@ from process import browser
 from process import notifications
 from process.tools import desktop
 from process.tools import session
+from process.tools import shell
+from process.tools import win_desktop
 
 _config = load_config()
 _cfg = _config.get("tools") or {}
@@ -40,11 +42,20 @@ def _clipboard_command():
 
 
 def _clipboard_available():
-    return _allowed("clipboard") and _clipboard_command() is not None
+    return _allowed("clipboard") and (shell.is_windows() or _clipboard_command() is not None)
 
 
 def _open_url_available():
-    return _allowed("open_url") and bool(session.kind()) and session.have("xdg-open")
+    return _allowed("open_url") and (shell.is_windows() or (bool(session.kind()) and session.have("xdg-open")))
+
+
+def _clipboard_text():
+    if not shell.is_windows():
+        return session.run(_clipboard_command(), timeout=2)
+    try:
+        return win_desktop.get_clipboard_text()
+    except RuntimeError:
+        return None
 
 
 
@@ -53,10 +64,9 @@ CLIPBOARD_LIMIT = int(_cfg.get("clipboard_chars", 2000))
 def read_clipboard():
     if not _allowed("clipboard"):
         return "The clipboard is off limits."
-    command = _clipboard_command()
-    if command is None:
+    if not shell.is_windows() and _clipboard_command() is None:
         return "No clipboard tool is installed (wl-clipboard on Wayland, xclip or xsel on X11)."
-    text = session.run(command, timeout=2)
+    text = _clipboard_text()
     if text is None:
         return "Could not read the clipboard (it may be empty)."
     text = text.strip()
@@ -75,8 +85,8 @@ def open_url(url):
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return "Only http and https links can be opened."
-    if not session.spawn(["xdg-open", url]):
-        return "Could not open it: xdg-open failed."
+    if not computer.open_default(url):
+        return "Could not open it: no program here opens links."
     print(f"[tool] opened {url}", flush=True)
     return f"Opened {parsed.netloc}."
 

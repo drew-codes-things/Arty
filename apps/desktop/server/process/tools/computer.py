@@ -26,15 +26,19 @@ import fnmatch
 import os
 import re
 import shlex
-import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 
 from process.config import setting
+from process.tools import guard_windows
 from process.tools import portal
 from process.tools import session
+from process.tools import shell
+from process.tools import win_apps
+from process.tools import win_desktop
 
 HOME = Path.home()
 OUTPUT_CHARS = 6000
@@ -54,22 +58,23 @@ _SECRET_PATHS = [HOME / ".ssh", HOME / ".gnupg", HOME / ".aws", HOME / ".config"
                  HOME / ".config" / "1Password", HOME / ".config" / "Bitwarden",
                  HOME / ".config" / "keepassxc",
                  HOME / ".mozilla", HOME / ".config" / "google-chrome",
-                 HOME / ".config" / "chromium", HOME / ".config" / "BraveSoftware"]
+                 HOME / ".config" / "chromium", HOME / ".config" / "BraveSoftware",
+                 *guard_windows.secret_paths(HOME)]
 _SECRET_APPS = re.compile(
     r"keychain|keyring|kwallet|seahorse|1password|bitwarden|lastpass|dashlane|keepass"
     r"|enpass|\bpasswords\b|keeper"
-    r"|polkit|pinentry|authentication required|gcr-prompter", re.I)
+    r"|polkit|pinentry|authentication required|gcr-prompter|" + guard_windows.SECRET_APPS.pattern, re.I)
 _SECRET_COMMANDS = re.compile(
     r"\bsecret-tool\b|\bgpg2?\b[^|;&]*--(?:export|decrypt)|\.ssh\b|\.gnupg\b|\.password-store"
     r"|\bkeyrings?\b|kwallet|keepassxc|1password|bitwarden|\bbw\s+(?:get|list|unlock)\b"
-    r"|\bop\s+(?:item|read)\b", re.I)
+    r"|\bop\s+(?:item|read)\b|" + guard_windows.SECRET_COMMANDS.pattern, re.I)
 
 # The mouse and keyboard tools check what is in front first. Typing through the
 # shell instead would skip that, so it isn't done.
 _DRIVES_INPUT = re.compile(
     r"(?:^|[;&|(`]|\bsudo|\bexec|\btimeout\s+\d+)\s*(?:\S*/)?"
     r"(?:xdotool|ydotool|wtype|dotool|xte|evemu-\w+)\b"
-    r"|\bRemoteDesktop\b|\bNotify(?:Keyboard|Pointer)\w*\b", re.I)
+    r"|\bRemoteDesktop\b|\bNotify(?:Keyboard|Pointer)\w*\b|" + guard_windows.DRIVES_INPUT.pattern, re.I)
 
 # Asked about every time.
 _RISKY = re.compile(
@@ -137,14 +142,14 @@ def computer_run_command(command, cwd="", timeout_seconds=None):
     except (ValueError, TypeError) as e:
         return str(e)
     print(f"[computer] $ {command}", flush=True)
-    proc = subprocess.Popen(["/bin/bash", "-lc", command], cwd=where, stdin=subprocess.DEVNULL,
+    proc = subprocess.Popen(shell.argv(command), cwd=where, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            start_new_session=True)
+                            encoding="utf-8", errors="replace", **shell.process_options())
     try:
         out, _ = proc.communicate(timeout=limit)
         code = proc.returncode
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
+        shell.kill_tree(proc)
         out, _ = proc.communicate()
         code = 124
         out = (out or "") + f"\n(stopped after {int(limit)} seconds)"
@@ -203,7 +208,7 @@ def computer_list_files(path="", depth=2):
             dirnames[:] = []
         dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
         for name in sorted(dirnames) + sorted(f for f in filenames if not f.startswith(".")):
-            out.append(str(rel / name))
+            out.append((rel / name).as_posix())
         if len(out) > 300:
             break
     return _clip("\n".join(out[:300])) or "(empty)"
@@ -223,7 +228,7 @@ def _project_files(root, folders=False):
 
 
 def _matches_glob(p, root, glob):
-    return not glob or p.match(glob) or fnmatch.fnmatch(str(p.relative_to(root)), glob)
+    return not glob or p.match(glob) or fnmatch.fnmatch(p.relative_to(root).as_posix(), glob)
 
 
 def computer_find_files(pattern, path=""):
@@ -233,7 +238,7 @@ def computer_find_files(pattern, path=""):
         return str(e)
     if not (pattern or "").strip():
         return "Give a file name pattern, e.g. *.py or **/test_*.py."
-    found = [str(p.relative_to(root)) + ("/" if p.is_dir() else "")
+    found = [p.relative_to(root).as_posix() + ("/" if p.is_dir() else "")
              for p in _project_files(root, folders=True) if _matches_glob(p, root, pattern.strip())]
     if not found:
         return f"No files or folders under {root} match {pattern}."
@@ -262,7 +267,7 @@ def computer_search(pattern, path="", glob="", ignore_case=False):
             continue
         if b"\0" in data[:4096]:
             continue
-        shown = p.name if p == root else str(p.relative_to(root))
+        shown = p.name if p == root else p.relative_to(root).as_posix()
         for number, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
             if regex.search(line):
                 hits.append(f"{shown}:{number}: {line.strip()[:200]}")
@@ -299,7 +304,7 @@ def _has_pillow():
 
 
 def can_see():
-    return _has_pillow() and bool(_shot_commands("-"))
+    return _has_pillow() and (shell.is_windows() or bool(_shot_commands("-")))
 
 
 def _ydotool_socket():
@@ -313,6 +318,8 @@ def _input_tool():
     """"xdotool", "portal", "ydotool", or None if nothing here can move the mouse.
     On Wayland the desktop's own portal comes first: it reaches every window and
     needs no root, where ydotool needs a daemon and access to /dev/uinput."""
+    if shell.is_windows():
+        return "windows"
     if session.kind() == "x11" and session.have("xdotool"):
         return "xdotool"
     if portal.available():
@@ -370,6 +377,9 @@ def _no_control():
 
 def _capture(out):
     """Take a screenshot into the file `out`, or raise."""
+    if shell.is_windows():
+        win_desktop.capture(out)
+        return
     commands = _shot_commands(out)
     if not commands:
         raise RuntimeError(why_no_screen())
@@ -544,7 +554,9 @@ def computer_click(target="", x=None, y=None, button="left", double=False):
         else:
             return "Say what to click (target), or give x and y in screen pixels."
         right = button == "right"
-        if _input_tool() == "xdotool":
+        if _input_tool() == "windows":
+            win_desktop.click(px, py, right=right, double=double)
+        elif _input_tool() == "xdotool":
             _send(["xdotool", "mousemove", str(int(px)), str(int(py)), "click"]
                   + (["--repeat", "2", "--delay", "50"] if double else [])
                   + ["3" if right else "1"])
@@ -583,7 +595,9 @@ def computer_type(text, app=""):
     unsure = []  # characters the desktop may have dropped
     try:
         _guard_front()
-        if _input_tool() == "xdotool":
+        if _input_tool() == "windows":
+            unsure = win_desktop.type_text(text)
+        elif _input_tool() == "xdotool":
             # For a character the layout lacks, xdotool swaps a key's meaning on the
             # fly, and the version Debian ships drops those when typing fast.
             delay = "12" if text.isascii() else "60"
@@ -613,12 +627,15 @@ def computer_key(keys):
         return "No keys given."
     *mods, key = parts
     named = _key_name_and_code(key)
-    if named is None or any(m not in _MODIFIERS for m in mods):
+    known = win_desktop.virtual_key(key) is not None if shell.is_windows() else named is not None
+    if not known or any(m not in _MODIFIERS for m in mods):
         return (f"Don't know {keys!r}. Use modifiers {', '.join(sorted(set(_MODIFIERS)))} "
                 "with a letter, digit, or return, tab, space, escape, delete, arrows, f1-f12.")
     try:
         _guard_front()
-        if _input_tool() == "xdotool":
+        if _input_tool() == "windows":
+            win_desktop.press_keys(mods, key)
+        elif _input_tool() == "xdotool":
             _send(["xdotool", "key", "+".join([_MODIFIERS[m][0] for m in mods] + [named[0]])])
         elif _input_tool() == "portal":
             portal.press_keys(mods, key)
@@ -644,6 +661,9 @@ def computer_scroll(direction="down", amount=5):
     if direction not in ("up", "down", "left", "right"):
         return "direction must be up, down, left or right."
     try:
+        if _input_tool() == "windows":
+            win_desktop.scroll(direction, amount)
+            return f"Scrolled {direction}."
         if _input_tool() == "xdotool":
             button = {"up": "4", "down": "5", "left": "6", "right": "7"}[direction]
             _send(["xdotool", "click", "--repeat", str(amount), "--delay", "20", button])
@@ -721,6 +741,17 @@ def _read_entry(path):
 def _find_app(name):
     """The installed app a name means ("Firefox", "dolphin", "kate"), or None."""
     want = name.strip().casefold().removesuffix(".desktop")
+    entries = win_apps.installed_apps() if shell.is_windows() else _desktop_entries()
+    for entry in entries.values():
+        ident = entry["id"].casefold()
+        if want in (entry["name"].casefold(), ident, ident.rsplit(".", 1)[-1]):
+            return entry
+    partial = [e for e in entries.values()
+               if want in e["name"].casefold() or want in e["id"].casefold()]
+    return min(partial, key=lambda e: len(e["name"])) if partial else None
+
+
+def _desktop_entries():
     entries = {}
     for directory in _app_dirs():
         for path in sorted(directory.glob("*.desktop")) if directory.is_dir() else []:
@@ -731,23 +762,29 @@ def _find_app(name):
                     continue
                 if entry:
                     entries[path.stem] = entry
-    for entry in entries.values():
-        ident = entry["id"].casefold()
-        if want in (entry["name"].casefold(), ident, ident.rsplit(".", 1)[-1]):
-            return entry
-    partial = [e for e in entries.values()
-               if want in e["name"].casefold() or want in e["id"].casefold()]
-    return min(partial, key=lambda e: len(e["name"])) if partial else None
+    return entries
 
 
 def _launch(entry, url=""):
     """Start an app, with a web page for it to open if one is given."""
+    if shell.is_windows():
+        return win_apps.launch(entry, url)
     uris = [url] if url else []
     for command in (["gio", "launch", str(entry["path"]), *uris], ["gtk-launch", entry["id"], *uris]):
         if session.have(command[0]) and session.spawn(command):
             return True
     argv = [a for a in shlex.split(entry["exec"]) if not re.fullmatch(r"%[A-Za-z]", a)]
     return bool(argv) and session.spawn(argv + uris)
+
+
+def open_default(url):
+    if shell.is_windows():
+        try:
+            os.startfile(url)
+        except OSError:
+            return False
+        return True
+    return session.spawn(["xdg-open", url])
 
 
 def _open_link(url, app=""):
@@ -758,8 +795,8 @@ def _open_link(url, app=""):
     if entry and _launch(entry, url):
         print(f"[computer] opened {url} in {entry['name']}", flush=True)
         return f"Opened {url} in {entry['name']}."
-    if not session.spawn(["xdg-open", url]):
-        return f"Couldn't open {url}: xdg-open isn't installed or failed."
+    if not open_default(url):
+        return f"Couldn't open {url}: no program here opens links."
     note = f" ({app} isn't installed, so this is their default browser)" if app else ""
     return f"Opened {url}{note}."
 
@@ -841,7 +878,7 @@ def needs_ok(name, args, consented):
         return "Let Arty use your mouse and keyboard for this?"
     if name == "computer_run_command":
         command = (args.get("command") or "").strip()
-        if _RISKY.search(command):
+        if _RISKY.search(command) or (sys.platform == "win32" and guard_windows.RISKY.search(command)):
             return f"Let Arty run this on your computer?\n{command[:300]}"
     if name in ("computer_write_file", "computer_edit_file"):
         try:

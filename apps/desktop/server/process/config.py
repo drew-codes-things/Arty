@@ -33,7 +33,8 @@ PRIVATE_FILE_MODE = 0o600
 def write_private(path, text):
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE_MODE)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        os.fchmod(handle.fileno(), PRIVATE_FILE_MODE)
+        if hasattr(os, "fchmod"):
+            os.fchmod(handle.fileno(), PRIVATE_FILE_MODE)
         handle.write(text)
 
 

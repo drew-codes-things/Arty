@@ -10,6 +10,8 @@ import requests
 
 from process import brain, confirm
 
+NO_PERMISSION_BITS = pytest.mark.skipif(sys.platform == "win32", reason="Windows has no Unix permission bits; the file sits in the user's own profile folder")
+
 
 def call(name, arguments):
     return {"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
@@ -191,6 +193,7 @@ def test_an_expired_file_gives_a_plain_reason(monkeypatch):
     assert download.closed
 
 
+@NO_PERMISSION_BITS
 def test_the_saved_conversation_is_readable_by_this_user_only(fake, tmp_path):
     brain.save_turn("hello", "hi there")
     saved = tmp_path / "history.json"

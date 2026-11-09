@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from process.config import load_config
-from process.tools import session
+from process.tools import session, shell, win_system
 
 _config = load_config()
 _ctx = _config.get("context") or {}
@@ -48,6 +48,9 @@ def battery_state(percent, status):
 
 
 def battery():
+    if shell.is_windows():
+        levels = win_system.battery_levels()
+        return battery_state(*levels) if levels else ""
     for supply in sorted(POWER_SUPPLY.glob("BAT*")):
         try:
             percent = int((supply / "capacity").read_text())
