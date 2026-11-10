@@ -24,6 +24,11 @@ BYTES_PER_GB = 1024 ** 3
 TOAST_POLICY_KEY = r"Software\Microsoft\Windows\CurrentVersion\PushNotifications"
 TOAST_POLICY_VALUE = "ToastEnabled"
 TOAST_SENDER_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
+VOLUME_MUTE_KEY = 0xAD
+VOLUME_DOWN_KEY = 0xAE
+VOLUME_UP_KEY = 0xAF
+VOLUME_KEY_STEP = 2
+VOLUME_KEY_PRESSES_FROM_SILENT_TO_FULL = 100 // VOLUME_KEY_STEP
 MEDIA_KEYS = {"next": 0xB0, "previous": 0xB1, "stop": 0xB2, "play_pause": 0xB3, "play": 0xB3, "pause": 0xB3}
 UNAVAILABLE = "isn't available on Windows"
 BRIGHTNESS_HINT = "Laptop screens can be changed this way; desktop monitors usually can't."
@@ -117,6 +122,8 @@ public class Audio {
     get { bool muted; Marshal.ThrowExceptionForHR(Endpoint().GetMute(out muted)); return muted; }
     set { Marshal.ThrowExceptionForHR(Endpoint().SetMute(value, System.Guid.Empty)); }
   }
+  public static float Level() { return Volume; }
+  public static bool Muted() { return Mute; }
 }
 """
 
@@ -127,10 +134,10 @@ def volume_script(level, change, mute):
         lines.append(f"[Audio]::Volume = {_fraction(max(0, min(int(level), 100)) / 100)}")
     if change:
         step = _fraction(int(change) / 100)
-        lines.append(f"[Audio]::Volume = [Math]::Max(0, [Math]::Min({MAX_VOLUME}, [Audio]::Volume + ({step})))")
+        lines.append(f"[Audio]::Volume = [Math]::Max(0, [Math]::Min({MAX_VOLUME}, [Audio]::Level() + ({step})))")
     if mute is not None:
         lines.append(f"[Audio]::Mute = {'$true' if mute else '$false'}")
-    lines.append("@{level = [int][Math]::Round([Audio]::Volume * 100); muted = [Audio]::Mute} | ConvertTo-Json -Compress")
+    lines.append("@{level = [int][Math]::Round([Audio]::Level() * 100); muted = [Audio]::Muted()} | ConvertTo-Json -Compress")
     return "\n".join(lines)
 
 
@@ -267,8 +274,47 @@ def system_volume(level=None, change=None, mute=None):
     try:
         answer = _json(powershell(volume_script(level, change, mute)))
     except (WindowsToolError, ValueError) as error:
-        return f"Couldn't change the volume: {error}."
+        return change_volume_with_keys(level, change, mute, error)
     return f"Volume is {answer['level']}%{' (muted)' if answer['muted'] else ''}."
+
+
+def volume_key_presses(level, change, mute):
+    presses = []
+    if level is not None:
+        wanted = max(0, min(int(level), 100))
+        presses += [VOLUME_DOWN_KEY] * VOLUME_KEY_PRESSES_FROM_SILENT_TO_FULL
+        presses += [VOLUME_UP_KEY] * round(wanted / VOLUME_KEY_STEP)
+    elif change:
+        steps = min(VOLUME_KEY_PRESSES_FROM_SILENT_TO_FULL, max(1, round(abs(int(change)) / VOLUME_KEY_STEP)))
+        presses += [VOLUME_UP_KEY if int(change) > 0 else VOLUME_DOWN_KEY] * steps
+    if mute is not None:
+        presses.append(VOLUME_MUTE_KEY)
+    return presses
+
+
+def change_volume_with_keys(level, change, mute, error):
+    presses = volume_key_presses(level, change, mute)
+    if not presses:
+        return f"Couldn't read the volume: {error}."
+    try:
+        for code in presses:
+            win_desktop.press_media_key(code)
+    except RuntimeError as key_error:
+        return f"Couldn't change the volume: {error}, and the volume keys failed too: {key_error}."
+    return volume_keys_summary(level, change, mute)
+
+
+def volume_keys_summary(level, change, mute):
+    parts = []
+    if level is not None:
+        parts.append(f"Set the volume to about {max(0, min(int(level), 100))}% with the volume keys")
+    elif change:
+        direction = "up" if int(change) > 0 else "down"
+        parts.append(f"Turned the volume {direction} by about {min(100, abs(int(change)))}% with the volume keys")
+    if mute is not None:
+        parts.append("pressed the mute key, which switches mute on or off")
+    summary = ", and ".join(parts)
+    return f"{summary[0].upper()}{summary[1:]}. Windows' audio control isn't available here, so I can't read the exact level."
 
 
 def system_media(action="status"):

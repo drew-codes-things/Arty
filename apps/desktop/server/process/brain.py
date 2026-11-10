@@ -138,7 +138,7 @@ def _stream(messages, offer_tools, lead=""):
         raise BrainError("Arty's brain took too long to answer.") from None
     with response:
         if response.status_code == 401:
-            raise BrainError("Arty's brain refused the API key. Run setup-linux.sh again to fetch it.")
+            raise BrainError("Arty's brain refused the API key. Change it under Connect to another Arty in the tray menu.")
         if response.status_code >= 400:
             try:
                 detail = response.json().get("error", {}).get("message", "")

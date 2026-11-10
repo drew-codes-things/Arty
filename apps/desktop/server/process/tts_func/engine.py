@@ -32,7 +32,7 @@ def _load_kokoro():
             from kokoro_onnx import Kokoro
         except ImportError as e:
             raise TTSError(
-                "kokoro-onnx isn't installed. Run ./setup-linux.sh, or switch "
+                "kokoro-onnx isn't installed. Run the setup script (setup-linux.sh or setup-windows.ps1), or switch "
                 "tts.provider to 'sovits'."
             ) from e
 

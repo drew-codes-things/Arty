@@ -55,7 +55,10 @@ def cleaned(connection: Connection) -> Connection:
         raise ConnectionProblem("Each setting has to be on one line.")
     tidy = Connection(*(value.strip() for value in astuple(connection)))
     if not tidy.api_key:
-        raise ConnectionProblem("Paste in the API key from your Arty server (in /srv/ai/secrets/arty-api.txt).")
+        raise ConnectionProblem(
+            "Paste in your brain's API key: provision.sh saves it to /srv/ai/secrets/arty-api.txt"
+            " on the machine running the brain."
+        )
     remote_url = _api_address(tidy.remote_url, REMOTE_SCHEMES, EXAMPLE_REMOTE_ADDRESS) if tidy.remote_url else ""
     if bool(tidy.access_client_id) != bool(tidy.access_client_secret):
         raise ConnectionProblem("A Cloudflare Access token needs both its client ID and its client secret.")

@@ -66,6 +66,13 @@ def test_the_volume_script_sets_what_was_asked():
     assert "[Audio]::Mute = $false" in win_system.volume_script(level=None, change=None, mute=False)
 
 
+def test_the_volume_is_read_through_methods_so_a_missing_speaker_is_an_error():
+    script = win_system.volume_script(level=None, change=5, mute=None)
+    assert "[Audio]::Level()" in script and "[Audio]::Muted()" in script
+    assert "[Audio]::Volume +" not in script and "[Audio]::Volume *" not in script
+    assert "= [Audio]::Mute}" not in script
+
+
 def test_the_volume_level_is_kept_between_zero_and_a_hundred():
     assert "[Audio]::Volume = 1.0" in win_system.volume_script(level=250, change=None, mute=None)
     assert "[Audio]::Volume = 0.0" in win_system.volume_script(level=-5, change=None, mute=None)
@@ -95,12 +102,43 @@ def test_the_volume_tool_reports_what_windows_says(windows, monkeypatch):
     assert desktop.system_volume(mute=True) == "Volume is 0% (muted)."
 
 
-def test_the_volume_tool_explains_when_there_is_no_speaker(windows, monkeypatch):
+def no_audio_control(monkeypatch):
     def broken(script, env=None, timeout=20):
-        raise win_system.WindowsToolError("Element not found")
+        raise win_system.WindowsToolError("Class not registered")
 
     monkeypatch.setattr(win_system, "powershell", broken)
-    assert desktop.system_volume().startswith("Couldn't change the volume:")
+    pressed = []
+    monkeypatch.setattr(win_desktop, "press_media_key", lambda code: pressed.append(code))
+    return pressed
+
+
+def test_the_volume_keys_set_a_level_when_the_audio_control_is_missing(windows, monkeypatch):
+    pressed = no_audio_control(monkeypatch)
+    answer = desktop.system_volume(level=30)
+    assert pressed == [win_system.VOLUME_DOWN_KEY] * 50 + [win_system.VOLUME_UP_KEY] * 15
+    assert answer.startswith("Set the volume to about 30% with the volume keys")
+
+
+def test_the_volume_keys_step_the_volume_when_the_audio_control_is_missing(windows, monkeypatch):
+    pressed = no_audio_control(monkeypatch)
+    assert "down by about 10%" in desktop.system_volume(change=-10)
+    assert pressed == [win_system.VOLUME_DOWN_KEY] * 5
+    pressed.clear()
+    desktop.system_volume(change=500)
+    assert pressed == [win_system.VOLUME_UP_KEY] * 50
+
+
+def test_the_mute_key_is_pressed_when_the_audio_control_is_missing(windows, monkeypatch):
+    pressed = no_audio_control(monkeypatch)
+    answer = desktop.system_volume(mute=True)
+    assert pressed == [win_system.VOLUME_MUTE_KEY]
+    assert "mute key" in answer
+
+
+def test_the_volume_cannot_be_read_without_the_audio_control(windows, monkeypatch):
+    pressed = no_audio_control(monkeypatch)
+    assert desktop.system_volume().startswith("Couldn't read the volume:")
+    assert pressed == []
 
 
 def test_brightness_is_set_and_read_through_wmi(windows, monkeypatch):

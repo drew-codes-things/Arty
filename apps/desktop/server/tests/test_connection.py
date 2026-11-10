@@ -82,6 +82,14 @@ def test_a_missing_key_is_refused():
         connection.cleaned(connection.Connection("http://arty.lan:8081/v1", "  "))
 
 
+def test_the_missing_key_message_says_where_any_install_keeps_the_key():
+    with pytest.raises(connection.ConnectionProblem) as refused:
+        connection.cleaned(connection.Connection("http://arty.lan:8081/v1", ""))
+    message = str(refused.value)
+    assert "/srv/ai/secrets/arty-api.txt on the machine running the brain" in message
+    assert "provision.sh" in message
+
+
 def test_the_remote_address_must_be_https():
     with pytest.raises(connection.ConnectionProblem, match="https"):
         connection.cleaned(connection.Connection("http://arty.lan:8081/v1", KEY, remote_url="http://arty.example.com/v1"))

@@ -3,7 +3,7 @@
 Everything Arty can do, for your own apps. Home network: http://192.0.2.13:8081. Anywhere: https://arty.example.com, which also needs the Cloudflare Access service-token headers (`CF-Access-Client-Id`, `CF-Access-Client-Secret`).
 
 - Base URL: `http://192.0.2.13:8081`
-- Key: `Authorization: Bearer <ARTY_API_KEY>`. The key is in `/srv/ai/secrets/arty-api.txt` on CT 104 (`pct exec 104 -- cat /srv/ai/secrets/arty-api.txt`).
+- Key: `Authorization: Bearer <ARTY_API_KEY>`. Use your brain's API key: `provision.sh` saves it to `/srv/ai/secrets/arty-api.txt` on the machine running the brain.
 - Errors: `{"error": {"message": "..."}}` with a matching HTTP status.
 
 ## Chat (OpenAI-compatible)
