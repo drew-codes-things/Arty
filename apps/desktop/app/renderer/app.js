@@ -28,6 +28,8 @@ let lastNotification = null;
 let thinkingTimer = null;
 
 const speech = { queue: [], playing: null, played: 0 };
+const CALL_TURN_GAP_MS = 400;
+const callState = { on: false, muted: false, startedAt: 0, timer: null };
 
 function readSetting(key, fallback) {
   try {
@@ -58,6 +60,11 @@ function setState(state, label) {
 function settle() {
   mic.classList.remove('live');
   if (speech.playing || speech.queue.length) return;
+  if (callState.on) {
+    setState('idle', callState.muted ? 'On a call · muted' : 'On a call');
+    queueCallTurn();
+    return;
+  }
   if (wakeOn) setState('waking', 'Say “Arty, …”');
   else setState('idle', 'Ready');
 }
@@ -291,6 +298,7 @@ function handle(event, stream) {
       break;
     case 'error':
       add('error', event.message);
+      if (callState.on) hangUp();
       break;
     case 'done':
       showMedia(stream.reply);
@@ -335,7 +343,10 @@ async function run(kind, path, options = {}) {
     const response = await api(`${path}`, { ...options, signal: stream.controller.signal });
     await readNdjson(response, (event) => handle(event, stream));
   } catch (error) {
-    if (error.name !== 'AbortError') add('error', 'Can’t reach the local Arty service. It restarts by itself; try again in a moment.');
+    if (error.name !== 'AbortError') {
+      add('error', 'Can’t reach the local Arty service. It restarts by itself; try again in a moment.');
+      if (callState.on) hangUp();
+    }
   } finally {
     stream.finished = true;
     if (current === stream) current = null;
@@ -400,9 +411,75 @@ function talk() {
 }
 
 function listenForWake() {
-  if (!wakeOn || current || speech.playing) return;
+  if (!wakeOn || callState.on || current || speech.playing) return;
   run('wake', `/wake/listen?timeout=${WAKE_TIMEOUT_S}`);
 }
+
+function canTakeCallTurn() {
+  return callState.on && !callState.muted && !current && !speech.playing && !speech.queue.length;
+}
+
+function queueCallTurn() {
+  setTimeout(() => {
+    if (canTakeCallTurn()) run('listen', '/listen/auto');
+  }, CALL_TURN_GAP_MS);
+}
+
+function callDuration() {
+  const seconds = Math.floor((Date.now() - callState.startedAt) / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function showCallBar(on) {
+  $('call-bar').hidden = !on;
+  $('call').classList.toggle('on', on);
+  $('call-mute').classList.toggle('on', callState.muted);
+  $('call-mute').textContent = callState.muted ? 'Unmute' : 'Mute';
+  $('call-time').textContent = on ? callDuration() : '0:00';
+}
+
+function stopListeningForCall() {
+  if (current && current.kind === 'listen') current.controller.abort();
+}
+
+async function startCall() {
+  if (callState.on) return hangUp();
+  if (current && current.engaged) return;
+  if (speech.playing) await stopSpeaking();
+  Object.assign(callState, { on: true, muted: false, startedAt: Date.now() });
+  callState.timer = setInterval(() => { $('call-time').textContent = callDuration(); }, 1000);
+  showCallBar(true);
+  addActivity('Calling Arty', 'Call');
+  run('chat', '/call/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ speak: true }),
+  });
+}
+
+async function hangUp() {
+  if (!callState.on) return;
+  const lasted = callDuration();
+  callState.on = false;
+  clearInterval(callState.timer);
+  showCallBar(false);
+  stopListeningForCall();
+  if (speech.playing || speech.queue.length) await stopSpeaking();
+  await api(`/call/end`, { method: 'POST' }).catch(() => {});
+  addActivity(`Call ended after ${lasted}`, 'Call');
+  settle();
+  listenForWake();
+}
+
+function toggleMute() {
+  if (!callState.on) return;
+  callState.muted = !callState.muted;
+  if (callState.muted) stopListeningForCall();
+  showCallBar(true);
+  settle();
+}
+
+$('call').addEventListener('click', startCall);
+$('call-end').addEventListener('click', hangUp);
+$('call-mute').addEventListener('click', toggleMute);
 
 // ---------- header controls ----------
 
@@ -562,15 +639,23 @@ async function watchNotifications() {
       lastNotification = last;
       if (isFirstPoll) continue; // older ones are history, not news
       for (const note of notifications) {
+        if (note.kind === 'notice') {
+          if (!callState.on && !speech.playing && !(current && current.engaged)) {
+            run('chat', '/notice/reply', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: note.notice, speak: true }),
+            });
+          }
+          continue;
+        }
         if (note.kind === 'arty') {
           // Arty speaking up by itself: a reminder, briefing, finished job, homelab alert or approval request.
           // It goes to Updates, not the conversation; it's still said out loud.
           newUpdate(note);
-          if (!speech.playing && !(current && current.engaged)) await say(note.body || note.summary);
+          if (!callState.on && !speech.playing && !(current && current.engaged)) await say(note.body || note.summary);
           continue;
         }
         addActivity(`${note.app}: ${note.summary}`, 'Note');
-        if (readOn && !speech.playing && !(current && current.engaged)) await say(`${note.app}: ${note.summary}`);
+        if (readOn && !callState.on && !speech.playing && !(current && current.engaged)) await say(`${note.app}: ${note.summary}`);
       }
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 5000)); // the service is restarting

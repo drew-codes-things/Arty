@@ -31,6 +31,7 @@ import calendar_feed
 import drafts
 import email_watch
 import expiry
+import fresh
 import lectures
 import research
 import style
@@ -753,6 +754,11 @@ def steer_last_request(history, note: str):
             return
 
 
+def steer_away_from_repeats(history: list[dict], conversation: list[dict], newest_request: str, background: bool):
+    if not background:
+        steer_last_request(history, fresh.repetition_note(conversation, newest_request))
+
+
 def with_thinking(body, think: bool):
     options = body.get("options") or {}
     if think:
@@ -1144,7 +1150,7 @@ def to_ollama_messages(messages):
     return out
 
 
-def run_agent(config, state, background=False, chat_approved=False, task=None, client_system="", client_tools=None, skip_groups=(),
+def run_agent(config, state, background=False, chat_approved=None, task=None, client_system="", client_tools=None, skip_groups=(),
               draft=None, looked_up=None):
     """The tool loop. state = {"messages": [...], "context": {...}, "groups": [...]} and is updated in place.
     Returns {"status": "done", "answer": ...} or {"status": "waiting", "waiting": {...}}.
@@ -1162,6 +1168,7 @@ def run_agent(config, state, background=False, chat_approved=False, task=None, c
     # Asked for something written (a post, an email): in the user's own voice (style.py).
     voice = style.voice_note() if style.is_writing_request(newest_request) else ""
     with_context(history, current_context(config) + looked_up[1] + voice)
+    steer_away_from_repeats(history, messages, newest_request, background)
     native = [definition for name, definition in NATIVE_TOOLS.items() if not (background and name in BACKGROUND_ONLY_EXCLUDED)]
     all_tools = [] if toolless else hub.tools + native
     if skip_groups:
@@ -1338,10 +1345,10 @@ def run_agent(config, state, background=False, chat_approved=False, task=None, c
                     state["groups"] = sorted(requested)
                     return {"status": "waiting", "waiting": {"kind": "approval", "message": reason, "call": {"name": name, "arguments": arguments}},
                             "tools_used": tool_log, "raw": raw}
-                if reason and not chat_approved:
+                if reason and not policy.covers(chat_approved, reason):
                     # Ask in Arty's own words rather than handing the model an instruction it might echo.
                     state["groups"] = sorted(requested)
-                    return {"status": "done", "answer": f"Before I do that, I need your OK: {reason}. Shall I go ahead?",
+                    return {"status": "done", "answer": policy.approval_question(reason),
                             "tools_used": tool_log, "raw": raw}
                 else:
                     if background and task and name.startswith("workspace__") and not task.get("snapshot_taken") \
@@ -1351,6 +1358,8 @@ def run_agent(config, state, background=False, chat_approved=False, task=None, c
                         store.update_task(task["id"], snapshot_taken=1)
                     result = hub.call(name, arguments)
                     policy.remember_tool_result(context, name, result)
+                    if reason:
+                        chat_approved = None
             log.info("tool %s(%s) -> %d chars", name, json.dumps(arguments)[:200], len(result))
             if name != "use_tools" and TOOL_FAILED.search(result):
                 context["failed"].append((name, result.strip().splitlines()[0][:200] if result.strip() else "no result"))
@@ -1752,7 +1761,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
         done = ["convert_file"] if converted.startswith("Converted") else []
         looked_up = ([*looked_up[0], *done], (looked_up[1] or "\n\nAlready done for this message:")
                      + f"\n\n[convert_file]\n{converted}", None)
-    outcome = run_agent(config, state, chat_approved=policy.chat_says_yes(conversation, message_text),
+    outcome = run_agent(config, state, chat_approved=policy.approved_reason(conversation, message_text),
                         client_system=client_system, client_tools=client_tools, skip_groups=skip_groups, draft=draft,
                         looked_up=looked_up)
     if outcome["status"] == "client_tools":
@@ -1794,16 +1803,44 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
 
 # ---------- background tasks ----------
 
+def fix_still_needed(waiting: dict) -> tuple[bool, str]:
+    recheck = waiting.get("recheck")
+    if not recheck:
+        return True, ""
+    try:
+        diagnosis = json.loads(hub.call("homelab__diagnose", {"address": recheck["address"], "port": recheck["port"],
+                                                              "guest_name": ""}))
+    except (ValueError, TypeError, KeyError) as error:
+        return True, f"I couldn't check it again first ({error}), so I went ahead as approved. "
+    summary = str(diagnosis.get("summary") or "")
+    fix = diagnosis.get("fix")
+    approved = waiting.get("call") or {}
+    if not fix and TOOL_FAILED.search(summary):
+        return True, f"I couldn't check it again first ({summary}), so I went ahead as approved. "
+    if not fix:
+        return False, (f"Not done: by the time the user approved, it no longer needed fixing ({summary}). "
+                       "Tell them nothing was restarted.")
+    wanted = "homelab__start_guest" if fix.get("action") == "start" else "homelab__restart_guest"
+    if wanted != approved.get("name") or fix.get("vmid") != (approved.get("arguments") or {}).get("vmid"):
+        return False, (f"Not done: things changed since the user approved ({summary}). Tell them, and ask again "
+                       "before doing anything.")
+    return True, ""
+
+
 def apply_decision(state: dict, waiting: dict, decision: str, note: str):
     """Turn Drew's answer to a paused task into the tool result the model sees next."""
     call = waiting.get("call") or {}
     if waiting.get("kind") == "approval":
-        if decision == "approve":
-            result = hub.call(call["name"], call.get("arguments") or {})
-            policy.remember_tool_result(state.setdefault("context", {}), call["name"], result)
-            result = f"The user approved. Result:\n{result}"
-        else:
+        if decision != "approve":
             result = "The user said no to this. Don't do it; carry on without it, or finish and report."
+        else:
+            still_needed, recheck_note = fix_still_needed(waiting)
+            if still_needed:
+                outcome = hub.call(call["name"], call.get("arguments") or {})
+                policy.remember_tool_result(state.setdefault("context", {}), call["name"], outcome)
+                result = f"The user approved. {recheck_note}Result:\n{outcome}"
+            else:
+                result = recheck_note
     else:
         result = "The user says he has done it" + (f": {note}" if note else ".") + " Carry on."
     state["messages"].append({"role": "tool", "content": result, "tool_name": call.get("name", "ask_user")})
@@ -2014,7 +2051,8 @@ def self_heal(monitor: dict):
         f"You asked the user whether to {fix['action']} {fix['name']}. When you get their answer, if it was done, wait a moment, then "
         f"call homelab__diagnose with address {address} and port {port} to check it's answering again, and report in one or two sentences.")}],
         "context": {}, "groups": ["homelab"]}
-    waiting = {"kind": "approval", "message": f"{fix['action']} {fix['name']}", "call": {"name": tool, "arguments": {"vmid": fix["vmid"]}}}
+    waiting = {"kind": "approval", "message": f"{fix['action']} {fix['name']}", "call": {"name": tool, "arguments": {"vmid": fix["vmid"]}},
+               "recheck": {"address": address, "port": port}}
     store.update_task(task["id"], status="waiting", history=state, waiting=waiting)
     buttons = task_links(store.get_task(task["id"]), [(f"Fix ({fix['action']} {fix['name']})", "approve"), ("Ignore", "deny")])
     notify.send(f"🛠 {name} is down", f"{diagnosis['summary']}\n\nShall I {fix['action']} {fix['name']}?", buttons, urgent=True)

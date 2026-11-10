@@ -65,6 +65,10 @@ class PortalError(RuntimeError):
     """Something the person should hear: they said no, or the desktop can't."""
 
 
+class PortalRefused(PortalError):
+    pass
+
+
 _lock = threading.RLock()
 _supported = None  # None until first checked
 _open = {"connection": None, "session": None, "stream": None, "size": None}
@@ -143,10 +147,10 @@ def _request(connection, interface, method, signature, arguments, options, timeo
             raise PortalError("The desktop's permission prompt wasn't answered in time.")
     code, results = answer.body
     if code == 1:
-        raise PortalError("You didn't allow Arty to use the mouse and keyboard "
-                          "(the desktop's prompt was dismissed).")
+        raise PortalRefused("You didn't allow Arty to use the mouse and keyboard "
+                            "(the desktop's prompt was dismissed).")
     if code != 0:
-        raise PortalError(f"The desktop refused {method} (code {code}).")
+        raise PortalRefused(f"The desktop refused {method} (code {code}).")
     return results
 
 
@@ -205,7 +209,7 @@ def _session():
     connection = open_dbus_connection(bus="SESSION")
     try:
         handle, stream, size = _start_session(connection)
-    except PortalError:
+    except PortalRefused:
         _forget_token()  # a stale token makes the desktop refuse to ask again
         connection.close()
         raise

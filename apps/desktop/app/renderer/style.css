@@ -169,6 +169,21 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
   50% { box-shadow: 0 0 0 9px transparent; }
 }
 .state { margin-top: 6px; font-size: 12px; color: var(--faint); min-height: 18px; }
+.call-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.call-bar[hidden] { display: none; }
+.call-time { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; min-width: 36px; text-align: center; }
+.call-button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.call-button:hover { background: var(--surface-hover); }
+.call-button.on { color: var(--red); background: var(--red-soft); }
+.call-button.hang-up { color: #fff; background: var(--red); border-color: var(--red); }
 
 .log {
   flex: 1;

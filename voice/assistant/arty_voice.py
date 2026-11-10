@@ -388,13 +388,14 @@ async def room_command(assistant: Assistant, output: HubOutput, command: str) ->
 
 async def main() -> None:
     import headset
+    import satellite
     senses = Senses()
     async with aiohttp.ClientSession() as http:
         output = HubOutput(http)
         server_room = Assistant(senses, output, http)
         server_room.act = lambda command: room_command(server_room, output, command)
         await asyncio.gather(HubLink(server_room).keep_listening(), server_room.handle_utterances(),
-                             headset.serve(senses, http))
+                             headset.serve(senses, http), satellite.serve(senses))
 
 
 if __name__ == "__main__":

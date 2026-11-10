@@ -113,9 +113,9 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.1.1-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.1.1.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-shareable.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-1.2.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.2.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.1.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
@@ -248,7 +248,7 @@ Follow [arty-pc/README.md](arty-pc/README.md) to sign Arty's browser in to the s
 | App | First start |
 |---|---|
 | [Arty Desktop](apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](apps/android/README.md) | Install `Arty-shareable.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](apps/android/README.md) | Install `Arty-1.1.0.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](apps/beta/ios/README.md) (beta) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key |
 | [Arty for Quest](apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty for Chrome](extensions/browser/README.md) | Lets Arty Desktop use your own browser |

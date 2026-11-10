@@ -21,6 +21,9 @@
         </div>
       </div>
       <div class="bar-actions">
+        <button id="call" class="chip" title="Call Arty (hands-free)" aria-label="Call Arty">
+          <svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+        </button>
         <button id="hands" class="chip" title="Let Arty use this computer" aria-label="Let Arty use this computer">
           <svg viewBox="0 0 24 24"><path d="M5 3l14 7-6 2-2 6z"/></svg>
         </button>
@@ -51,6 +54,11 @@
         <img src="arty-symbol.png" alt="Arty">
       </button>
       <div id="state" class="state">Ready</div>
+      <div id="call-bar" class="call-bar" hidden>
+        <span id="call-time" class="call-time">0:00</span>
+        <button id="call-mute" type="button" class="call-button">Mute</button>
+        <button id="call-end" type="button" class="call-button hang-up">Hang up</button>
+      </div>
     </section>
 
     <section id="log" class="log" aria-live="polite"></section>

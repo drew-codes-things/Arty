@@ -39,6 +39,17 @@ with what to say ("Paused.", or "Please log in or install Spotify."). Everything
 `homelab__service_status` tool), weather (`weather` tool), the next 7 days of calendar events and the next reminders
 (`/v1/calendar`, `/v1/schedules`), cached for a minute and shared between headsets.
 
+## A speaker in another room (Wyoming)
+
+`assistant/satellite.py` runs in the same process on ai-arty and speaks the Wyoming protocol (the one Home Assistant's
+speech servers use), so a voice satellite such as an Echo running TECHO5 can use Arty's ears (whisper `small.en`) and
+voice (Piper) on one port, and Arty's brain for the words in between. It is off until `SATELLITE_ALLOW` is set:
+Wyoming has no keys, so only the addresses listed there may connect (comma separated, in
+`/etc/arty-voice/secrets.env`). `SATELLITE_PORT` defaults to 10300 and `SATELLITE_HOST` to 0.0.0.0.
+
+On the satellite: speech to text and text to speech are both `<ai-arty address>:10300` (leave the voice empty); the
+chat model endpoint is the brain's `http://<brain address>:8081/v1` with model `assistant-core` and the brain's API key.
+
 ## PCs
 
 - Debian: run the downloaded `my-voice-setup.sh` as your normal user. It adds the input "Server mic (my-voice)"

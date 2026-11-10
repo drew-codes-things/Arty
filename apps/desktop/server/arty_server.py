@@ -30,9 +30,11 @@ from starlette.background import BackgroundTask
 
 from process import brain
 from process import browser
+from process import call as phone_call
 from process import config as cfg
 from process import confirm
 from process import connection
+from process.notice import Noticer
 from process import notifications
 from process.asr_func.asr_push_to_talk import build_model, transcribe_audio, transcribe_file
 from process.asr_func.listen import Ear, wake_match
@@ -41,6 +43,8 @@ from process.asr_func.vad import VAD
 from process.config import load_config
 from process.text_func.speech import SentenceSplitter, split_reply
 from process.tools import computer
+from process.tools import context
+from process.tools import idle
 from process.tts_func.engine import TTSError, describe as describe_tts, synthesize
 from process.tts_func.engine import warmup as warmup_tts
 
@@ -101,6 +105,7 @@ MEDIA_CHUNK_BYTES = 64 * 1024
 _whisper = None
 _whisper_lock = threading.Lock()
 recorder = Recorder()
+call = phone_call.Call()
 _ears = {"button": None}
 _stream = {"id": 0, "stop_at": None}
 _stream_lock = threading.Lock()
@@ -143,7 +148,7 @@ def _speak_segment(segment, index, speak):
     return event
 
 
-def _stream_reply(user_text, speak=True, look=False):
+def _stream_reply(user_text, speak=True, look=False, note=""):
     """Streams the reply a sentence at a time, synthesising as it goes. An /interrupt
     stops it, and only what was actually heard is kept in the history."""
     with _stream_lock:
@@ -161,14 +166,13 @@ def _stream_reply(user_text, speak=True, look=False):
     shown = []  # everything shown, spoken or not (a draft to copy is only shown)
     index = 0
     interrupted = False
-    note = ""
     if look:
         # Look first, every time: small models often answer from the window title instead.
         yield _ndjson({"type": "activity", "id": None, "where": "computer", "text": "looking at your screen"})
         seen = computer.computer_look(user_text)
         print(f"[look] {len(seen)} chars" if not seen.startswith("Looking failed") else f"[look] {seen[:200]}", flush=True)
-        note = LOOK_NOTE.format(seen=seen)
-    generator = brain.llm_stream(user_text, note=note)
+        note = LOOK_NOTE.format(seen=seen) + note
+    generator = brain.llm_stream(user_text, note=call.note_for(note))
 
     def emit(segment):
         nonlocal index
@@ -227,6 +231,87 @@ def chat_stream(body: ChatIn):
         return StreamingResponse(iter([_ndjson({"type": "error", "message": "Empty message."})]), media_type="application/x-ndjson")
     print(f"[you] {text}", flush=True)
     return StreamingResponse(_stream_reply(text, body.speak, body.look), media_type="application/x-ndjson")
+
+
+class CallIn(BaseModel):
+    speak: bool = True
+
+
+@app.post("/call/start")
+def call_start(body: CallIn):
+    call.start()
+    print("[call] picked up", flush=True)
+    greeting = _stream_reply(phone_call.PICK_UP_SAID, body.speak, note=phone_call.PICK_UP)
+    return StreamingResponse(greeting, media_type="application/x-ndjson")
+
+
+@app.post("/call/end")
+def call_end():
+    ended = call.end()
+    print(f"[call] hung up after {ended['seconds']}s", flush=True)
+    return ended
+
+
+@app.get("/call")
+def call_status():
+    return call.status()
+
+
+NOTICE_CHECK_SECONDS = 30
+_notices = {"id": 0, "pending": None}
+_notices_lock = threading.Lock()
+
+
+def offer_notice(notice):
+    with _notices_lock:
+        _notices["id"] += 1
+        _notices["pending"] = (_notices["id"], notice)
+        notice_id = _notices["id"]
+    notifications.record_notice(notice.said(), notice_id)
+    return notice_id
+
+
+def take_notice(notice_id):
+    with _notices_lock:
+        pending = _notices["pending"]
+        if not pending or pending[0] != notice_id:
+            return None
+        _notices["pending"] = None
+        return pending[1]
+
+
+def watch_for_notices(watcher, read_idle=idle.seconds_idle, read_app=context.frontmost_app, sleep=time.sleep):
+    while True:
+        seconds = read_idle()
+        if seconds is None:
+            print("[notice] this desktop doesn't say how long it has been idle, so Arty won't notice comings and goings", flush=True)
+            return
+        notice = watcher.observe(seconds, read_app())
+        if notice and not call.is_on():
+            offer_notice(notice)
+        sleep(NOTICE_CHECK_SECONDS)
+
+
+def start_noticing():
+    if not bool(cfg.setting("notice", "enabled", False)):
+        return
+    watcher = Noticer(away_minutes=float(cfg.setting("notice", "away_minutes", 20)),
+                      focus_minutes=float(cfg.setting("notice", "focus_minutes", 120)))
+    threading.Thread(target=watch_for_notices, args=(watcher,), name="notice", daemon=True).start()
+    print("[notice] noticing when you come back or spend hours in one app", flush=True)
+
+
+class NoticeReplyIn(BaseModel):
+    id: int
+    speak: bool = True
+
+
+@app.post("/notice/reply")
+def notice_reply(body: NoticeReplyIn):
+    notice = take_notice(body.id)
+    if notice is None:
+        return StreamingResponse(iter([_ndjson({"type": "cancelled"})]), media_type="application/x-ndjson")
+    return StreamingResponse(_stream_reply(notice.said(), body.speak, note=notice.prompt()), media_type="application/x-ndjson")
 
 
 class InterruptIn(BaseModel):
@@ -648,5 +733,6 @@ if __name__ == "__main__":
     _write_token()
     notifications.start()
     brain.watch_announcements(notifications.record_announcement)
+    start_noticing()
     bridge = config.get("bridge") or {}
     uvicorn.run(app, host=bridge.get("host", "127.0.0.1"), port=int(bridge.get("port", 8765)), log_level="warning")

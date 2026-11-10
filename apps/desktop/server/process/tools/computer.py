@@ -661,6 +661,7 @@ def computer_scroll(direction="down", amount=5):
     if direction not in ("up", "down", "left", "right"):
         return "direction must be up, down, left or right."
     try:
+        _guard_front()
         if _input_tool() == "windows":
             win_desktop.scroll(direction, amount)
             return f"Scrolled {direction}."
@@ -675,7 +676,7 @@ def computer_scroll(direction="down", amount=5):
         # arrow keys instead. They go to the window in focus, not under the mouse.
         code = {"up": 103, "down": 108, "left": 105, "right": 106}[direction]
         _send(["ydotool", "key"] + [f"{code}:{state}" for _ in range(amount) for state in (1, 0)])
-    except RuntimeError as e:
+    except (PermissionError, RuntimeError) as e:
         return str(e)
     return f"Scrolled {direction} with the arrow keys, in whatever window has focus."
 
@@ -866,13 +867,17 @@ def describe(name, args):
     }.get(name, name)
 
 
+def presses_keys(name, args):
+    return name in GUI_TOOLS or (name == "computer_open" and bool(args.get("new_document")))
+
+
 def consent_key(name):
-    return "gui" if name in GUI_TOOLS else name
+    return "gui" if name in GUI_TOOLS or name == "computer_open" else name
 
 
 def needs_ok(name, args, consented):
     """The question to ask them first, or None."""
-    if name in GUI_TOOLS:
+    if presses_keys(name, args):
         if not setting("computer", "ask_before_mouse_and_keyboard", False) or "gui" in consented:
             return None
         return "Let Arty use your mouse and keyboard for this?"

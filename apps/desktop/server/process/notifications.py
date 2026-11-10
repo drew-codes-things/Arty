@@ -87,6 +87,10 @@ def record_announcement(item):
             update_id=item.get("id"), created=item.get("created"), task_id=item.get("task_id"), actions=item.get("actions") or [])
 
 
+def record_notice(summary, notice_id):
+    _record("Arty", summary, "", kind="notice", notice=notice_id)
+
+
 def desktop_notifications(limit=10):
     """The tool: the latest notifications from other apps, newest last."""
     items = [n for n in _recent if n["kind"] == "app"][-max(1, min(int(limit or 10), KEEP)):]

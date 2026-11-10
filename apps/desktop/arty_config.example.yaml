@@ -79,3 +79,8 @@ barge_in:
   margin_db: 8.0
   speech_ms: 300
   silence_ms: 800
+
+notice:
+  enabled: false
+  away_minutes: 20
+  focus_minutes: 120

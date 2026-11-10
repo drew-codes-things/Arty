@@ -8,7 +8,7 @@ from process.tools import registry
 
 def test_coding_requests_get_the_work_tools(monkeypatch):
     monkeypatch.setattr(registry, "_last_used", {})
-    for request in ["fix the bug in my marina project", "why is the build failing?", "refactor the login function"]:
+    for request in ["fix the bug in my website project", "why is the build failing?", "refactor the login function"]:
         assert registry.WORK_TOOLS <= registry.wanted_tools(request), request
 
 

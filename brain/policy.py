@@ -104,10 +104,26 @@ def describe_action(name: str, arguments: dict, context: dict) -> str:
     return f"{verb} ({details})" if details else verb
 
 
-def chat_says_yes(messages: list[dict], text_of) -> bool:
-    """True when Drew's latest chat message is a plain go-ahead."""
-    users = [m for m in messages if m.get("role") == "user"]
-    return bool(users) and bool(CHAT_APPROVAL.match(text_of(users[-1])))
+APPROVAL_QUESTION = "Before I do that, I need your OK: {reason}. Shall I go ahead?"
+APPROVAL_ASKED = re.compile(r"^Before I do that, I need your OK: (?P<reason>.+)\. Shall I go ahead\?$", re.DOTALL)
+
+
+def approval_question(reason: str) -> str:
+    return APPROVAL_QUESTION.format(reason=reason)
+
+
+def approved_reason(messages: list[dict], text_of) -> str | None:
+    chat = [m for m in messages if m.get("role") in ("user", "assistant")]
+    if len(chat) < 2 or chat[-1].get("role") != "user" or chat[-2].get("role") != "assistant":
+        return None
+    if not CHAT_APPROVAL.match(text_of(chat[-1])):
+        return None
+    asked = APPROVAL_ASKED.match(text_of(chat[-2]).strip())
+    return asked.group("reason") if asked else None
+
+
+def covers(approved: str | None, reason: str) -> bool:
+    return approved is not None and approved == reason
 
 
 def matches(name: str, patterns: list[str]) -> bool:

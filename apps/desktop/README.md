@@ -45,12 +45,24 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
 - **Hands** - with **HANDS** on, Arty can look at the screen, open apps, click, type, press keys, scroll, run
   commands and read or write files. Anything risky - deleting, sending, installing, touching secrets - shows an
   Allow / Not now card first.
+  Before clicking, typing, pressing keys or scrolling, Arty checks that a password manager isn't the window in
+  front. That check needs to know which window is in front: Windows and X11 always say, KDE on Wayland only with
+  `kdotool` installed, and other Wayland desktops (GNOME and the rest) don't say at all. Without it, input goes to
+  whichever window has focus, so keep password managers closed while Arty is using the computer.
 - **Updates** - the **UPD** chip shows reminders, briefings, task results and approvals with a count of new ones.
   New ones are read out, and pop up as a desktop notification while the window isn't focused.
 - **Screen and clipboard** - "Ask about my screen" (**Ctrl+Alt+Space**) and "Explain what I copied"
   (**Ctrl+Alt+E**) from the tray.
 - **Always there** - a small window in Arty's own style that lives in the tray. **Ctrl+Shift+A** shows or hides it,
   with transparency, keep-on-top and start-with-the-PC in the tray menu.
+- **Calls** - the phone button calls Arty: it picks up with a greeting, then listens and answers in turns, talking
+  the way people do on the phone. The call bar has a timer, **Mute** and **Hang up**; notifications aren't read out
+  during a call.
+- **Noticing** (off by default) - with `notice: enabled: true` in `arty_config.yaml`, Arty says something when you
+  come back after `away_minutes` (20) away, or after `focus_minutes` (120) in one app, at most once every 30 minutes.
+  Windows reads the time since your last key press or mouse move. On Linux it uses the desktop's idle time, or
+  where the desktop won't give that (KDE on Wayland), how long the screen has been locked. Spotting long stretches
+  in one app needs the app in front, which KDE on Wayland only gives with `kdotool` installed. Nothing is stored.
 - **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) and it can use your own tabs too.
 
 ---
@@ -67,8 +79,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.1.1-x86_64.AppImage
-./Arty-1.1.1-x86_64.AppImage
+chmod +x Arty-1.2.0-x86_64.AppImage
+./Arty-1.2.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -79,7 +91,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.1.1.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.2.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.
