@@ -199,3 +199,25 @@ def test_the_saved_conversation_is_readable_by_this_user_only(fake, tmp_path):
     saved = tmp_path / "history.json"
     assert saved.stat().st_mode & 0o777 == 0o600
     assert brain.load_history()[-1] == {"role": "assistant", "content": "hi there"}
+
+
+def test_the_next_turn_knows_which_tools_the_last_reply_used(fake):
+    brain.save_turn("tidy my notes", "Done.", actions=["editing notes.txt"])
+    assert brain.load_history()[-1]["actions"] == ["editing notes.txt"]
+    fake["replies"] += [{"content": "Yes."}]
+    list(brain.llm_stream("did you change it?"))
+    remembered = fake["sent"][0][2]
+    assert remembered["role"] == "assistant" and "editing notes.txt" in remembered["content"]
+    assert "actions" not in remembered
+
+
+def test_the_brain_is_told_the_desktop_app_is_asking(monkeypatch):
+    sent = {}
+
+    def record(*args, **kwargs):
+        sent.update(kwargs["json"])
+        return FakeStream([delta(content="Hi.")])
+
+    monkeypatch.setattr(brain.requests, "post", record)
+    list(brain._stream([{"role": "user", "content": "hi"}], None))
+    assert sent["client"] == "desktop"

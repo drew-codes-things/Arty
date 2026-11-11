@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Arty for Chrome</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; width: 280px; margin: 12px; color: #1d1d1f; background: #fff; }
+    h1 { font-size: 15px; margin: 0 0 6px; }
+    p { margin: 0 0 10px; color: #555; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; font: 13px ui-monospace, monospace; }
+    button { margin-top: 8px; padding: 6px 12px; }
+    #status { margin-top: 8px; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <h1>Pair with Arty Desktop</h1>
+  <p>In Arty Desktop, open the tray menu and choose <b>Chrome sites</b>. Paste the pairing code from there.</p>
+  <form id="pair">
+    <input id="code" autocomplete="off" spellcheck="false" placeholder="Pairing code" required>
+    <button type="submit">Save</button>
+  </form>
+  <div id="status" role="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

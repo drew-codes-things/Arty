@@ -8,7 +8,7 @@ SPOKEN_WORD = re.compile(r"[a-z0-9']+", re.IGNORECASE)
 FILLER_WORDS = {"oh", "ah", "aw", "eh", "um", "umm", "uh", "er", "erm", "hmm", "mm", "huh", "wait", "wow", "lol", "ooh",
                 "my", "god", "gosh", "up", "what", "ow", "ouch", "yay", "whoa", "oops", "shh", "the", "a", "and"}
 LAUGH = re.compile(r"^(?:ha|he|ah)+h?$", re.IGNORECASE)
-BARE_NAME = re.compile(r"^\W*(?:arty|artie|arti|ardy|harty)\b[\s,.!?-]*", re.IGNORECASE)
+BARE_NAME = re.compile(r"^\W*(?:arty|artie|arti|ardy|harty|r\.?\s?t)\b[\s,.!?-]*", re.IGNORECASE)
 SWITCH_PHRASE = re.compile(
     r"^\W*(?:(?:hey|hay|hi|ok|okay)[\s,.!?-]*)?(?:arty|artie|arti|ardy|hearty|harty|r\.?\s?t)[\s,.!?-]+"
     r"(?:turn[\s-]+)?(?P<state>on|off|of)\W*$",

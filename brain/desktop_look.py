@@ -44,8 +44,8 @@ PATTERNS = ("nodes", "grid", "contours", "plain")
 COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 NAME_CHARS = re.compile(r"[^A-Za-z0-9 '-]")
 NAME_LENGTH = 24
-PICK_PROMPT = """You are Arty: calm, curious and practical, with a dry sense of humour, keen on networking, Linux,
-infrastructure and homelabs, and from the Welsh valleys. This is about YOUR OWN computer's desktop: your
+DEFAULT_PERSONA = "calm, curious and practical, with a dry sense of humour"
+PICK_PROMPT = """You are Arty: {persona}. This is about YOUR OWN computer's desktop: your
 taste, not the user's. Design it however you like.
 
 Some looks to start from, or ignore completely:
@@ -123,7 +123,11 @@ def _one_of(value: str, options: tuple[str, ...], fallback: str) -> str:
     return next((option for option in options if option.lower() == wanted), fallback)
 
 
-def choose(complete, current: str, asked_for_change: bool) -> dict:
+def persona_of(settings: dict | None) -> str:
+    return str((settings or {}).get("persona") or DEFAULT_PERSONA).strip().rstrip(".")
+
+
+def choose(complete, current: str, asked_for_change: bool, persona: str = DEFAULT_PERSONA) -> dict:
     looks = "\n".join(f"- {name}: {look['about']} (background {' to '.join(look['background'])}, accent {look['accent']}, "
                       f"pattern {look['pattern']})" for name, look in LOOKS.items())
     if not current:
@@ -132,7 +136,7 @@ def choose(complete, current: str, asked_for_change: bool) -> dict:
         situation = f"You have {current} now, and the user has asked you to change it: make something different."
     else:
         situation = f"You have {current} now. Keep it with a fresh motto, or change it if you'd like a change."
-    reply = complete(PICK_PROMPT.format(looks=looks, situation=situation, patterns=", ".join(PATTERNS),
+    reply = complete(PICK_PROMPT.format(persona=persona, looks=looks, situation=situation, patterns=", ".join(PATTERNS),
                                         themes=", ".join(GTK_THEMES), icons=", ".join(ICON_THEMES))) or ""
     fields = {key.upper(): value.strip() for key, value in FIELD.findall(reply)}
     preset = next((look for look in LOOKS if look.lower() in fields.get("LOOK", fields.get("NAME", "")).lower()), "")
@@ -180,11 +184,11 @@ def permission_reply(text: str, settings: dict | None = None) -> str | None:
     return None
 
 
-def customise(call_tool, complete) -> str:
+def customise(call_tool, complete, persona: str = DEFAULT_PERSONA) -> str:
     """The reply to "customise your desktop": done for real, or an honest account of why not."""
     with _lock:
         state = _load()
-        choice = choose(complete, state.get("look", ""), asked_for_change=bool(state.get("look")))
+        choice = choose(complete, state.get("look", ""), asked_for_change=bool(state.get("look")), persona=persona)
         problem = apply(call_tool, choice)
         if problem:
             return f"I couldn't change my desktop just now: {problem}."
@@ -209,13 +213,13 @@ def due(settings: dict, now: float | None = None) -> bool:
     return now - _load().get("changed", 0) >= settings["every_hours"] * 3600
 
 
-def tinker(call_tool, complete):
+def tinker(call_tool, complete, persona: str = DEFAULT_PERSONA):
     """On its own, while the user is away: a fresh motto, or a new look if it fancies one. Quietly; logged only."""
     if not _lock.acquire(blocking=False):
         return
     try:
         state = _load()
-        choice = choose(complete, state.get("look", ""), asked_for_change=False)
+        choice = choose(complete, state.get("look", ""), asked_for_change=False, persona=persona)
         if time.time() - _last_user_message["time"] < IDLE_SECONDS:
             return  # they messaged while it was choosing: leave it for later
         problem = apply(call_tool, choice)

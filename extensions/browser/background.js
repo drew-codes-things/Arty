@@ -7,6 +7,8 @@ const POLL_SECONDS = 25;
 const OFFLINE_RETRY_MS = 5000;
 const LOAD_WAIT_MS = 15000;
 const AFTER_CLICK_MS = 1500;
+const UNPAIRED_TITLE = 'Arty for Chrome: not paired yet. Click here and paste the pairing code from Arty Desktop (tray menu, Chrome sites).';
+const PAIRED_TITLE = 'Arty for Chrome';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let polling = false;
@@ -18,9 +20,16 @@ async function poll() {
     for (;;) {
       // Any extension API call keeps this service worker alive between long polls.
       await chrome.runtime.getPlatformInfo();
+      const pairing = await pairingCode();
+      if (!pairing) {
+        await showPaired(false);
+        await sleep(OFFLINE_RETRY_MS);
+        continue;
+      }
       let command;
       try {
-        const response = await fetch(`${SERVICE}/browser/next?timeout=${POLL_SECONDS}`);
+        const response = await fetch(`${SERVICE}/browser/next?timeout=${POLL_SECONDS}`, { method: 'POST', headers: { 'X-Arty-Pairing': pairing } });
+        await showPaired(response.status !== 403);
         if (!response.ok) throw new Error(`HTTP ${response.status}`); // refused or failing: don't spin
         command = await response.json();
       } catch {
@@ -35,12 +44,22 @@ async function poll() {
         result = { error: String(error?.message || error) };
       }
       await fetch(`${SERVICE}/browser/result`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: command.id, result }),
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Arty-Pairing': pairing }, body: JSON.stringify({ id: command.id, result }),
       }).catch(() => {});
     }
   } finally {
     polling = false;
   }
+}
+
+async function pairingCode() {
+  const stored = await chrome.storage.local.get('pairing');
+  return typeof stored.pairing === 'string' ? stored.pairing.trim() : '';
+}
+
+async function showPaired(paired) {
+  await chrome.action.setBadgeText({ text: paired ? '' : '!' });
+  await chrome.action.setTitle({ title: paired ? PAIRED_TITLE : UNPAIRED_TITLE });
 }
 
 chrome.alarms.create('arty-keepalive', { periodInMinutes: 0.5 });
@@ -50,6 +69,24 @@ chrome.runtime.onInstalled.addListener(poll);
 poll();
 
 // ---------- commands ----------
+
+function siteOf(address) {
+  let parsed;
+  try {
+    parsed = new URL(address);
+  } catch {
+    return '';
+  }
+  if (!parsed.hostname) return '';
+  const site = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+  return parsed.protocol === 'https:' ? site : `${parsed.protocol}//${site}`;
+}
+
+function refuseIfMoved(command, tab) {
+  if (command.site === undefined) return;
+  const now = siteOf(tab.url || '');
+  if (now !== command.site) throw new Error(`that tab is on ${now || 'another page'} now, not ${command.site || 'the page Arty checked'}`);
+}
 
 async function targetTab(tabId) {
   if (tabId) return chrome.tabs.get(tabId);
@@ -98,6 +135,7 @@ async function run(command) {
     }
     case 'click': {
       const tab = await targetTab(command.tab);
+      refuseIfMoved(command, tab);
       const clicked = await inPage(tab, clickItem, [command.item ?? null, command.text || '']);
       if (clicked.error) return clicked;
       await sleep(AFTER_CLICK_MS);
@@ -106,10 +144,12 @@ async function run(command) {
     }
     case 'type': {
       const tab = await targetTab(command.tab);
+      refuseIfMoved(command, tab);
       return inPage(tab, typeInto, [command.item ?? null, command.label || '', command.text || '', !!command.submit]);
     }
     case 'tab': {
       const tab = await targetTab(command.tab);
+      refuseIfMoved(command, tab);
       if (command.tabAction === 'switch') {
         await chrome.tabs.update(tab.id, { active: true });
         await chrome.windows.update(tab.windowId, { focused: true });
@@ -117,7 +157,9 @@ async function run(command) {
       else if (command.tabAction === 'back') await chrome.tabs.goBack(tab.id);
       else if (command.tabAction === 'forward') await chrome.tabs.goForward(tab.id);
       else if (command.tabAction === 'reload') await chrome.tabs.reload(tab.id);
-      return { title: command.tabAction === 'close' ? '' : tab.title };
+      if (command.tabAction === 'close') return { title: '', url: '' };
+      const after = await chrome.tabs.get(tab.id);
+      return { title: after.title || '', url: after.url || '' };
     }
     default:
       throw new Error(`unknown command ${command.action}`);
@@ -142,11 +184,13 @@ function readPage() {
     const type = (el.getAttribute('type') || '').toLowerCase();
     if (type === 'hidden') continue;
     const isField = ['input', 'textarea', 'select'].includes(tag) && !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type) || el.isContentEditable;
-    const kind = tag === 'a' || el.getAttribute('role') === 'link' ? 'link' : isField ? (type === 'password' ? 'password field' : 'field') : 'button';
+    const hints = `${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''} ${el.getAttribute('aria-label') || ''} ${el.placeholder || ''}`.toLowerCase();
+    const isPrivate = type === 'password' || /pass|pwd|\bpin\b|one-time|otp|2fa|mfa|verif|security.?code|cc-|card|cvv|cvc|iban|sort.?code|account.?n|ssn|secret|token/.test(hints);
+    const kind = tag === 'a' || el.getAttribute('role') === 'link' ? 'link' : isField ? (isPrivate ? 'private field' : 'field') : 'button';
     let label;
     if (isField) {
       label = clean(el.labels?.[0]?.innerText || el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
-      if (el.value && type !== 'password') label += ` (now: "${String(el.value).slice(0, 40)}")`;
+      if (el.value && !isPrivate) label += ` (now: "${String(el.value).slice(0, 40)}")`;
     } else {
       label = clean(el.getAttribute('aria-label') || el.innerText || el.value || el.title);
     }

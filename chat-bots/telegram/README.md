@@ -34,7 +34,7 @@ only answers while the brain is on. Notifications don't come here - they go to U
 ## Setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
-2. Make a PufferPanel server on core-sys from Docker's `python:3.13-slim` image that runs `python -u arty_telegram.py`.
+2. Make a PufferPanel server on your home server from Docker's `python:3.13-slim` image that runs `python -u arty_telegram.py`.
 3. In its folder, create `config.env` (PufferPanel > Files):
 
    ```
@@ -49,6 +49,8 @@ only answers while the brain is on. Notifications don't come here - they go to U
 4. Set `ARTY_TELEGRAM_ID` in `deploy.sh` to the server's id and run `./deploy.sh`, which copies `arty_telegram.py`
    there. Start the server.
 5. Pair it: send the bot `/pair <code>` with the code from `config.env`. Your user id is saved to `owner.txt`.
+   After 5 wrong codes in an hour (from anyone) pairing is locked for a while, and a private `/pair` gets "Too many
+   wrong pairing codes. Try again later." once; groups get no reply.
 
 After a deploy, restart the server in PufferPanel to run the new code.
 
@@ -56,7 +58,7 @@ After a deploy, restart the server in PufferPanel to run the new code.
 
 ## Tested On
 
-PufferPanel on core-sys (CT 100, Debian 12 bookworm), in Docker's `python:3.13-slim` image, with the brain on the
+PufferPanel on the home server (a container, Debian 12 bookworm), in Docker's `python:3.13-slim` image, with the brain on the
 homelab. Used from the Telegram app on Android 16 (Realme RMX5085).
 
 ## License

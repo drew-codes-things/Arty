@@ -11,6 +11,8 @@ import logging
 import re
 from urllib.parse import urlparse
 
+import quick
+
 PAGES = 4
 PAGE_CHARS = 5000         # enough for the substance of a page; more only slows the model
 MIN_PAGE_CHARS = 400      # less than this is a cookie wall, an error page or a bot check
@@ -99,7 +101,11 @@ QUICK_QUESTION = re.compile(
     r"who is the (current|new)|current(ly)?|this (year|season|week'?s)|last (year|season|world cup|election|game|match)|"
     r"20[2-3]\d|1[5-9]\d\d|what year|in which year)\b", re.IGNORECASE)
 # About the user's own things ("my latest email"): not for the web, whatever the words.
-ABOUT_THEIR_OWN = re.compile(r"\b(my|our)\b", re.IGNORECASE)
+ABOUT_THEIR_OWN = re.compile(r"\b(my|our|i'?m|i am|i'?ve|i have|i was)\b", re.IGNORECASE)
+POLITE_ASKING = re.compile(r"\b(can|could|would|will|do) you\b|\byou think\b", re.IGNORECASE)
+ABOUT_ARTY = re.compile(r"\b(you|your|yourself)\b", re.IGNORECASE)
+LEANS_ON_EARLIER = re.compile(r"\b(?:that|(?<!worth )it|this(?! (?:year|season|week))|here|the (?:\w+ )?one|what about)\b|"
+                              r"^\W*(?:and|so)\b|^\W*what (?:do|would|could) you recommend\W*$", re.IGNORECASE)
 QUICK_PAGES = 2
 OPEN_A_PAGE = re.compile(r"\b(open|go to|visit|load|navigate to)\s+(https?://)?[\w-]+(\.[\w-]+)+", re.IGNORECASE)
 SNIPPET_CHARS = 1500
@@ -110,7 +116,10 @@ def is_request(text: str) -> bool:
 
 
 def is_quick_question(text: str) -> bool:
-    return bool(QUICK_QUESTION.search(text or "")) and not ABOUT_THEIR_OWN.search(text or "")
+    text = text or ""
+    if not QUICK_QUESTION.search(text) or ABOUT_THEIR_OWN.search(text) or quick.refers_back(text) or LEANS_ON_EARLIER.search(text):
+        return False
+    return not ABOUT_ARTY.search(POLITE_ASKING.sub("", text))
 
 
 def query_from(text: str) -> str:

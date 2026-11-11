@@ -13,7 +13,7 @@ Pairing: until an owner is set, the bot ignores everyone except a user who sends
 /pair <code> with the code from config.env; that user's id is saved to owner.txt.
 Anyone else is ignored and their messages never reach Arty.
 
-Runs as a PufferPanel server on core-sys; settings come from config.env in its folder.
+Runs as a PufferPanel server on the home server; settings come from config.env in its folder.
 """
 import http.client
 import json
@@ -62,8 +62,14 @@ load_config(HERE / "config.env")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API_KEY = os.environ.get("ARTY_API_KEY", "")
 PAIR_CODE = os.environ.get("TELEGRAM_PAIR_CODE", "")
+PAIR_ATTEMPTS_PER_HOUR = 5
+PAIR_WINDOW_SECONDS = 3600
+pair_failures: list[float] = []
+announced_locks: set[float] = set()
+PAIRING_LOCKED_REPLY = "Too many wrong pairing codes. Try again later."
 BRAIN_URL = os.environ.get("BRAIN_URL", "http://127.0.0.1:8081/v1/chat/completions")
 BRAIN_BASE = BRAIN_URL.split("/v1/", 1)[0]
+CLIENT_NAME = "telegram"
 TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024  # bots may only download files up to 20 MB
 DOWNLOAD_LINK = re.compile(r"!?\[([^\]]*)\]\((https?://[^)\s]+?(/arty-files/[^)\s]+))\)")
 UPLOAD_KINDS = {"jpg": ("sendPhoto", "photo"), "jpeg": ("sendPhoto", "photo"), "png": ("sendPhoto", "photo"),
@@ -101,14 +107,14 @@ def telegram(method: str, http_timeout: int = 30, **params):
 
 
 def ask_brain(messages: list[dict]) -> str:
-    body = json.dumps({"model": "assistant-core", "messages": messages}).encode()
+    body = json.dumps({"model": "assistant-core", "messages": messages, "client": CLIENT_NAME}).encode()
     request = urllib.request.Request(BRAIN_URL, data=body, headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     try:
         with urllib.request.urlopen(request, timeout=BRAIN_TIMEOUT_SECONDS) as response:
             return json.loads(response.read())["choices"][0]["message"]["content"].strip() or "(no reply)"
     except (OSError, KeyError, ValueError) as error:  # OSError covers URLError, timeouts and dropped connections
         log.error("brain request failed: %s", error)
-        return f"I couldn't reach my brain just now ({error}). The AI server (CT 104) may be switched off."
+        return f"I couldn't reach my brain just now ({error}). The AI server may be switched off."
 
 
 def task_action(task_id: int, action: str) -> str:
@@ -118,11 +124,41 @@ def task_action(task_id: int, action: str) -> str:
                                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read()).get("message", "Done.")
+            return json_message(response.read(), "Done.", "The AI server sent a reply I didn't understand.")
     except urllib.error.HTTPError as error:
-        return json.loads(error.read() or b"{}").get("message", f"Error {error.code}")
+        fallback = f"Error {error.code}"
+        return json_message(error.read(), fallback, fallback)
     except (urllib.error.URLError, TimeoutError) as error:
         return f"Couldn't reach the AI server ({error})."
+
+
+def json_message(raw: bytes, missing: str, unreadable: str) -> str:
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        return unreadable
+    if not isinstance(body, dict):
+        return unreadable
+    return body.get("message", missing)
+
+
+def pairing_allowed(now: float) -> bool:
+    pair_failures[:] = [moment for moment in pair_failures if now - moment < PAIR_WINDOW_SECONDS]
+    return len(pair_failures) < PAIR_ATTEMPTS_PER_HOUR
+
+
+def announce_lock_once(chat_id: int) -> None:
+    lock = pair_failures[0]
+    if lock in announced_locks:
+        return
+    announced_locks.intersection_update(pair_failures)
+    announced_locks.add(lock)
+    log.warning("pairing is locked after %d wrong codes", len(pair_failures))
+    reply(chat_id, PAIRING_LOCKED_REPLY)
+
+
+def code_matches(offered: str) -> bool:
+    return bool(PAIR_CODE) and secrets.compare_digest(offered.encode(), PAIR_CODE.encode())
 
 
 def handle_callback(query: dict):
@@ -265,10 +301,18 @@ def handle(message: dict, me: dict):
     owner = owner_id()
     if owner is None:
         pair = re.match(r"^/(pair|start)\s+(\S+)", text)
-        if pair and PAIR_CODE and secrets.compare_digest(pair.group(2), PAIR_CODE) and message["chat"]["type"] == "private":
-            OWNER_FILE.write_text(str(sender))
-            log.info("paired with owner %s", sender)
-            reply(chat_id, "Paired. I'm Arty, and from now on I only listen to you.")
+        if not pair or message["chat"]["type"] != "private":
+            return
+        if not pairing_allowed(time.time()):
+            announce_lock_once(chat_id)
+            return
+        if not code_matches(pair.group(2)):
+            pair_failures.append(time.time())
+            log.warning("wrong pairing code from %s (%d in the last hour)", sender, len(pair_failures))
+            return
+        OWNER_FILE.write_text(str(sender))
+        log.info("paired with owner %s", sender)
+        reply(chat_id, "Paired. I'm Arty, and from now on I only listen to you.")
         return
     if sender != owner:
         return

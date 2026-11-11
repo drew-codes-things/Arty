@@ -3,7 +3,11 @@ package app.arty.quest
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import java.io.IOException
+import java.net.URISyntaxException
 import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -23,10 +27,17 @@ fun reconnectDelayMs(failures: Int): Long {
     return doubled.coerceAtMost(LONGEST_RETRY_MS)
 }
 
+const val MAX_FAILED_ATTEMPTS = 20
+const val LINK_GAVE_UP = "Arty couldn't be reached for several minutes, so the headset stopped listening. Open Arty again to retry."
+
+fun shouldStopRetrying(failures: Int): Boolean = failures >= MAX_FAILED_ATTEMPTS
+
 const val KEY_REFUSED = "the headset key was refused"
 private const val UNAUTHORISED = 401
 
 fun needsNewKey(reason: String): Boolean = reason == KEY_REFUSED
+
+internal val sharedClient: OkHttpClient = OkHttpClient.Builder().pingInterval(PING_SECONDS, TimeUnit.SECONDS).build()
 
 interface HeadsetEvents {
     fun connected()
@@ -35,10 +46,11 @@ interface HeadsetEvents {
     fun audio(wav: ByteArray)
 }
 
-class HeadsetLink(private val url: String, private val token: String, private val events: HeadsetEvents) {
+class HeadsetLink(private val url: String, private val token: String, private val device: String, private val events: HeadsetEvents) {
 
-    private val client = OkHttpClient.Builder().pingInterval(PING_SECONDS, TimeUnit.SECONDS).build()
+    private val client = sharedClient
     private val main = Handler(Looper.getMainLooper())
+    @Volatile
     private var socket: WebSocket? = null
     private var listener: Listener? = null
     private var failures = 0
@@ -63,15 +75,55 @@ class HeadsetLink(private val url: String, private val token: String, private va
 
     private fun connect() {
         if (!wanted) return
-        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
         val current = Listener()
         listener = current
+        if (needsIdentityCheck(url)) checkIdentityThenOpen(current) else openSocket(current)
+    }
+
+    private fun openSocket(current: Listener) {
+        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
         socket = client.newWebSocket(request, current)
+    }
+
+    private fun checkIdentityThenOpen(current: Listener) {
+        val nonce = newIdentityNonce()
+        val request = try {
+            Request.Builder().url(identityUrlFrom(url, nonce, device)).build()
+        } catch (error: URISyntaxException) {
+            retryLater(IDENTITY_REFUSED)
+            return
+        } catch (error: IllegalArgumentException) {
+            retryLater(IDENTITY_REFUSED)
+            return
+        }
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                main.post { if (current === listener) retryLater(e.message ?: e.javaClass.simpleName) }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val proven = try {
+                    response.use { it.isSuccessful && identityProven(token, nonce, it.body?.string().orEmpty(), device) }
+                } catch (error: IOException) {
+                    false
+                }
+                main.post {
+                    if (current !== listener) return@post
+                    if (proven) openSocket(current) else retryLater(IDENTITY_REFUSED)
+                }
+            }
+        })
     }
 
     private fun retryLater(reason: String) {
         socket = null
         listener = null
+        if (wanted && !needsNewKey(reason) && shouldStopRetrying(failures)) {
+            wanted = false
+            Log.w(LINK_TAG, "lost Arty ($reason) $failures times in a row; giving up")
+            events.disconnected(LINK_GAVE_UP)
+            return
+        }
         events.disconnected(reason)
         if (!wanted) return
         val delay = reconnectDelayMs(failures++)

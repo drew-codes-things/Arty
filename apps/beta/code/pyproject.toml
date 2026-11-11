@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arty-code"
+dynamic = ["version"]
+description = "Arty in your terminal: reads, edits and runs code in the current folder, asking first."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+arty-code = "arty_code.cli:main"
+
+[tool.setuptools]
+packages = ["arty_code"]
+
+[tool.setuptools.dynamic]
+version = { attr = "arty_code.__version__" }

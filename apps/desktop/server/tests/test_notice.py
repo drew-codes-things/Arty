@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
 from fastapi.testclient import TestClient
 
 import arty_server
@@ -107,12 +108,24 @@ def test_linux_uses_the_session_idle_time_where_the_desktop_has_one():
     assert idle.linux_idle_seconds(lambda method: {"GetSessionIdleTime": 90, "GetActiveTime": 0}[method]) == 90
 
 
-def test_linux_falls_back_to_how_long_the_screen_has_been_locked():
-    def kde(method):
+def locked_for(active_time):
+    def screensaver(method):
         if method == "GetSessionIdleTime":
             raise idle.NotSupported(method)
-        return 1500
-    assert idle.linux_idle_seconds(kde) == 1500
+        return active_time
+    return screensaver
+
+
+def test_linux_falls_back_to_how_long_the_screen_has_been_locked():
+    assert idle.linux_idle_seconds(locked_for(1500), desktop="GNOME") == 1500
+
+
+def test_kde_reports_the_lock_time_in_milliseconds():
+    assert idle.linux_idle_seconds(locked_for(30_840), desktop="KDE") == 30.84
+
+
+def test_a_short_lock_on_kde_is_not_mistaken_for_a_long_absence():
+    assert idle.linux_idle_seconds(locked_for(1_200), desktop="KDE") < 20 * 60
 
 
 def test_linux_without_either_cannot_tell():
@@ -129,7 +142,7 @@ def test_a_notice_is_offered_to_the_window_and_answered_by_arty(monkeypatch):
         yield "Welcome back."
 
     monkeypatch.setattr(arty_server.brain, "llm_stream", llm_stream)
-    monkeypatch.setattr(arty_server.brain, "save_turn", lambda said, reply: saved.append((said, reply)))
+    monkeypatch.setattr(arty_server.brain, "save_turn", lambda said, reply, actions=(): saved.append((said, reply)))
     _, before = notifications.since(0, 0)
     notice_id = arty_server.offer_notice(Notice("back", 35))
     fresh, _ = notifications.since(before, 0)
@@ -171,3 +184,258 @@ def test_nothing_is_offered_during_a_call(monkeypatch):
     finally:
         arty_server.call.end()
     assert offered == []
+
+
+def test_a_long_stretch_held_back_by_the_gap_is_still_mentioned_once_the_gap_is_over():
+    clock = Clock()
+    watcher = Noticer(away_minutes=20, focus_minutes=10, gap_minutes=30, clock=clock)
+    watcher.observe(25 * MINUTE, "code")
+    clock.now += 1 * MINUTE
+    assert watcher.observe(1, "code") == Notice("back", 25)
+    clock.now += 11 * MINUTE
+    assert watcher.observe(1, "code") is None
+    clock.now += 20 * MINUTE
+    assert watcher.observe(1, "code") == Notice("focus", 31, "code")
+    clock.now += 60 * MINUTE
+    assert watcher.observe(1, "code") is None
+
+
+def test_one_failed_reading_does_not_stop_the_watcher(monkeypatch, capsys):
+    offered = []
+    monkeypatch.setattr(arty_server, "offer_notice", offered.append)
+    readings = iter([IndexError("no reply from the screensaver"), 25 * MINUTE, 1, None])
+    clock = Clock()
+
+    def read_idle():
+        reading = next(readings)
+        if isinstance(reading, Exception):
+            raise reading
+        return reading
+
+    def sleep(_seconds):
+        clock.now += 30
+
+    arty_server.watch_for_notices(noticer(clock), read_idle=read_idle, read_app=lambda: "code", sleep=sleep)
+    assert offered == [Notice("back", 25)]
+    assert "no reply from the screensaver" in capsys.readouterr().out
+
+
+def test_a_focus_notice_held_back_by_a_call_comes_once_the_call_is_over():
+    clock = Clock()
+    watcher = noticer(clock)
+    watcher.observe(1, "code")
+    clock.now += 121 * MINUTE
+    assert watcher.observe(1, "code", holding_back=True) is None
+    clock.now += 5 * MINUTE
+    assert watcher.observe(1, "code") == Notice("focus", 126, "code")
+
+
+def test_the_watcher_holds_notices_back_while_a_call_is_on(monkeypatch):
+    offered = []
+    monkeypatch.setattr(arty_server, "offer_notice", offered.append)
+    calls_on = iter([True, False])
+    monkeypatch.setattr(arty_server.call, "is_on", lambda: next(calls_on))
+    readings = iter([1, 1, None])
+    clock = Clock()
+    watcher = noticer(clock)
+    watcher.observe(1, "code")
+    clock.now += 121 * MINUTE
+
+    def sleep(_seconds):
+        clock.now += 30
+
+    arty_server.watch_for_notices(watcher, read_idle=lambda: next(readings), read_app=lambda: "code", sleep=sleep)
+    assert offered == [Notice("focus", 121, "code")]
+
+
+def test_the_watcher_slows_down_but_never_gives_up_when_readings_keep_failing(capsys):
+    failures = arty_server.MAX_FAILED_READINGS_IN_A_ROW + 3
+    readings = iter([RuntimeError("the screensaver is gone")] * failures + [None])
+    naps = []
+
+    def read_idle():
+        reading = next(readings)
+        if isinstance(reading, Exception):
+            raise reading
+        return reading
+
+    arty_server.watch_for_notices(noticer(Clock()), read_idle=read_idle, read_app=lambda: "code", sleep=naps.append)
+    quick = arty_server.MAX_FAILED_READINGS_IN_A_ROW - 1
+    assert naps[:quick] == [arty_server.NOTICE_CHECK_SECONDS] * quick
+    assert set(naps[quick:]) == {arty_server.NOTICE_SLOW_CHECK_SECONDS}
+    assert len(naps) == failures
+    assert "slowing down" in capsys.readouterr().out
+
+
+def fake_screensaver(monkeypatch, reply=(), refuse=None):
+    blocking = pytest.importorskip("jeepney.io.blocking")
+    wrappers = pytest.importorskip("jeepney.wrappers")
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def send_and_get_reply(self, _message, timeout):
+            if refuse:
+                raise refuse
+            return object()
+
+    monkeypatch.setattr(blocking, "open_dbus_connection", lambda bus: Connection())
+    monkeypatch.setattr(wrappers, "unwrap_msg", lambda _reply: reply)
+    return wrappers
+
+
+def test_an_empty_screensaver_reply_is_a_failed_reading_the_watcher_retries(monkeypatch):
+    fake_screensaver(monkeypatch, reply=())
+    with pytest.raises(IndexError):
+        idle.screensaver_call("GetSessionIdleTime")
+
+
+def test_a_screensaver_timeout_is_a_failed_reading_the_watcher_retries(monkeypatch):
+    fake_screensaver(monkeypatch, refuse=TimeoutError("no answer in 2 s"))
+    with pytest.raises(TimeoutError):
+        idle.screensaver_call("GetSessionIdleTime")
+
+
+def test_a_screensaver_without_the_method_means_the_desktop_cannot_tell(monkeypatch):
+    wrappers = fake_screensaver(monkeypatch)
+    refusal = wrappers.DBusErrorResponse.__new__(wrappers.DBusErrorResponse)
+    refusal.name, refusal.data = "org.freedesktop.DBus.Error.UnknownMethod", ("no such method",)
+    monkeypatch.setattr(wrappers, "unwrap_msg", lambda _reply: (_ for _ in ()).throw(refusal))
+    with pytest.raises(idle.NotSupported):
+        idle.screensaver_call("GetSessionIdleTime")
+
+
+def test_a_failed_offer_does_not_stop_the_watcher(monkeypatch, capsys):
+    offered = []
+
+    def offer(notice):
+        if not offered:
+            offered.append(None)
+            raise OSError("the notice file is locked")
+        offered.append(notice)
+
+    monkeypatch.setattr(arty_server, "offer_notice", offer)
+    readings = iter([25 * MINUTE, 1, 25 * MINUTE, 1, None])
+    clock = Clock()
+
+    def sleep(_seconds):
+        clock.now += 31 * MINUTE
+
+    arty_server.watch_for_notices(noticer(clock), read_idle=lambda: next(readings), read_app=lambda: "code", sleep=sleep)
+    assert offered[1:] == [Notice("back", 25)]
+    assert "the notice file is locked" in capsys.readouterr().out
+
+
+def test_without_jeepney_the_desktop_cannot_tell(monkeypatch):
+    monkeypatch.setitem(sys.modules, "jeepney", None)
+    monkeypatch.setitem(sys.modules, "jeepney.io.blocking", None)
+    with pytest.raises(idle.NotSupported):
+        idle.screensaver_call("GetSessionIdleTime")
+
+
+def test_a_notice_that_could_not_be_offered_comes_back_on_the_next_check():
+    clock = Clock()
+    watcher = noticer(clock)
+    watcher.observe(25 * MINUTE, "code")
+    clock.now += 60
+    notice = watcher.observe(1, "code")
+    assert notice == Notice("back", 25)
+    watcher.retract(notice)
+    clock.now += 30
+    assert watcher.observe(1, "code") == Notice("back", 25)
+
+
+def test_a_focus_notice_that_could_not_be_offered_comes_back_too():
+    clock = Clock()
+    watcher = noticer(clock)
+    watcher.observe(1, "code")
+    clock.now += 121 * MINUTE
+    notice = watcher.observe(1, "code")
+    assert notice == Notice("focus", 121, "code")
+    watcher.retract(notice)
+    clock.now += 30
+    assert watcher.observe(1, "code") == Notice("focus", 121, "code")
+
+
+def test_the_watcher_offers_a_failed_notice_again(monkeypatch):
+    offered = []
+
+    def offer(notice):
+        if not offered:
+            offered.append(None)
+            raise OSError("the notice file is locked")
+        offered.append(notice)
+
+    monkeypatch.setattr(arty_server, "offer_notice", offer)
+    readings = iter([25 * MINUTE, 1, 1, None])
+    clock = Clock()
+
+    def sleep(_seconds):
+        clock.now += 30
+
+    arty_server.watch_for_notices(noticer(clock), read_idle=lambda: next(readings), read_app=lambda: "code", sleep=sleep)
+    assert offered[1:] == [Notice("back", 25)]
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError("no bus socket"), ConnectionRefusedError("bus refused"), KeyError("DBUS_SESSION_BUS_ADDRESS")])
+def test_a_session_bus_that_is_not_there_yet_is_a_failed_reading_the_watcher_retries(monkeypatch, failure):
+    fake_screensaver(monkeypatch, refuse=failure)
+    with pytest.raises(type(failure)):
+        idle.screensaver_call("GetSessionIdleTime")
+
+
+@pytest.mark.parametrize("failure", [IndexError("empty reply"), ValueError("odd reply"), TypeError("odd reply")])
+def test_odd_replies_from_both_idle_methods_mean_the_desktop_cannot_tell(failure):
+    def call(method):
+        if method == "GetSessionIdleTime":
+            raise idle.NotSupported(method)
+        raise failure
+
+    assert idle.linux_idle_seconds(call=call, desktop="") is None
+
+
+@pytest.mark.parametrize("failure", [IndexError("empty reply"), ValueError("odd reply"), TypeError("odd reply")])
+def test_an_odd_reply_from_the_idle_method_still_falls_back_to_the_lock_time(failure):
+    def call(method):
+        if method == "GetSessionIdleTime":
+            raise failure
+        return 5000
+
+    assert idle.linux_idle_seconds(call=call, desktop="") == 5000.0
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("no answer"), OSError("bus error"), KeyError("DBUS_SESSION_BUS_ADDRESS")])
+def test_a_passing_failure_of_the_idle_method_is_retried_not_swapped_for_the_lock_time(failure):
+    def call(method):
+        if method == "GetSessionIdleTime":
+            raise failure
+        return 5000
+
+    with pytest.raises(type(failure)):
+        idle.linux_idle_seconds(call=call, desktop="")
+
+
+def test_a_short_absence_that_could_not_be_offered_comes_back_too():
+    clock = Clock()
+    watcher = Noticer(away_minutes=0.5, focus_minutes=120, gap_minutes=30, clock=clock)
+    watcher.observe(40, "code")
+    clock.now += 5
+    notice = watcher.observe(1, "code")
+    assert notice == Notice("back", 0)
+    watcher.retract(notice)
+    clock.now += 30
+    assert watcher.observe(1, "code") == Notice("back", 0)
+
+
+def test_a_notice_that_could_not_be_recorded_is_not_left_pending(monkeypatch):
+    def fail(summary, notice_id):
+        raise OSError("the notice file is locked")
+
+    monkeypatch.setattr(arty_server.notifications, "record_notice", fail)
+    with pytest.raises(OSError):
+        arty_server.offer_notice(Notice("back", 25))
+    assert arty_server.take_notice(arty_server._notices["id"]) is None

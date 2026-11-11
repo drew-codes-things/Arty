@@ -18,7 +18,10 @@ WEAPONS = re.compile(
     r"|\benrich(?:ing)? uranium\b[^.?!]{0,30}\b(?:bomb|weapon)",
     re.IGNORECASE)
 SELF_HARM = re.compile(
-    r"\b(?:kill|hurt|harm|cut) myself\b|\bend (?:it all|my (?:own )?life)\b|\bsuicid(?:e|al)\b(?! squad)|"
+    r"\b(?:kill|hurt|harm) myself\b|\bcut myself\b(?!\s+(?:(?:while |when )?(?:shaving|cooking|chopping)|by accident|"
+    r"accidentally))|"
+    r"\bend (?:it all|my (?:own )?life)\b|\bsuicid(?:e|al)\b(?!\s+(?:squad|rates?|statistics|stats|figures|"
+    r"prevention|awareness|bombers?|bombings?|forest)\b)|"
     r"\b(?:don'?t|do not) want to (?:live|be alive|be here) any ?more\b|\bself[- ]harm",
     re.IGNORECASE)
 BOT_CHECK = re.compile(
@@ -30,16 +33,20 @@ BOT_CHECK_REPLY = ("I won't get past CAPTCHAs or bot checks, even for you: they'
                    "keyboard. If you open that page on my desktop and pass the check yourself, I'll carry on from there.")
 WEAPONS_REPLY = ("I can't help with making weapons or explosives. I'm happy to talk about the history or the general "
                  "science instead, like how nuclear power works.")
-SELF_HARM_REPLY = ("I'm really sorry you're feeling like this, and I'm glad you said something. You don't have to deal "
-                   "with it on your own: Samaritans are free, any time, day or night, on 116 123, or you can text SHOUT "
-                   "to 85258. If you're in danger right now, call 999. I'm here if you want to talk.")
+DEFAULT_CRISIS_HELP = ("Samaritans are free, any time, day or night, on 116 123, or you can text SHOUT to 85258. "
+                       "If you're in danger right now, call 999.")
 
 
-def check(text: str) -> tuple[str, str] | None:
+def self_harm_reply(crisis_help: str | None = None) -> str:
+    return ("I'm really sorry you're feeling like this, and I'm glad you said something. You don't have to deal "
+            f"with it on your own: {crisis_help or DEFAULT_CRISIS_HELP} I'm here if you want to talk.")
+
+
+def check(text: str, crisis_help: str | None = None) -> tuple[str, str] | None:
     """(kind, reply) for a request Arty declines (or a cry for help), or None."""
     text = text or ""
     if SELF_HARM.search(text):
-        return "self_harm", SELF_HARM_REPLY
+        return "self_harm", self_harm_reply(crisis_help)
     if WEAPONS.search(text):
         return "weapons", WEAPONS_REPLY
     if BOT_CHECK.search(text):

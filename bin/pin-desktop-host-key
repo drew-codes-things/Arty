@@ -1,0 +1,83 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+HOSTS_FILE=${ARTY_HOSTS_FILE:-./hosts.env}
+if [ -f "$HOSTS_FILE" ]; then
+  . "$HOSTS_FILE"
+fi
+DESKTOP_ADDRESS=${DESKTOP_ADDRESS:?set DESKTOP_ADDRESS, see hosts.env.example}
+PROXMOX=${PROXMOX:-proxmox}
+CT=${CT:-104}
+ALIAS=${WORKSPACE_HOST_ALIAS:-arty-desktop}
+PINNED=${ARTY_DESKTOP_KNOWN_HOSTS:-./desktop_known_hosts}
+LAPTOP_KNOWN=${ARTY_LAPTOP_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}
+SERVER_KNOWN=/srv/ai/mcp/workspace_known_hosts
+KEY_TYPES=ed25519,ecdsa,rsa
+trusted_fingerprint=""
+
+fail() { printf 'pin-desktop-host-key: %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --trust-fingerprint) trusted_fingerprint=${2:?--trust-fingerprint needs a SHA256:... value}; shift 2 ;;
+    *) fail "unknown option $1 (only --trust-fingerprint SHA256:...)" ;;
+  esac
+done
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+fingerprint_of() { printf '%s\n' "$1" | ssh-keygen -lf - | awk '{print $2}'; }
+
+ssh-keyscan -T 5 -t "$KEY_TYPES" "$DESKTOP_ADDRESS" 2>/dev/null | grep -v '^#' > "$work/scanned" || true
+[ -s "$work/scanned" ] || fail "the desktop VM at $DESKTOP_ADDRESS didn't answer with any host key"
+
+: > "$work/trusted"
+if [ -f "$LAPTOP_KNOWN" ]; then
+  ssh-keygen -F "$DESKTOP_ADDRESS" -f "$LAPTOP_KNOWN" 2>/dev/null | grep -v '^#' >> "$work/trusted" || true
+fi
+if ssh -o BatchMode=yes "$PROXMOX" "pct exec $CT -- cat $SERVER_KNOWN" > "$work/server" 2>/dev/null && [ -s "$work/server" ]; then
+  ssh-keygen -F "$DESKTOP_ADDRESS" -f "$work/server" 2>/dev/null | grep -v '^#' >> "$work/trusted" || true
+fi
+
+old_record_help() {
+  printf 'Once it is pinned, clear the old record with: ssh-keygen -R %s -f %s' "$DESKTOP_ADDRESS" "$LAPTOP_KNOWN"
+  printf ' (and on the server: ssh %s pct exec %s -- ssh-keygen -R %s -f %s)' "$PROXMOX" "$CT" "$DESKTOP_ADDRESS" "$SERVER_KNOWN"
+}
+
+confirmed() { [ -n "$trusted_fingerprint" ] && [ "$(fingerprint_of "$1")" = "$trusted_fingerprint" ]; }
+
+: > "$work/pinned"
+replaced_record=""
+while read -r _host type key _rest; do
+  [ -n "${key:-}" ] || continue
+  recorded=$(awk -v t="$type" '$2 == t {print $3}' "$work/trusted" | sort -u)
+  changed=""
+  if [ -n "$recorded" ] && ! printf '%s\n' "$recorded" | grep -qxF "$key"; then
+    changed=yes
+  fi
+  if [ -n "$changed" ] && ! confirmed "$_host $type $key"; then
+    now=$(fingerprint_of "$_host $type $key")
+    fail "the desktop's $type host key has CHANGED since it was last trusted (now $now). Nothing was pinned. If the VM was rebuilt, compare $now with 'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub' (or the matching key type) on the VM console, then rerun with --trust-fingerprint $now. $(old_record_help)"
+  fi
+  if [ -n "$changed" ]; then
+    replaced_record=yes
+  fi
+  if [ -n "$recorded" ] || confirmed "$_host $type $key"; then
+    printf '%s %s %s\n' "$ALIAS" "$type" "$key" >> "$work/pinned"
+  fi
+done < "$work/scanned"
+
+if [ ! -s "$work/pinned" ]; then
+  echo "No earlier record of the desktop's host key to check against. Its keys now:" >&2
+  while read -r line; do fingerprint_of "$line" >&2; done < "$work/scanned"
+  fail "compare with 'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub' on the VM console, then rerun with --trust-fingerprint SHA256:..."
+fi
+
+install -m 644 "$work/pinned" "$PINNED"
+echo "Pinned $(wc -l < "$PINNED") host key(s) for $ALIAS in $PINNED:"
+while read -r line; do echo "  $(fingerprint_of "$line")"; done < "$PINNED"
+echo "Deploy to put it on the server."
+if [ -n "$replaced_record" ]; then
+  echo "This replaced a changed key. $(old_record_help)"
+fi

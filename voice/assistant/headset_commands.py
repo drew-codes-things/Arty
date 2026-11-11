@@ -1,5 +1,7 @@
 import re
 
+from player_names import YOUTUBE_NAMES
+
 FILLER = r"(?:please |can you |could you |would you |just )*"
 END = r"[\s.!?,]*(?:please)?[\s.!?]*$"
 MUSIC = r"(?: (?:the |my )?(?:music|song|track|spotify|it|playback))?"
@@ -16,6 +18,23 @@ MEDIA_COMMANDS = [
     (re.compile(rf"^{FILLER}(?:turn (?:it|the music|the volume) up|volume up|louder){END}", re.IGNORECASE), "volume_up"),
     (re.compile(rf"^{FILLER}(?:turn (?:it|the music|the volume) down|volume down|quieter){END}", re.IGNORECASE), "volume_down"),
 ]
+
+PLAY_VERB = r"(?:play|put on|stick on)"
+PLAYER_SUFFIX = r"(?: (?:on|in|with|from) .+?)?"
+PLAY_SKIP_COMMANDS = [
+    (re.compile(rf"^{FILLER}play (?:the )?next (?:song|track|one){PLAYER_SUFFIX}{END}", re.IGNORECASE), "media_next"),
+    (re.compile(rf"^{FILLER}play (?:the )?(?:previous|last) (?:song|track|one){PLAYER_SUFFIX}{END}", re.IGNORECASE), "media_previous"),
+]
+PLAY_ON_APP = re.compile(rf"^{FILLER}{PLAY_VERB}\s+(?P<query>.+)\s+(?:on|from|in|using)\s+(?P<app>.+?){END}", re.IGNORECASE)
+PLAY_LEADING_YOUTUBE = re.compile(rf"^{FILLER}(?P<app>youtube(?: music)?),?\s+{PLAY_VERB}\s+(?P<query>.+?){END}", re.IGNORECASE)
+PLAY_BARE = re.compile(rf"^{FILLER}{PLAY_VERB}\s+(?P<query>.+?){END}", re.IGNORECASE)
+SONG_HINTS = re.compile(r"\b(?:by|playlist|album|song|track|mix|music|radio)\b", re.IGNORECASE)
+KNOWN_PLAYERS = YOUTUBE_NAMES | {"deezer", "tidal", "soundcloud", "apple music", "amazon music", "pandora", "plex", "vlc", "netflix",
+                                  "twitch", "prime video", "disney plus", "tiktok"}
+VAGUE_QUERIES = {"it", "that", "this", "something", "anything", "one"}
+APP_PREFIX = re.compile(r"^(?:the|my)\s+", re.IGNORECASE)
+APP_SUFFIX = re.compile(r"\s+(?:app|application)$", re.IGNORECASE)
+DEFAULT_MUSIC_APP = "YouTube"
 
 OPEN_APP = re.compile(rf"^{FILLER}(?:open(?: up)?|launch|start up|load up|bring up)\s+(?:the |my )?(?P<app>.+?)(?: app| application)?{END}",
                       re.IGNORECASE)
@@ -41,15 +60,51 @@ def parse_volume(command: str) -> dict | None:
     return None
 
 
+def parse_play(text: str) -> dict | None:
+    if match := PLAY_LEADING_YOUTUBE.match(text):
+        return play_on(match.group("app"), match.group("query"))
+    if match := PLAY_ON_APP.match(text):
+        name = APP_PREFIX.sub("", match.group("app").strip(" ,."))
+        named_as_app = bool(APP_SUFFIX.search(name))
+        name = APP_SUFFIX.sub("", name)
+        if name.lower() == "spotify":
+            return spotify_play(match.group("query"))
+        if name.lower() in KNOWN_PLAYERS or named_as_app:
+            return play_on(name, match.group("query"))
+    if match := PLAY_BARE.match(text):
+        query = match.group("query")
+        if SONG_HINTS.search(query):
+            return play_on(DEFAULT_MUSIC_APP, query)
+    return None
+
+
+def is_a_song_request(query: str) -> bool:
+    return bool(query) and query.lower() not in VAGUE_QUERIES
+
+
+def play_on(app: str, query: str) -> dict | None:
+    query = query.strip(" ,.")
+    return {"action": "play_on", "app": app.strip(" ,."), "query": query} if is_a_song_request(query) else None
+
+
+def spotify_play(query: str) -> dict | None:
+    query = query.strip(" ,.")
+    return {"action": "spotify_play", "query": query} if is_a_song_request(query) else None
+
+
 def parse(command: str) -> dict | None:
     text = " ".join(command.split())
+    for pattern, action in PLAY_SKIP_COMMANDS:
+        if pattern.match(text):
+            return {"action": action}
     for pattern in (SPOTIFY_PLAY, SPOTIFY_PLAY_LEADING):
         if match := pattern.match(text):
-            query = match.group("query").strip(" ,.")
-            return {"action": "spotify_play", "query": query} if query else None
+            return spotify_play(match.group("query"))
     for pattern, action in MEDIA_COMMANDS:
         if pattern.match(text):
             return {"action": action}
+    if play := parse_play(text):
+        return play
     if match := OPEN_APP.match(text):
         app = match.group("app").strip(" ,.")
         return {"action": "open_app", "app": app} if app else None

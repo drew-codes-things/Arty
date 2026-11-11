@@ -28,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
@@ -42,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -49,9 +51,14 @@ import androidx.compose.ui.unit.dp
 import app.arty.core.ArtyClient
 import app.arty.core.ArtyConfig
 import app.arty.core.ArtyException
+import app.arty.core.SetupCode
+import app.arty.core.SetupCodeException
 import app.arty.notify.LiveConnection
 import app.arty.ui.ArtyColors
 import app.arty.ui.ArtyTheme
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,10 +74,12 @@ class SetupActivity : ComponentActivity() {
         enableEdgeToEdge(SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         val existing = Connection.current(this)
+        val notice = Connection.takeUnreadableNotice(this)
         setContent {
             ArtyTheme {
                 SetupScreen(
                     existing = existing,
+                    notice = notice,
                     onConnected = { config -> connected(config) },
                     onCancel = if (existing != null) ({ finish() }) else null,
                 )
@@ -109,16 +118,39 @@ private fun tryConnecting(config: ArtyConfig): String? = try {
     "That address answered, but not like Arty's brain does. Check the address, and that Cloudflare Access lets the service token in."
 }
 
+private fun scanSetupCode(context: Context, onScanned: (String) -> Unit, onProblem: (String) -> Unit) {
+    val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+    GmsBarcodeScanning.getClient(context, options).startScan()
+        .addOnSuccessListener { barcode -> onScanned(barcode.rawValue.orEmpty()) }
+        .addOnFailureListener { error ->
+            onProblem("Couldn't open the code scanner (${error.message}). Type the details in instead.")
+        }
+}
+
+private val WHERE_TO_FIND_THE_DETAILS = """
+Brain address: https://arty.<your domain> away from home, or http://<the brain's address>:8081 on your home network.
+
+API key: on the machine running the brain, in /srv/ai/secrets/arty-api.txt. Arty on your computer has it too, as api_key in its arty_config.yaml.
+
+Cloudflare Access client ID and secret: Cloudflare dashboard > Zero Trust > Access controls > Service credentials > Service Tokens. The secret is only shown when a token is made. If it's lost, choose Rotate secret on that token (or make a new token and add it to the Arty API application's Service Auth policy). Arty on your computer has them as access_client_id and access_client_secret.
+
+The full guide is docs/connecting-a-phone.md in Arty's source.
+""".trim()
+
 @Composable
-private fun SetupScreen(existing: ArtyConfig?, onConnected: (ArtyConfig) -> Unit, onCancel: (() -> Unit)?) {
+private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (ArtyConfig) -> Unit, onCancel: (() -> Unit)?) {
     var address by rememberSaveable { mutableStateOf(existing?.baseUrl.orEmpty()) }
     var apiKey by rememberSaveable { mutableStateOf(existing?.apiKey.orEmpty()) }
     var behindAccess by rememberSaveable { mutableStateOf(!existing?.accessClientId.isNullOrEmpty()) }
     var clientId by rememberSaveable { mutableStateOf(existing?.accessClientId.orEmpty()) }
     var clientSecret by rememberSaveable { mutableStateOf(existing?.accessClientSecret.orEmpty()) }
-    var problem by rememberSaveable { mutableStateOf<String?>(null) }
+    var problem by rememberSaveable { mutableStateOf(notice) }
+    var cameFromScan by rememberSaveable { mutableStateOf(false) }
     var connecting by rememberSaveable { mutableStateOf(false) }
+    var typingIn by rememberSaveable { mutableStateOf(existing != null) }
+    var showingHelp by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     val ready = address.isNotBlank() && apiKey.isNotBlank() && (!behindAccess || (clientId.isNotBlank() && clientSecret.isNotBlank()))
     fun connect() {
@@ -139,6 +171,22 @@ private fun SetupScreen(existing: ArtyConfig?, onConnected: (ArtyConfig) -> Unit
             if (failure == null) onConnected(config) else problem = failure
         }
     }
+    fun useScanned(scanned: String) {
+        val code = try {
+            SetupCode.parse(scanned)
+        } catch (error: SetupCodeException) {
+            problem = error.message
+            return
+        }
+        address = code.address
+        apiKey = code.apiKey
+        behindAccess = code.accessClientId.isNotEmpty()
+        clientId = code.accessClientId
+        clientSecret = code.accessClientSecret
+        problem = null
+        cameFromScan = true
+        typingIn = true
+    }
 
     Column(
         Modifier.fillMaxSize().artyBackground().systemBarsPadding().imePadding()
@@ -147,10 +195,28 @@ private fun SetupScreen(existing: ArtyConfig?, onConnected: (ArtyConfig) -> Unit
     ) {
         Text("Connect to Arty", style = MaterialTheme.typography.headlineSmall, color = ArtyColors.Text)
         Text(
-            "Enter where your Arty brain is and its API key. They're kept encrypted on this phone, and only sent to that address.",
+            "Scan the setup code from Arty on your computer, or enter where your Arty brain is and its API key. They're kept encrypted on this phone, and only sent to that address.",
             style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextDim,
         )
-        SetupField("Brain address", address, { address = it }, "https://arty.example.com or http://arty-server:8081", KeyboardType.Uri)
+        if (!typingIn) {
+            Button(
+                enabled = !connecting, onClick = { scanSetupCode(context, ::useScanned) { problem = it } },
+                colors = ButtonDefaults.buttonColors(containerColor = ArtyColors.Signal, contentColor = ComposeColor.White),
+                shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth(),
+            ) { Text("Scan QR code") }
+            OutlinedButton(
+                enabled = !connecting, onClick = { typingIn = true },
+                shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth(),
+            ) { Text("Enter details manually", color = ArtyColors.Text) }
+            Text(
+                "The QR code is in Arty on your computer: open its tray menu and choose Phone setup code.",
+                style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextDim,
+            )
+            problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Signal) }
+            if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel", color = ArtyColors.TextDim) }
+            return@Column
+        }
+        SetupField("Brain address", address, { address = it; cameFromScan = false }, "https://arty.example.com or http://arty-server:8081", KeyboardType.Uri)
         SetupField("API key", apiKey, { apiKey = it }, "The brain's Arty API key", KeyboardType.Password, secret = true)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -166,6 +232,18 @@ private fun SetupScreen(existing: ArtyConfig?, onConnected: (ArtyConfig) -> Unit
             SetupField("Service token client ID", clientId, { clientId = it }, "....access", KeyboardType.Ascii)
             SetupField("Service token client secret", clientSecret, { clientSecret = it }, "", KeyboardType.Password, secret = true)
         }
+        TextButton(onClick = { showingHelp = !showingHelp }) {
+            Text(if (showingHelp) "Hide help" else "Where do I find these?", color = ArtyColors.TextDim)
+        }
+        if (showingHelp) Text(WHERE_TO_FIND_THE_DETAILS, style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextDim)
+        if (cameFromScan) {
+            val sentTo = Connection.hostOf(address)
+            Text(
+                if (sentTo != null) "These came from a setup code. Connect will send them to $sentTo: only go ahead if that's your Arty."
+                else "These came from a setup code, but its address can't be used. Fix the address above before connecting.",
+                style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Text,
+            )
+        }
         problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Signal) }
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -176,6 +254,9 @@ private fun SetupScreen(existing: ArtyConfig?, onConnected: (ArtyConfig) -> Unit
             ) { Text(if (connecting) "Connecting..." else "Connect") }
             if (connecting) CircularProgressIndicator(Modifier.size(20.dp), color = ArtyColors.Signal, strokeWidth = 2.dp)
             if (onCancel != null && !connecting) TextButton(onClick = onCancel) { Text("Cancel", color = ArtyColors.TextDim) }
+        }
+        TextButton(enabled = !connecting, onClick = { scanSetupCode(context, ::useScanned) { problem = it } }) {
+            Text("Scan QR code instead", color = ArtyColors.TextDim)
         }
     }
 }

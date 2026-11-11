@@ -125,3 +125,47 @@ def test_events_round_trip_with_data_and_payload():
         reader.feed_eof()
         return await satellite.read_event(reader)
     assert run(read_back()) == ("audio-chunk", {"rate": 16000}, b"\x00\x01")
+
+
+@pytest.mark.parametrize("audio_format", [
+    {"rate": 10 ** 9, "width": 2, "channels": 1},
+    {"rate": 16000, "width": 4, "channels": 1},
+    {"rate": 16000, "width": 2, "channels": 64},
+    {"rate": "fast", "width": 2, "channels": 1},
+    {"rate": [16000], "width": 2, "channels": 1},
+    {"rate": float("inf"), "width": 2, "channels": 1},
+])
+def test_an_audio_format_that_could_lift_the_listening_cap_is_hung_up_on(audio_format):
+    senses = FakeSenses()
+    with pytest.raises((satellite.HungUp, ConnectionError)):
+        run(talk(senses, {"127.0.0.1"}, event("audio-start", audio_format), event("describe")))
+    assert senses.heard == []
+
+
+def test_too_much_text_to_speak_is_an_error_and_is_not_spoken():
+    senses = FakeSenses()
+    too_long = "word " * satellite.MAX_SPEAK_CHARS
+    [(kind, data, _)] = run(talk(senses, {"127.0.0.1"}, event("synthesize", {"text": too_long})))
+    assert kind == "error"
+    assert senses.said == []
+
+
+@pytest.mark.parametrize("rate", [float("inf"), float("nan"), "fast", [16000], 16000.9, "44100", True, 10 ** 400])
+def test_every_bad_rate_is_a_value_error_the_connection_handler_logs(rate):
+    with pytest.raises(ValueError):
+        satellite.checked_audio_format({"rate": rate}, {"rate": 16000, "width": 2, "channels": 1})
+
+
+def test_a_rate_sent_as_a_whole_float_is_accepted():
+    audio_format = satellite.checked_audio_format({"rate": 16000.0}, {"rate": 16000, "width": 2, "channels": 1})
+    assert audio_format == {"rate": 16000, "width": 2, "channels": 1}
+
+
+def test_channels_sent_as_a_boolean_are_refused():
+    with pytest.raises(ValueError):
+        satellite.checked_audio_format({"channels": True}, {"rate": 16000, "width": 2, "channels": 1})
+
+
+def test_zero_values_in_an_audio_start_use_the_current_format():
+    current = {"rate": 16000, "width": 2, "channels": 1}
+    assert satellite.checked_audio_format({"rate": 0, "width": 0, "channels": 0}, current) == current

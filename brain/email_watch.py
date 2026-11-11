@@ -23,6 +23,7 @@ MAX_EMAILS = 15
 CHECK_EVERY_SECONDS = 30 * 60
 DEFAULT_QUIET_HOURS = (22, 8)   # no pushes from 22:00 to 08:00; anything new waits for the next check after
 REMEMBERED = 500
+REMEMBER_SECONDS = 4 * 24 * 3600
 
 REQUEST = re.compile(r"\b(important|urgent)\b[^.?!]{0,30}\b(e-?mails?|inbox|mail)\b|\b(e-?mails?|inbox)\b[^.?!]{0,30}\b(important|urgent)\b"
                      r"|\bsummari[sz]e (my |the )?(e-?mails?|inbox)\b|\banything (important|urgent|i need to (know|do))\b[^.?!]{0,20}\b(e-?mails?|inbox|mail)\b",
@@ -96,8 +97,20 @@ def parse(listing: str) -> list[dict]:
     return [match.groupdict() for match in map(LINE.match, (listing or "").splitlines()) if match]
 
 
+def hashed(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
 def key(email: dict) -> str:
-    return hashlib.sha256(f"{email['email']}|{email['subject']}|{email['when']}".encode()).hexdigest()[:16]
+    return hashed(f"{email['email']}|{email['subject']}|{email['preview']}")
+
+
+def legacy_key(email: dict) -> str:
+    return hashed(f"{email['email']}|{email['subject']}|{email['when']}")
+
+
+def already_sent(email: dict, notified: list[str]) -> bool:
+    return key(email) in notified or legacy_key(email) in notified
 
 
 def from_a_person(email: dict) -> bool:
@@ -200,17 +213,26 @@ def unread(call_tool) -> str:
     return f"{count}:\n\n{lines}\n\nAsk \"any important emails?\" for the ones that matter, or ask me to read one."
 
 
-def _load() -> list[str]:
+def _state() -> dict:
     try:
-        return json.loads(STATE_FILE.read_text()).get("notified", [])
+        state = json.loads(STATE_FILE.read_text())
     except (OSError, ValueError):
-        return []
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _load() -> list[str]:
+    state, now = _state(), time.time()
+    times = state.get("times") or {}
+    return [key for key in state.get("notified", []) if now - times.get(key, now) < REMEMBER_SECONDS]
 
 
 def _save(notified: list[str]):
+    earlier, now = _state().get("times") or {}, time.time()
+    kept = notified[-REMEMBERED:]
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = STATE_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"notified": notified[-REMEMBERED:]}))
+    temporary.write_text(json.dumps({"notified": kept, "times": {key: earlier.get(key, now) for key in kept}}))
     temporary.replace(STATE_FILE)
 
 
@@ -236,7 +258,11 @@ def check_new(call_tool, complete, send):
             log.info("email watch skipped: %s", problem[:160])
             return
         notified = _load()
-        new = [email for email in emails if key(email) not in notified]
+        carried_over = [key(email) for email in emails if legacy_key(email) in notified and key(email) not in notified]
+        if carried_over:
+            notified = notified + carried_over
+            _save(notified)
+        new = [email for email in emails if not already_sent(email, notified)]
         if not new:
             return
         important = judge(new, complete)

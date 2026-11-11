@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqdEJ9BEyoDV8OceSa+DmO6uhb24LuDb9gRs4QSxNdjDVo/gwd8qi/WQ7Xd1Fe8ApG1S/kSEbItsI1wrqF8m6V+opAKl4YCTuSFmOjZ90kqTodxfkSZwM6Q6eVtqxVU4eieQyVU+/bM15/CVygUiJLOqqi+d6uRu87fTYaamlF4/B0PeM+fnj/qRwuwKwoFUBJyXnHKVnoELPyXpK11ProiYye0gV7rNvNW5ZQ+ndb4Sgtwr4OXvog9xEDbTYtsFgdV3ByMaWxqtTz1lh9md/laN/ZK3f3Ix2BCMNUrnnLMM8loXRmMTFowaoNNFZ5Ms0vjxkL4t74ciO+i4dx6vrGQIDAQAB",
   "name": "Arty for Chrome",
-  "version": "1.1",
+  "version": "1.3",
   "description": "Lets Arty Desktop use this browser for you: open, read, click and type in your tabs.",
   "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" },
-  "permissions": ["tabs", "scripting", "alarms"],
+  "permissions": ["tabs", "scripting", "alarms", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
-  "action": { "default_title": "Arty for Chrome", "default_icon": { "16": "icon16.png", "48": "icon48.png" } }
+  "action": { "default_title": "Arty for Chrome", "default_popup": "popup.html", "default_icon": { "16": "icon16.png", "48": "icon48.png" } }
 }

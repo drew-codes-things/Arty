@@ -23,10 +23,25 @@ android {
         applicationId = "app.arty.quest"
         minSdk = 34
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        buildConfigField("String", "HEADSET_URL", secret("quest.headsetUrl"))
-        buildConfigField("String", "HEADSET_TOKEN", secret("quest.headsetToken"))
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    flavorDimensions += "connection"
+    productFlavors {
+        create("personal") {
+            dimension = "connection"
+            buildConfigField("String", "HEADSET_URL", secret("quest.headsetUrl"))
+            buildConfigField("String", "HEADSET_TOKEN", secret("quest.headsetToken"))
+            buildConfigField("boolean", "MANUAL_KEY_ALLOWED", "true")
+        }
+        create("shareable") {
+            dimension = "connection"
+            applicationIdSuffix = ".shareable"
+            buildConfigField("String", "HEADSET_URL", "\"\"")
+            buildConfigField("String", "HEADSET_TOKEN", "\"\"")
+            buildConfigField("boolean", "MANUAL_KEY_ALLOWED", "false")
+        }
     }
 
     signingConfigs {

@@ -10,6 +10,7 @@ import uuid
 from dataclasses import asdict, dataclass
 
 ROLES = ("pc", "assistant")
+SEEN_PRECISION_SECONDS = 60
 SYSTEMS = ("debian", "windows", "assistant")
 
 
@@ -77,12 +78,15 @@ class DeviceStore:
                     None)
 
     def touch(self, device_id: str) -> None:
+        now = time.time()
         with self._lock:
             devices = self.list()
-            for device in devices:
-                if device.id == device_id:
-                    device.last_seen = time.time()
-            self._save(devices)
+            stale = [device for device in devices
+                     if device.id == device_id and now - device.last_seen >= SEEN_PRECISION_SECONDS]
+            for device in stale:
+                device.last_seen = now
+            if stale:
+                self._save(devices)
 
     def revoke(self, device_id: str) -> bool:
         with self._lock:

@@ -28,6 +28,8 @@ CHUNK_WORDS = 1800        # about 2,500 tokens: room for the instructions and th
 MAX_CARDS = 15
 TITLE_CHARS = 80
 TRANSCRIBE_TIMEOUT_SECONDS = 5 * 3600
+LECTURE_NOTE_CHARS = 200_000
+IDLE_WAIT_SECONDS = 60
 
 SECTION_PROMPT = """You are writing revision notes from part {part} of {parts} of a recorded lesson called "{title}".
 The transcript comes from speech recognition, so fix obvious mis-heard words from context.
@@ -139,6 +141,18 @@ def parse_cards(reply: str) -> list[tuple[str, str]]:
 def process(lecture: dict, complete) -> dict:
     """Transcript -> notes -> cards for one lecture. complete(prompt, json_mode) asks the model.
     Returns the fields to store; raises LectureError when it can't be done."""
+    transcript = lecture.get("transcript") or _transcribe(lecture)
+    notes = lecture.get("notes") or _write_notes(lecture, transcript, complete)
+    topic = lecture["title"].lower()
+    cards = parse_cards(complete(CARDS_PROMPT.format(title=lecture["title"], limit=MAX_CARDS, notes=notes), True))
+    added = [personal.card_add(topic, question, answer) for question, answer in cards if not _has_card(topic, question)]
+    note = f"Lecture notes: {lecture['title']} ({datetime.fromtimestamp(lecture['created']):%d %b %Y})\n\n{notes}"
+    if not _has_note(note):
+        personal.note_save(note, LECTURE_NOTE_CHARS)
+    return {"status": "done", "notes": notes, "cards": len(added), "error": None}
+
+
+def _transcribe(lecture: dict) -> str:
     meta = media.get(lecture["file_id"] or "")
     if meta is None:
         raise LectureError("The recording had expired before Arty got to it (uploads are kept for a day). Send it again.")
@@ -148,6 +162,10 @@ def process(lecture: dict, complete) -> dict:
     if not transcript:
         raise LectureError("No speech was found in the recording.")
     _update(lecture["id"], status="writing notes", transcript=transcript)
+    return transcript
+
+
+def _write_notes(lecture: dict, transcript: str, complete) -> str:
     parts = chunks(transcript)
     section_notes = [complete(SECTION_PROMPT.format(part=index, parts=len(parts), title=lecture["title"], text=part)).strip()
                      for index, part in enumerate(parts, 1)]
@@ -156,21 +174,47 @@ def process(lecture: dict, complete) -> dict:
     if not notes:
         raise LectureError("Arty couldn't write notes from the transcript.")
     _update(lecture["id"], status="making cards", notes=notes)
-    topic = lecture["title"].lower()
-    cards = parse_cards(complete(CARDS_PROMPT.format(title=lecture["title"], limit=MAX_CARDS, notes=notes), True))
-    for question, answer in cards:
-        personal.card_add(topic, question, answer)
-    personal.note_save(f"Lecture notes: {lecture['title']} ({datetime.fromtimestamp(lecture['created']):%d %b %Y})\n\n{notes}")
-    return {"status": "done", "notes": notes, "cards": len(cards), "error": None}
+    return notes
+
+
+def _has_card(topic: str, question: str) -> bool:
+    with store.connect() as connection:
+        return connection.execute("SELECT 1 FROM cards WHERE topic = ? AND question = ?", (topic[:80], question[:500])).fetchone() is not None
+
+
+def _has_note(text: str) -> bool:
+    with store.connect() as connection:
+        return connection.execute("SELECT 1 FROM notes WHERE text = ?", (text[:LECTURE_NOTE_CHARS],)).fetchone() is not None
+
+
+def keep_queued_recordings():
+    with store.connect() as connection:
+        waiting = [row["file_id"] for row in connection.execute("SELECT file_id FROM lectures WHERE status NOT IN ('done', 'failed')")]
+    for file_id in waiting:
+        if file_id:
+            media.touch(file_id)
+
+
+def _queued() -> dict | None:
+    keep_queued_recordings()
+    with store.connect() as connection:
+        return _row(connection.execute("SELECT * FROM lectures WHERE status = 'queued' ORDER BY id LIMIT 1").fetchone())
+
+
+def next_queued(find=_queued) -> dict | None:
+    try:
+        return find()
+    except Exception:
+        log.exception("couldn't read the lecture queue")
+        return None
 
 
 def worker(complete, announce):
     """Runs forever: one queued lecture at a time. announce(title, message) tells the user."""
     while True:
-        with store.connect() as connection:
-            lecture = _row(connection.execute("SELECT * FROM lectures WHERE status = 'queued' ORDER BY id LIMIT 1").fetchone())
+        lecture = next_queued()
         if lecture is None:
-            _wake.wait(timeout=60)
+            _wake.wait(timeout=IDLE_WAIT_SECONDS)
             _wake.clear()
             continue
         log.info("lecture %s: %s", lecture["id"], lecture["title"])
@@ -181,7 +225,10 @@ def worker(complete, announce):
         except Exception as error:  # one bad lecture mustn't stop the worker
             log.exception("lecture %s failed", lecture["id"])
             outcome = {"status": "failed", "error": f"something went wrong ({error})"}
-        _update(lecture["id"], **outcome)
+        try:
+            _update(lecture["id"], **outcome)
+        except Exception:
+            log.exception("couldn't save lecture %s", lecture["id"])
         if outcome["status"] == "done":
             announce(f"📝 Lecture notes ready: {lecture['title']}",
                      f"Notes saved, and {outcome['cards']} revision cards added. Open Lectures in the app to read them, "

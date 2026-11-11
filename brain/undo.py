@@ -32,23 +32,26 @@ def is_request(text: str) -> bool:
     return bool(REQUEST.search(text or ""))
 
 
-def newest(connection, since: float):
+def newest(connection, since: float, until: float = float("inf")):
     """(table, row id, created, label column value, list name or None) of the newest recent row, or None."""
     found = None
     for table, label, _ in KINDS:
         columns = f"id, created, {label}" + (", list" if table == "list_items" else "")
-        row = connection.execute(f"SELECT {columns} FROM {table} WHERE created >= ? ORDER BY created DESC LIMIT 1",
-                                 (since,)).fetchone()
+        row = connection.execute(f"SELECT {columns} FROM {table} WHERE created >= ? AND created <= ? ORDER BY created DESC LIMIT 1",
+                                 (since, until)).fetchone()
         if row and (found is None or row[1] > found[2]):
             found = (table, row[0], row[1], row[2], row[3] if table == "list_items" else None)
     return found
 
 
-def undo_last(now: float | None = None) -> str:
+def undo_last(now: float | None = None, made_between: tuple[float, float] | None = None) -> str:
     """Removes the newest thing made in the last UNDO_WINDOW_SECONDS and says what it was."""
     now = time.time() if now is None else now
+    since, until = now - UNDO_WINDOW_SECONDS, now
+    if made_between is not None:
+        since, until = max(since, made_between[0]), min(until, made_between[1])
     with store.write_lock, store.connect() as connection:
-        found = newest(connection, now - UNDO_WINDOW_SECONDS)
+        found = newest(connection, since, until)
         if found is None:
             return "There's nothing recent for me to undo: I haven't set or added anything in the last couple of hours."
         table, row_id, created, label, list_name = found

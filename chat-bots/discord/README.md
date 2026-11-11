@@ -35,7 +35,7 @@ apps.
 
 1. In the [Discord Developer Portal](https://discord.com/developers/applications), create an application with a
    bot, copy the bot token, turn on the **Message Content** intent, and allow User Install.
-2. Make a PufferPanel server on core-sys from Docker's `python:3.13-slim` image that runs `python -u arty_discord.py`.
+2. Make a PufferPanel server on your home server from Docker's `python:3.13-slim` image that runs `python -u arty_discord.py`.
    Install its one dependency into `./deps` in that folder: `pip install --target deps -r requirements.txt`.
 3. In its folder, create `config.env` (PufferPanel > Files):
 
@@ -58,7 +58,7 @@ After a deploy, restart the server in PufferPanel to run the new code.
 
 ## Tested On
 
-PufferPanel on core-sys (CT 100, Debian 12 bookworm), in Docker's `python:3.13-slim` image with discord.py 2.7.1,
+PufferPanel on the home server (a container, Debian 12 bookworm), in Docker's `python:3.13-slim` image with discord.py 2.7.1,
 with the brain on the homelab.
 
 ## License

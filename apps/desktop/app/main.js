@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const dependencies = require('./dependencies');
 const platform = require('./platform');
+const serviceProof = require('./service-proof');
 
 // The window stays on top and goes where it was left, which a native Wayland window
 // can't ask KDE for, so it runs as an X11 client (XWayland). The flag has to be on the
@@ -32,6 +33,8 @@ const DEFAULT_SOLIDITY = 0.85;
 const EXPLAIN_MAX_CHARS = 6000;
 const INSTALL_OUTPUT_CHARS = 1500;
 const PKEXEC_CANCELLED = new Set([126, 127]);
+const PROOF_RETRY_MS = 500;
+const PROOF_ATTEMPTS = 120;
 
 let win = null;
 let tray = null;
@@ -41,6 +44,8 @@ let restartCount = 0;
 let restartTimer = null;
 let lastHealthy = Date.now();
 let solidity = DEFAULT_SOLIDITY;
+let bridgeTrusted = false;
+const portWarning = serviceProof.createPortWarning();
 
 // ---------- the local service (server/arty_server.py) ----------
 
@@ -62,10 +67,47 @@ function serviceToken() {
   }
 }
 
-async function bridgeAlive() {
+async function askBridgeForProof() {
+  const nonce = serviceProof.newNonce();
   try {
-    const response = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(2000), headers: { 'X-Arty-Token': serviceToken() } });
-    return response.ok;
+    const response = await fetch(`${BRIDGE_URL}/whoami?nonce=${nonce}`, { signal: AbortSignal.timeout(2000) });
+    if (!response.ok) return { answered: true, proven: false };
+    const { proof } = await response.json();
+    return { answered: true, proven: serviceProof.proofMatches(proof, serviceToken(), nonce) };
+  } catch (error) {
+    return { answered: error?.name === 'SyntaxError', proven: false };
+  }
+}
+
+async function bridgeAlive() {
+  const { answered, proven } = await askBridgeForProof();
+  bridgeTrusted = serviceProof.trustAfterCheck({ proven, answered, childAlive: !!bridge, trusted: bridgeTrusted });
+  if (proven) portWarning.reset();
+  return proven;
+}
+
+async function waitForNewBridgeToProveItself() {
+  for (let attempt = 0; attempt < PROOF_ATTEMPTS && bridge && !quitting; attempt += 1) {
+    if (await bridgeAlive()) return;
+    await new Promise((resolve) => setTimeout(resolve, PROOF_RETRY_MS));
+  }
+}
+
+async function warnPortTaken() {
+  if (!portWarning.shouldShow()) return;
+  const { response } = await dialog.showMessageBox({
+    type: 'error', buttons: ['Quit Arty', 'Keep waiting'], defaultId: 0, cancelId: 1,
+    title: 'Something else is using Arty’s port',
+    message: 'Something else is using Arty’s port',
+    detail: `A program that isn’t Arty’s local service is answering on ${BRIDGE_URL}. Arty won’t send it anything, and its window stays locked until its own service answers there. Close that program, or quit Arty.`,
+  });
+  if (response === 0) app.quit();
+}
+
+async function portTakenBySomethingElse() {
+  try {
+    await fetch(`${BRIDGE_URL}/whoami?nonce=${serviceProof.newNonce()}`, { signal: AbortSignal.timeout(2000) });
+    return true;
   } catch {
     return false;
   }
@@ -73,6 +115,11 @@ async function bridgeAlive() {
 
 async function startBridge() {
   if (await bridgeAlive()) return; // a dev run or an earlier copy already has it
+  if (await portTakenBySomethingElse()) {
+    bridgeTrusted = false;
+    warnPortTaken().catch((error) => console.error(`Arty: port warning failed: ${error}`));
+    return;
+  }
   const { root, data, python, script } = backend();
   if (!fs.existsSync(python) || !fs.existsSync(script)) {
     dialog.showErrorBox('Arty can’t find its local service', `Expected:\n  ${python}\n  ${script}\n\nRun ${platform.setupCommand()} in the project folder.`);
@@ -89,6 +136,7 @@ async function startBridge() {
   } catch {
     output = 'ignore';
   }
+  bridgeTrusted = false;
   bridge = spawn(python, [script], {
     cwd: root,
     windowsHide: true,
@@ -97,8 +145,10 @@ async function startBridge() {
   });
   bridge.on('exit', (code) => {
     bridge = null;
+    bridgeTrusted = false;
     if (!quitting) scheduleRestart(code);
   });
+  waitForNewBridgeToProveItself().catch((error) => console.error(`Arty: checking the new local service failed: ${error}`));
 }
 
 function run(command, args, options = {}) {
@@ -288,6 +338,8 @@ function createWindow() {
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.on('did-finish-load', () => win.webContents.send('transparency', solidity));
   win.on('moved', saveBounds);
@@ -351,6 +403,8 @@ function buildTray() {
     },
     { label: 'Start with the PC', type: 'checkbox', checked: autostartEnabled(), click: (item) => setAutostart(item.checked) },
     { label: 'Connect to another Arty…', click: () => { win.show(); win.focus(); win.webContents.send('connect'); } },
+    { label: 'Phone setup code…', click: () => { win.show(); win.focus(); win.webContents.send('phone-code'); } },
+    { label: 'Chrome sites…', click: () => { win.show(); win.focus(); win.webContents.send('chrome-sites'); } },
     { type: 'separator' },
     { label: 'Quit Arty', click: () => app.quit() },
   ]);
@@ -367,7 +421,7 @@ function setSolidity(value) {
 
 ipcMain.on('hide', () => win?.hide());
 ipcMain.on('show', () => { win?.show(); win?.focus(); });
-ipcMain.on('token', (event) => { event.returnValue = serviceToken(); });
+ipcMain.on('token', (event) => { event.returnValue = bridgeTrusted ? serviceToken() : ''; });
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

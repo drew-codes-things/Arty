@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep Arty's desktop VM off the home network (internet and DNS stay open)
+After=network-pre.target
+Before=pve-guests.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/arty/desktop-egress.nft
+ExecReload=/usr/sbin/nft -f /etc/arty/desktop-egress.nft
+
+[Install]
+WantedBy=multi-user.target

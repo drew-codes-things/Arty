@@ -1,12 +1,13 @@
 """The homelab: Proxmox status, desktop snapshots, Uptime Kuma and Nextcloud.
 
 Proxmox access is an API token for `ai@pve` that can read status everywhere and
-snapshot only VM 105 (the assistant's desktop); it can't start, stop, change or
+snapshot only the assistant's desktop VM; it can't start, stop, change or
 delete anything else. Nextcloud access is a separate `arty` account, so it only
-sees what Drew shares with it. PufferPanel access is an OAuth client limited to
+sees what the owner shares with it. PufferPanel access is an OAuth client limited to
 viewing, starting and stopping game servers. Each part switches itself off when its secret is missing.
 """
 import base64
+import ipaddress
 import json
 import os
 import re
@@ -21,13 +22,14 @@ import xml.etree.ElementTree as ElementTree
 
 from mcp.server.fastmcp import FastMCP
 
-from remote import clip, load_env_file, quoted, ssh
+from remote import (PRIVATE_EXIT, PRIVATE_REFUSAL, clip, load_env_file, private_path, quoted,
+                    resolve_outside_private_folders, ssh)
 from remote import text as remote_text
 
 load_env_file(os.environ.get("HOMELAB_ENV", "/srv/ai/secrets/homelab.env"))
 
 PVE_URL = os.environ.get("PVE_URL", "").rstrip("/")
-PVE_NODE = os.environ.get("PVE_NODE", "servmox")
+PVE_NODE = os.environ.get("PVE_NODE", "")
 PVE_TOKEN = os.environ.get("PVE_TOKEN", "")
 PVE_CA = os.environ.get("PVE_CA", "/srv/ai/secrets/pve-root-ca.pem")
 DESKTOP_VMID = int(os.environ.get("DESKTOP_VMID", "105"))
@@ -51,6 +53,15 @@ GIB = 1024 ** 3
 
 mcp = FastMCP("homelab")
 _puffer_token = {"value": "", "expires": 0.0}
+_node_cache: dict[str, str] = {}
+UNREACHABLE = (urllib.error.URLError, TimeoutError, OSError)
+
+
+def _pve_context():
+    try:
+        return ssl.create_default_context(cafile=PVE_CA)
+    except (OSError, ssl.SSLError) as error:
+        raise RuntimeError(f"Proxmox's certificate file {PVE_CA} can't be read ({error}); set PVE_CA") from None
 
 
 def _pve(method: str, path: str, params: dict | None = None):
@@ -59,12 +70,25 @@ def _pve(method: str, path: str, params: dict | None = None):
     data = urllib.parse.urlencode(params).encode() if params and method != "GET" else None
     url = f"{PVE_URL}/api2/json{path}" + (f"?{urllib.parse.urlencode(params)}" if params and method == "GET" else "")
     request = urllib.request.Request(url, data=data, method=method, headers={"Authorization": f"PVEAPIToken={PVE_TOKEN}"})
-    context = ssl.create_default_context(cafile=PVE_CA)
+    context = _pve_context()
     try:
         with urllib.request.urlopen(request, timeout=30, context=context) as response:
             return json.loads(response.read())["data"]
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"Proxmox said {error.code}: {error.read().decode(errors='replace')[:200]}") from None
+    except UNREACHABLE as error:
+        raise RuntimeError(f"couldn't reach Proxmox at {PVE_URL}: {error}") from None
+
+
+def _node() -> str:
+    if PVE_NODE:
+        return PVE_NODE
+    if "name" not in _node_cache:
+        nodes = [item["node"] for item in _pve("GET", "/cluster/resources") if item.get("type") == "node" and item.get("node")]
+        if not nodes:
+            raise RuntimeError("Proxmox listed no host; set PVE_NODE")
+        _node_cache["name"] = nodes[0]
+    return _node_cache["name"]
 
 
 def _gib(value) -> str:
@@ -164,7 +188,7 @@ def weekly_report() -> str:
         if stamp and time.time() - stamp > BACKUP_STALE_DAYS * 86400:
             warnings.append(f"{vmid} {name} hasn't been backed up since {when}")
     try:
-        tasks = _pve("GET", f"/nodes/{PVE_NODE}/tasks", {"typefilter": "vzdump", "limit": 50, "source": "all"})
+        tasks = _pve("GET", f"/nodes/{_node()}/tasks", {"typefilter": "vzdump", "limit": 50, "source": "all"})
         for task in tasks:
             if task.get("status") not in ("OK", None) and time.time() - task.get("starttime", 0) < 7 * 86400:
                 warnings.append(f"a backup job failed on {time.strftime('%a %d %b', time.localtime(task['starttime']))}: {task.get('status')}")
@@ -193,11 +217,12 @@ def _guests() -> list[dict]:
     found = []
     for item in _pve("GET", "/cluster/resources", {"type": "vm"}):
         kind = "lxc" if item["type"] == "lxc" else "qemu"
-        config = _pve("GET", f"/nodes/{PVE_NODE}/{kind}/{item['vmid']}/config")
+        node = item.get("node") or _node()
+        config = _pve("GET", f"/nodes/{node}/{kind}/{item['vmid']}/config")
         net = str(config.get("net0", ""))
         ip = re.search(r"ip=(\d+\.\d+\.\d+\.\d+)", net) or re.search(r"ip=(\d+\.\d+\.\d+\.\d+)", str(config.get("ipconfig0", "")))
         mac = re.search(r"(?:hwaddr|virtio|e1000|vmxnet3)=([0-9A-Fa-f:]{17})", net)
-        found.append({"vmid": item["vmid"], "kind": kind, "name": item.get("name", ""), "status": item.get("status", ""),
+        found.append({"vmid": item["vmid"], "kind": kind, "node": node, "name": item.get("name", ""), "status": item.get("status", ""),
                       "ip": ip.group(1) if ip else None, "mac": mac.group(1).lower() if mac else None})
     return found
 
@@ -210,9 +235,42 @@ def _port_open(address: str, port: int) -> bool:
         return False
 
 
+def is_ip_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def addresses_of(name: str) -> list[str]:
+    try:
+        found = socket.getaddrinfo(name, None, socket.AF_INET, socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return []
+    return list(dict.fromkeys(entry[4][0] for entry in found))
+
+
+def matching_guest(guests: list[dict], address: str, resolved: list[str], guest_name: str) -> dict | None:
+    wanted = {address, *resolved}
+    by_address = next((g for g in guests if g["ip"] and g["ip"] in wanted), None)
+    if by_address:
+        return by_address
+    names = {guest_name.strip().lower()}
+    if not is_ip_address(address):
+        names.add(address.split(".", 1)[0].lower())
+    names.discard("")
+    return next((g for g in guests if g["name"].lower() in names), None)
+
+
 def _mac_answering(address: str) -> str | None:
     """The hardware address that answers for an IP on the local network, from the ARP table after a ping."""
-    subprocess.run(["ping", "-c", "1", "-W", "1", address], capture_output=True, timeout=5)
+    if not is_ip_address(address):
+        return None
+    try:
+        subprocess.run(["ping", "-c", "1", "-W", "1", address], capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
     for line in open("/proc/net/arp").read().splitlines()[1:]:
         parts = line.split()
         if parts and parts[0] == address and parts[3] != "00:00:00:00:00:00":
@@ -228,11 +286,11 @@ def diagnose(address: str, port: int = 0, guest_name: str = "") -> str:
         guests = _guests()
     except RuntimeError as error:
         return json.dumps({"summary": f"Couldn't read Proxmox: {error}", "fix": None})
-    guest = next((g for g in guests if g["ip"] == address), None) or \
-        next((g for g in guests if guest_name and g["name"].lower() == guest_name.lower()), None)
+    resolved = [] if is_ip_address(address) else addresses_of(address)
+    guest = matching_guest(guests, address, resolved, guest_name)
     where = f"{address}:{port}" if port else address
     if guest is None:
-        reachable = _port_open(address, port) if port else _mac_answering(address) is not None
+        reachable = _port_open(address, port) if port else _mac_answering(next(iter(resolved), address)) is not None
         return json.dumps({"summary": f"{where} isn't one of the Proxmox guests (it's {'answering' if reachable else 'not answering'} now). "
                                       "It may be an outside service or another device, so there's nothing for me to restart.", "fix": None})
     label = f"{'CT' if guest['kind'] == 'lxc' else 'VM'} {guest['vmid']} {guest['name']}"
@@ -243,9 +301,10 @@ def diagnose(address: str, port: int = 0, guest_name: str = "") -> str:
                            "fix": {"action": "start", "vmid": guest["vmid"], "name": label}})
     if port and _port_open(address, port):
         return json.dumps({"summary": f"{where} ({label}) is answering again now; it may have been a blip.", "fix": None})
-    answering = _mac_answering(address)
+    probe = guest["ip"] or next(iter(resolved), address)
+    answering = _mac_answering(probe)
     if answering and guest["mac"] and answering != guest["mac"]:
-        return json.dumps({"summary": f"Another device (hardware address {answering}) is using {address}, the address {label} is set to: "
+        return json.dumps({"summary": f"Another device (hardware address {answering}) is using {probe}, the address {label} is set to: "
                                       "an address clash, usually the router giving it to something else. Restarting won't help; "
                                       "the guest needs a different address or a reservation in the router.", "fix": None})
     if answering is None:
@@ -259,11 +318,14 @@ def _power(vmid: int, action: str) -> str:
     vmid = int(vmid)
     if vmid == SELF_VMID:
         return "That's my own container; I won't restart myself."
-    guest = next((g for g in _guests() if g["vmid"] == vmid), None)
+    try:
+        guest = next((g for g in _guests() if g["vmid"] == vmid), None)
+    except RuntimeError as error:
+        return f"Couldn't check the guests before trying to {action} {vmid}: {error}"
     if guest is None:
         return f"There's no guest {vmid}."
     try:
-        _pve("POST", f"/nodes/{PVE_NODE}/{guest['kind']}/{vmid}/status/{'start' if action == 'start' else 'reboot'}")
+        _pve("POST", f"/nodes/{guest.get('node') or _node()}/{guest['kind']}/{vmid}/status/{'start' if action == 'start' else 'reboot'}")
     except RuntimeError as error:
         return f"Proxmox refused to {action} {vmid}: {error}"
     return f"Asked Proxmox to {action} {guest['name']} ({vmid}). It usually takes under a minute to come back."
@@ -295,6 +357,8 @@ def _puffer_access_token() -> str:
             body = json.loads(response.read())
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"PufferPanel refused the login ({error.code}); check the OAuth client id and secret.") from None
+    except UNREACHABLE as error:
+        raise RuntimeError(f"couldn't reach PufferPanel at {PUFFER_URL}: {error}") from None
     if not body.get("access_token"):
         raise RuntimeError(f"PufferPanel gave no token: {body.get('error_description') or body.get('error') or 'no reason given'}")
     _puffer_token["value"] = body["access_token"]
@@ -312,6 +376,8 @@ def _puffer(method: str, path: str):
         if error.code == 401:
             _puffer_token["value"] = ""
         raise RuntimeError(f"PufferPanel said {error.code}: {error.read().decode(errors='replace')[:200]}") from None
+    except UNREACHABLE as error:
+        raise RuntimeError(f"couldn't reach PufferPanel at {PUFFER_URL}: {error}") from None
     return json.loads(raw) if raw.strip() else None
 
 
@@ -358,9 +424,8 @@ def pufferpanel_servers() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(description="Start, stop or restart one PufferPanel game server, by name or id. Needs the user's approval.")
 def pufferpanel_power(server: str, action: str) -> str:
-    """Start, stop or restart one PufferPanel game server, by name (e.g. "A+J") or id. Needs the user's approval."""
     action = action.strip().lower()
     if action not in PUFFER_ACTIONS:
         return f"Action must be one of {', '.join(PUFFER_ACTIONS)}."
@@ -375,31 +440,29 @@ def pufferpanel_power(server: str, action: str) -> str:
 
 
 def _desktop_snapshots() -> list[dict]:
-    snapshots = _pve("GET", f"/nodes/{PVE_NODE}/qemu/{DESKTOP_VMID}/snapshot")
+    snapshots = _pve("GET", f"/nodes/{_node()}/qemu/{DESKTOP_VMID}/snapshot")
     return sorted((s for s in snapshots if s.get("name") != "current"), key=lambda s: s.get("snaptime", 0))
 
 
-@mcp.tool()
+@mcp.tool(description="Take a snapshot of your own desktop computer (your desktop VM) so it can be rolled back if something goes wrong.\n"
+                       "Do this before risky changes. Only the newest few of your snapshots are kept.")
 def snapshot_desktop(note: str = "") -> str:
-    """Take a snapshot of your own desktop computer (VM 105) so it can be rolled back if something goes wrong.
-    Do this before risky changes. Only the newest few of your snapshots are kept."""
     name = f"{SNAPSHOT_PREFIX}{time.strftime('%Y%m%d_%H%M%S')}"
     try:
-        _pve("POST", f"/nodes/{PVE_NODE}/qemu/{DESKTOP_VMID}/snapshot", {"snapname": name, "description": (note or "taken by Arty")[:200], "vmstate": 0})
+        _pve("POST", f"/nodes/{_node()}/qemu/{DESKTOP_VMID}/snapshot", {"snapname": name, "description": (note or "taken by Arty")[:200], "vmstate": 0})
         deadline = time.time() + 120
         while time.time() < deadline and not any(s["name"] == name for s in _desktop_snapshots()):
             time.sleep(3)
         mine = [s for s in _desktop_snapshots() if s["name"].startswith(SNAPSHOT_PREFIX)]
-        for old in mine[:-SNAPSHOTS_KEPT]:
-            _pve("DELETE", f"/nodes/{PVE_NODE}/qemu/{DESKTOP_VMID}/snapshot/{old['name']}")
+        for old in mine[:max(0, len(mine) - max(1, SNAPSHOTS_KEPT))]:
+            _pve("DELETE", f"/nodes/{_node()}/qemu/{DESKTOP_VMID}/snapshot/{old['name']}")
     except RuntimeError as error:
         return f"snapshot failed: {error}"
     return f"snapshot {name} taken. You can roll back in Proxmox: VM {DESKTOP_VMID} > Snapshots."
 
 
-@mcp.tool()
+@mcp.tool(description="List the snapshots of your desktop computer (your desktop VM).")
 def list_desktop_snapshots() -> str:
-    """List the snapshots of your desktop computer (VM 105)."""
     try:
         snapshots = _desktop_snapshots()
     except RuntimeError as error:
@@ -452,6 +515,8 @@ def _dav(method: str, path: str, body: bytes | None = None, headers: dict | None
         if error.code == 404:
             raise RuntimeError("not found in Nextcloud") from None
         raise RuntimeError(f"Nextcloud said {error.code}") from None
+    except UNREACHABLE as error:
+        raise RuntimeError(f"couldn't reach Nextcloud at {NC_URL}: {error}") from None
 
 
 def _dav_entries(xml_body: bytes, base: str) -> list[str]:
@@ -520,7 +585,12 @@ def nextcloud_get(path: str) -> str:
 @mcp.tool(description="Upload a file from your computer to the user's Nextcloud, into the shared 'Arty' folder "
                        "(relative paths are in ~/projects).")
 def nextcloud_upload(local_path: str, name: str = "") -> str:
-    code, content = ssh(f"cat {quoted(local_path)}", timeout=300)
+    if private_path(local_path):
+        return PRIVATE_REFUSAL
+    reading = f"{resolve_outside_private_folders(quoted(local_path))} cat -- \"$target\""
+    code, content = ssh(reading, timeout=300, merge_errors=False)
+    if code == PRIVATE_EXIT:
+        return PRIVATE_REFUSAL
     if code != 0:
         return f"could not read {local_path}: {content.decode(errors='replace')[:200]}"
     filename = os.path.basename(name or local_path.rstrip("/")) or "upload"

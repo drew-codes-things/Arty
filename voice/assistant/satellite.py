@@ -16,6 +16,10 @@ MAX_HEADER_BYTES = 64 * 1024
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MAX_LISTEN_SECONDS = 30
 SAMPLE_WIDTH = 2
+LOWEST_RATE = 8000
+HIGHEST_RATE = 48000
+MOST_CHANNELS = 2
+MAX_SPEAK_CHARS = 12000
 COMMAND_BEAM_SIZE = 2
 WYOMING_VERSION = "1.0.0"
 ABOUT = {"name": "Arty", "url": "https://github.com/drew-codes-things/Arty"}
@@ -68,15 +72,31 @@ async def read_header(reader: asyncio.StreamReader) -> bytes:
     return line
 
 
+def object_from(value, what: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"the {what} isn't a JSON object")
+    return dict(value)
+
+
+def length_from(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"an event length isn't a whole number: {value!r}")
+    return int(value)
+
+
 async def read_event(reader: asyncio.StreamReader) -> tuple[str, dict, bytes]:
     header = json.loads(await read_header(reader))
-    data = dict(header.get("data") or {})
-    data_length = int(header.get("data_length") or 0)
-    payload_length = int(header.get("payload_length") or 0)
+    if not isinstance(header, dict):
+        raise ValueError("the event header isn't a JSON object")
+    data = object_from(header.get("data") or {}, "event data")
+    data_length = length_from(header.get("data_length"))
+    payload_length = length_from(header.get("payload_length"))
     if not (0 <= data_length <= MAX_BODY_BYTES and 0 <= payload_length <= MAX_BODY_BYTES):
         raise ValueError("the event is too large")
     if data_length:
-        data.update(json.loads(await read_exactly(reader, data_length)))
+        data.update(object_from(json.loads(await read_exactly(reader, data_length)), "event body"))
     payload = await read_exactly(reader, payload_length) if payload_length else b""
     return str(header.get("type", "")), data, payload
 
@@ -103,6 +123,26 @@ def wav_to_pcm(wav_bytes: bytes) -> tuple[bytes, int]:
         samples = numpy.frombuffer(frames, dtype="<i2").reshape(-1, channels).mean(axis=1)
         frames = samples.astype("<i2").tobytes()
     return frames, rate
+
+
+def whole_number(value, default: int) -> int:
+    if value is None:
+        return default
+    not_whole = isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not value.is_integer())
+    if not_whole:
+        raise ValueError(f"the audio format isn't made of whole numbers: {value!r}")
+    return int(value) or default
+
+
+def checked_audio_format(data: dict, current: dict) -> dict:
+    audio_format = {key: whole_number(data.get(key), value) for key, value in current.items()}
+    if not LOWEST_RATE <= audio_format["rate"] <= HIGHEST_RATE:
+        raise ValueError(f"the audio rate {audio_format['rate']} is outside {LOWEST_RATE} to {HIGHEST_RATE}")
+    if audio_format["width"] != SAMPLE_WIDTH:
+        raise ValueError(f"the audio is {audio_format['width'] * 8}-bit, only 16-bit is understood")
+    if not 1 <= audio_format["channels"] <= MOST_CHANNELS:
+        raise ValueError(f"the audio has {audio_format['channels']} channels, at most {MOST_CHANNELS} are understood")
+    return audio_format
 
 
 class Session:
@@ -134,11 +174,11 @@ class Session:
             elif kind == "audio-stop":
                 await self.transcribe()
             elif kind == "synthesize":
-                await self.speak(plain_speech(str(data.get("text") or "")))
+                await self.speak(str(data.get("text") or ""))
 
     def start_listening(self, kind: str, data: dict) -> None:
         if kind == "audio-start":
-            self.audio_format = {key: int(data.get(key) or value) for key, value in self.audio_format.items()}
+            self.audio_format = checked_audio_format(data, self.audio_format)
         self.heard.clear()
 
     async def transcribe(self) -> None:
@@ -153,7 +193,11 @@ class Session:
         log.info("satellite %s heard something (%d chars)", self.client, len(text))
         await self.send("transcript", {"text": text})
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, raw_text: str) -> None:
+        if len(raw_text) > MAX_SPEAK_CHARS:
+            await self.send("error", {"text": f"That's too much to speak at once (over {MAX_SPEAK_CHARS} characters)."})
+            return
+        text = plain_speech(raw_text)
         if not text:
             await self.send("error", {"text": "There was no text to speak."})
             return

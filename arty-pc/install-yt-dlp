@@ -1,0 +1,9 @@
+set -e
+case "${pinned:-}" in
+  *[!0-9.]*) echo "yt-dlp version may only hold digits and dots" >&2; exit 1 ;;
+esac
+[ -x ~/.local/yt-dlp-venv/bin/pip ] || python3 -m venv ~/.local/yt-dlp-venv
+if [ -n "${pinned:-}" ] || [ ! -x ~/.local/yt-dlp-venv/bin/yt-dlp ]; then
+  ~/.local/yt-dlp-venv/bin/pip install -q "yt-dlp[default]${pinned:+==$pinned}"
+fi
+mkdir -p ~/.local/bin && ln -sf ~/.local/yt-dlp-venv/bin/yt-dlp ~/.local/bin/yt-dlp

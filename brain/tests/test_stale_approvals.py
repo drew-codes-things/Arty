@@ -54,6 +54,15 @@ class ChatYes(unittest.TestCase):
         self.assertFalse(policy.covers(RESTART, "restarting VM 105 ai-desktop"))
         self.assertFalse(policy.covers(None, RESTART))
 
+    def test_a_question_saved_with_its_line_breaks_flattened_is_still_the_same_action(self):
+        reason = 'typing and submitting "Hi Sam,\n\nSee you at 5" into the Gmail window'
+        saved_by_the_desktop = " ".join(policy.approval_question(reason).split())
+        conversation = [{"role": "user", "content": "email Sam"},
+                        {"role": "assistant", "content": saved_by_the_desktop},
+                        {"role": "user", "content": "yes"}]
+        self.assertTrue(policy.covers(policy.approved_reason(conversation, text_of), reason))
+        self.assertFalse(policy.covers(policy.approved_reason(conversation, text_of), reason.replace("5", "6")))
+
 
 SELF_HEAL = {"kind": "approval", "message": "restart core-games",
              "call": {"name": "homelab__restart_guest", "arguments": {"vmid": 103}},

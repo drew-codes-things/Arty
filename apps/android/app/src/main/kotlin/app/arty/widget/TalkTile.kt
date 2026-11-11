@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import app.arty.LaunchToken
 import app.arty.MainActivity
 
 /** "Talk to Arty" in the quick-settings pull-down: opens the app straight into listening, like the widget's Talk button. */
@@ -19,7 +20,7 @@ class TalkTile : TileService() {
 
     @SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
-        val intent = Intent(this, MainActivity::class.java)
+        val intent = LaunchToken.stamp(this, Intent(this, MainActivity::class.java))
             .putExtra(ArtyWidget.EXTRA_ACTION, ArtyWidget.TALK)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

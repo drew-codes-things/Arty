@@ -22,7 +22,13 @@ CHECK_EVERY_SECONDS = 24 * 3600
 TIMEOUT_SECONDS = 20
 DAY_SECONDS = 86400
 
+CERT_HAS_EXPIRED = 10
+
 log = logging.getLogger("brain.expiry")
+
+
+class CertificateProblem(Exception):
+    pass
 _last_check = {"time": 0.0}
 
 
@@ -40,9 +46,27 @@ def certificate_expiry(host: str) -> float:
     """When the TLS certificate the site serves runs out (epoch seconds)."""
     context = ssl.create_default_context()
     with socket.create_connection((host, 443), timeout=TIMEOUT_SECONDS) as connection:
-        with context.wrap_socket(connection, server_hostname=host) as secure:
-            not_after = secure.getpeercert()["notAfter"]
+        try:
+            with context.wrap_socket(connection, server_hostname=host) as secure:
+                not_after = secure.getpeercert()["notAfter"]
+        except ssl.SSLCertVerificationError as error:
+            if error.verify_code == CERT_HAS_EXPIRED:
+                raise CertificateProblem("it has expired") from None
+            raise CertificateProblem(f"it isn't valid ({error.verify_message})") from None
     return ssl.cert_time_to_seconds(not_after)
+
+
+def problem_warning(name: str, problem: str, warned: dict) -> str | None:
+    key = f"{name}@problem:{problem}"
+    if key in warned:
+        return None
+    warned[key] = [0]
+    return f"{name} has a problem: {problem}."
+
+
+def forget_problems(name: str, warned: dict):
+    for key in [key for key in warned if key.startswith(f"{name}@problem:")]:
+        del warned[key]
 
 
 def warning_for(name: str, expires: float, now: float, warned: dict) -> str | None:
@@ -77,7 +101,11 @@ def due_warnings(settings: dict) -> list[str]:
     messages = []
     for name, check, target in checks:
         try:
-            message = warning_for(name, check(target), now, warned)
+            expires = check(target)
+            forget_problems(name, warned)
+            message = warning_for(name, expires, now, warned)
+        except CertificateProblem as problem:
+            message = problem_warning(name, str(problem), warned)
         except (OSError, ValueError, KeyError, ssl.SSLError) as error:
             log.warning("expiry check for %s failed: %s", target, error)
             continue

@@ -52,26 +52,37 @@ class Noticer:
         self._app_since = clock()
         self._mentioned = False
         self._last_notice = None
+        self._last_notice_before = None
+        self._last_away_seconds = 0.0
 
-    def observe(self, idle_seconds: float, app: str) -> Notice | None:
+    def retract(self, notice: Notice) -> None:
+        self._last_notice = self._last_notice_before
+        if notice.reason == "back":
+            self._longest_away = self._last_away_seconds
+        else:
+            self._mentioned = False
+
+    def observe(self, idle_seconds: float, app: str, holding_back: bool = False) -> Notice | None:
         now = self._clock()
         if idle_seconds >= self._away_seconds:
             self._longest_away = max(self._longest_away, idle_seconds)
             return None
         if self._longest_away:
             away_minutes = int(self._longest_away // SECONDS_PER_MINUTE)
+            self._last_away_seconds = self._longest_away
             self._longest_away = 0.0
             self._restart_stretch(app, now)
-            return self._allowed(Notice("back", away_minutes), now)
+            return None if holding_back else self._allowed(Notice("back", away_minutes), now)
         if is_ignored(app):
             return None
         if app != self._app:
             self._restart_stretch(app, now)
             return None
-        if self._mentioned or now - self._app_since < self._focus_seconds:
+        if self._mentioned or holding_back or now - self._app_since < self._focus_seconds:
             return None
-        self._mentioned = True
-        return self._allowed(Notice("focus", int((now - self._app_since) // SECONDS_PER_MINUTE), app), now)
+        notice = self._allowed(Notice("focus", int((now - self._app_since) // SECONDS_PER_MINUTE), app), now)
+        self._mentioned = notice is not None
+        return notice
 
     def _restart_stretch(self, app: str, now: float) -> None:
         self._app = "" if is_ignored(app) else app
@@ -81,5 +92,6 @@ class Noticer:
     def _allowed(self, notice: Notice, now: float) -> Notice | None:
         if self._last_notice is not None and now - self._last_notice < self._gap_seconds:
             return None
+        self._last_notice_before = self._last_notice
         self._last_notice = now
         return notice

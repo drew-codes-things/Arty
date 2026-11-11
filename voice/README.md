@@ -4,8 +4,10 @@ The USB mic and the speakers are plugged into the Proxmox host. Only one contain
 
 - **my-voice (CT 108, 192.0.2.15)** owns the mic and the speakers. `hub/voice_hub.py` streams the mic over a
   WebSocket (48 kHz, 16-bit mono) and plays anything the assistant says on the server speakers and on every linked PC.
-  Its website, http://192.0.2.15:8780, has its own account: the first visit asks you to choose an email and
-  password (`/var/lib/my-voice/accounts.json`, bcrypt), kept the same as your starfire.ai login. It gives each PC a
+  Its website, http://192.0.2.15:8780, has its own account: the first visit asks for the one-time setup code in
+  `/var/lib/my-voice/setup-code` on the server, then an email and password (`/var/lib/my-voice/accounts.json`,
+  bcrypt), kept the same as your starfire.ai login. The login cookie is marked Secure when `HUB_PUBLIC_URL` is https,
+  and `HUB_HOST` picks the listen address (default 0.0.0.0). It gives each PC a
   one-file setup script with its own key. Keys are stored hashed and can be removed from
   the page.
 - **ai-arty (CT 109, 192.0.2.16)** runs `assistant/arty_voice.py`. It listens to the hub's mic stream, uses VAD to
@@ -35,6 +37,21 @@ actions. Each headset has its own conversation and wake switch, and it also wake
 the headset itself ("play ... on Spotify", pause, resume, next, previous, volume) are matched by
 `headset_commands.py` straight after transcription and sent as actions, without asking the brain; the headset replies
 with what to say ("Paused.", or "Please log in or install Spotify."). Everything else goes to the brain as usual.
+Setup codes: `GET /pair/new` (with the headset key as the Bearer key) makes a one-time code and `POST /pair/redeem`
+(`{"code": "K7Q9-XM3P"}`) trades it for the key; `voice/quest-code` is the command that makes a code on the server
+(copy it to `/opt/ai-arty/quest-code`). Codes last 10 minutes and work once. Ten wrong tries from one address lock
+that address out for 5 minutes, and 100 wrong tries from all addresses together lock redeeming for everyone for 5
+minutes ([docs/connecting-a-headset.md](../docs/connecting-a-headset.md)).
+`GET /identity?nonce=<16 to 128 hex characters>` answers `{"proof": HMAC-SHA256(headset key, "arty-identity:" + nonce)}`
+in hex, with no key needed, so the headset can check it found the real server before it sends its key. It answers 30
+times a minute per address. `HEADSET_TOKEN` must be at least 32 random characters or the headset server won't start.
+Per-headset keys: a redeem body with a name (`{"code": "K7Q9-XM3P", "device_name": "Quest 3S"}`) gets that headset its
+own key and id (`{"token": ..., "device": ...}`); only a SHA-256 of the key is kept, in `HEADSET_DEVICES_FILE`
+(default `/var/lib/arty-voice/headset-devices.json`, so the unit needs `StateDirectory=arty-voice`). For such a
+headset, `/identity?nonce=...&device=<id>` uses the hex SHA-256 of its key as the HMAC key. `HEADSET_TOKEN` stays the
+owner key: only it makes codes, lists headsets (`GET /pair/devices`) and forgets one (`POST /pair/forget`,
+`{"device": "<id>"}`). A redeem without a name still gets the shared key until `HEADSET_LEGACY_PAIRING=0`.
+`HEADSET_HOST` picks the listen address (default 0.0.0.0).
 `headset_panels.py` sends each headset a `panels` message on connect and every minute: servers (the brain's
 `homelab__service_status` tool), weather (`weather` tool), the next 7 days of calendar events and the next reminders
 (`/v1/calendar`, `/v1/schedules`), cached for a minute and shared between headsets.

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Arty Gmail reader",
-  "version": "1.3",
+  "version": "1.4",
   "description": "Lets Arty's browser agent (on this computer only) read Gmail in this window.",
   "background": {"service_worker": "background.js"},
   "permissions": ["scripting", "tabs", "alarms", "storage"],

@@ -9,7 +9,6 @@ What keeps it safe:
   need it every time. The app asks, with Allow and Deny.
 - Secrets are out of reach: ~/.ssh, keyrings, password managers, and the
   apps that hold them, can't be read, written, opened or typed into.
-- Files are read and written inside their home folder only.
 
 What it needs from the desktop:
 - Seeing the screen: a screenshot tool (spectacle, gnome-screenshot, grim,
@@ -20,9 +19,11 @@ What it needs from the desktop:
   work with kdotool on KDE; elsewhere typing is on the OK they give.
 """
 import base64
+import glob
 import html
 import json
 import fnmatch
+import itertools
 import os
 import re
 import shlex
@@ -32,6 +33,12 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    from re import _parser
+except ImportError:
+    import sre_parse as _parser
+
+from process import config as cfg
 from process.config import setting
 from process.tools import guard_windows
 from process.tools import portal
@@ -43,6 +50,24 @@ from process.tools import win_desktop
 HOME = Path.home()
 OUTPUT_CHARS = 6000
 READ_LINES = 400
+READ_FILE_BYTES = 20_000_000
+COMMAND_GLOB_MATCHES = 200
+MAX_LABEL_CHARS = 80
+_ASSIGNMENT = re.compile(r"(?:^|[\s;&|(])([A-Za-z_]\w*)=([^\s;&|)]+)")
+_CD_TARGET = re.compile(r"(?:^|[;&|(]\s*)cd\s+([^\s;&|)]+)")
+_BRACES = re.compile(r"\{([^{}]*,[^{}]*)\}")
+_RECURSES = re.compile(
+    r"\b(?:e|f)?grep\b[^|;&]*\s(?:-\w*[rR]\w*\b|--recursive\b|--dereference-recursive\b)|\brg\b|\bag\b"
+    r"|\bfind\b|\btar\b|\bzip\b[^|;&]*\s-\w*r|\bcp\b[^|;&]*\s-\w*[rRa]|\brsync\b|\bscp\b[^|;&]*\s-\w*r"
+    r"|\bSelect-String\b[^|;&]*-Recurse|\bGet-ChildItem\b[^|;&]*-Recurse|\bdir\b[^|;&]*/s\b", re.I)
+_BROWSER_WINDOWS = re.compile(r"chrom|firefox|brave|vivaldi|opera|edge|epiphany|falkon|librewolf|waterfox|mozilla")
+_STARTUP_FOLDERS = [("AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup"),
+                    ("Documents", "WindowsPowerShell"), ("Documents", "PowerShell")]
+_RUN_ON_OPEN_FILES = {".envrc"}
+_EDITOR_TASK_FILES = {("vscode", "tasks.json"), ("vscode", "launch.json"), ("vscode", "settings.json")}
+_EMPTY, _ANY_START = "", object()
+_TYPED_LITERALLY = re.compile(r"[A-Za-z]:\\|\\\\|^\s*(?:echo|printf)\b")
+_SHELL_PUNCTUATION = re.compile(r"\$\(|[\s()`;|&<>\"'=]+")
 SEARCH_MATCHES = 200
 SEARCH_FILE_BYTES = 2_000_000
 FOUND_FILES = 300
@@ -52,14 +77,25 @@ TIMEOUT = 120
 MAX_EDGE = 1600
 
 # Never read, written, opened or typed into, whatever she is asked.
-_SECRET_PATHS = [HOME / ".ssh", HOME / ".gnupg", HOME / ".aws", HOME / ".config" / "gh",
-                 HOME / ".password-store",
-                 HOME / ".local" / "share" / "keyrings", HOME / ".local" / "share" / "kwalletd",
-                 HOME / ".config" / "1Password", HOME / ".config" / "Bitwarden",
-                 HOME / ".config" / "keepassxc",
-                 HOME / ".mozilla", HOME / ".config" / "google-chrome",
-                 HOME / ".config" / "chromium", HOME / ".config" / "BraveSoftware",
-                 *guard_windows.secret_paths(HOME)]
+_SECRET_PLACES = [
+    ".ssh", ".gnupg", ".aws", ".config/gh", ".password-store", ".local/share/keyrings", ".local/share/kwalletd",
+    ".config/1Password", ".config/Bitwarden", ".config/keepassxc", ".mozilla", ".config/google-chrome",
+    ".config/chromium", ".config/BraveSoftware", ".config/microsoft-edge", ".config/vivaldi", ".config/opera",
+    ".thunderbird", ".config/Signal", ".config/Arty", ".docker", ".kube", ".config/gcloud", ".netrc",
+    ".git-credentials", ".arty-android.properties", ".var/app/org.mozilla.firefox", ".var/app/com.google.Chrome",
+    ".var/app/org.chromium.Chromium", ".var/app/com.brave.Browser", ".var/app/com.microsoft.Edge",
+    ".var/app/org.mozilla.Thunderbird", ".var/app/org.signal.Signal", "snap/firefox", "snap/chromium", "snap/thunderbird",
+]
+_ENV_FILE = re.compile(r"^\.env(?:\..+)?$")
+_SHAREABLE_ENV_FILES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
+
+
+def secret_paths(home):
+    own = [cfg.CONFIG_PATH, cfg.DATA_ROOT / ".arty_token", cfg.DATA_ROOT / "portal_token"]
+    return [home / place for place in _SECRET_PLACES] + own + guard_windows.secret_paths(home)
+
+
+_SECRET_PATHS = secret_paths(HOME)
 _SECRET_APPS = re.compile(
     r"keychain|keyring|kwallet|seahorse|1password|bitwarden|lastpass|dashlane|keepass"
     r"|enpass|\bpasswords\b|keeper"
@@ -91,9 +127,33 @@ _RISKY = re.compile(
     r"|\bnpm\s+(?:publish|unpublish)\b|\bpip\d?\s+uninstall\b"
     r"|\bpip\d?(?:\.\d+)?\s+(?:-\S+\s+)*install\b|(?<!\S)-m\s+(?:pip\s+install|venv)\b|\b(?:virtualenv|pipx|uv\s+(?:venv|pip\s+install|add))\b"
     r"|\b(?:npm|pnpm|yarn)\s+(?:install|i|ci|add)\b|\b(?:cargo|gem|go)\s+install\b"
-    r"|\b(?:curl|wget)\b[^|]*\|\s*(?:ba|z|)sh\b|>\s*/(?:etc|usr|boot|bin|sbin|lib|var)\b", re.I)
+    r"|\b(?:curl|wget)\b[^|]*\|\s*(?:ba|z|)sh\b|>\s*/(?:etc|usr|boot|bin|sbin|lib|var)\b"
+    r"|\b(?:cp|tee|ln|tar|unzip|docker|podman)\b|(?:^|[;&|]\s*)install\b"
+    r"|\bsed\b[^|;&]*\s-\w*i|\bperl\b[^|;&]*\s-\w*i"
+    r"|\bpython\d?(?:\.\d+)?\s+-c\b|\b(?:bash|sh|zsh)\s+-c\b|\bnode\s+-e\b"
+    r"|\bcurl\b[^|]*\s(?:-d|--data\S*|-F|--form|-T|--upload-file)\s*\S*@"
+    r"|\bgit\s+checkout\s+(?:--\s+)?\.(?:\s|$)"
+    r"|\bsystemctl\s+--user\s+(?:enable|start|restart|stop|disable|mask|link|edit)\b"
+    r"|(?<![-=<>])(?:\d*|&)>[>|]?\s*(?!&\d|&-|/dev/null\b)[^\s&|;<>]"
+    r"|\bcurl\b[^|;&]*\s(?:-[A-Za-z]*[oO][A-Za-z]*\b|--output\b|--output-dir\b|--remote-name\S*)"
+    r"|\bcurl\b[^|;&]*(?:\$\(|`)|\bwget\b"
+    r"|\|\s*(?:sudo\s+)?(?:ba|z|da|k|)sh\b"
+    r"|\|\s*(?:sudo\s+)?(?:perl|ruby|node|php|pwsh|powershell)\b"
+    r"|\|\s*(?:sudo\s+)?python\d?(?:\.\d+)?\b(?!\s+-m\s+json\.tool\b)"
+    r"|\bpython\d?(?:\.\d+)?\s+-(?:\s|$)"
+    r"|\b(?:python\d?(?:\.\d+)?|perl|ruby|node|php|bash|sh|zsh)\b[^|;&]*<<"
+    r"|\bperl\b[^|;&]*\s-\w*[eE]\b|\bruby\s+(?:-\S+\s+)*-e\b|\bphp\s+-r\b"
+    r"|\b[gm]?awk\b.*\bsystem\s*\("
+    r"|\bunlink\b|\bgio\s+(?:trash|remove|rm|move|mv|copy|cp|save|rename|set)\b"
+    r"|\bgit\s+config\s+(?:--global|--system)\b"
+    r"|-m\s+http\.server\b", re.I)
+_REPEATS = {_parser.MAX_REPEAT, _parser.MIN_REPEAT, getattr(_parser, "POSSESSIVE_REPEAT", _parser.MAX_REPEAT)}
+
+_CODE_OR_MARKUP = re.compile(r'["`<>{}()]')
+MIN_APP_ID_CHARS = 3
 
 GUI_TOOLS = {"computer_click", "computer_type", "computer_key", "computer_scroll"}
+_RUN_PROGRAM_QUESTION = "Let Arty run the program"
 
 
 def available():
@@ -116,9 +176,8 @@ def _path(path, must_exist=False):
     p = p.resolve()
     if p != HOME and HOME not in p.parents:
         raise ValueError(f"{p} is outside their home folder")
-    for secret in _SECRET_PATHS:
-        if p == secret or secret in p.parents:
-            raise ValueError("that's where their passwords and keys live; it's off limits")
+    if _is_secret(p):
+        raise ValueError("that's where their passwords and keys live; it's off limits")
     if must_exist and not p.exists():
         raise ValueError(f"no such file: {p}")
     return p
@@ -126,12 +185,89 @@ def _path(path, must_exist=False):
 
 # --- commands and files ------------------------------------------------------
 
+def _with_assignments(command):
+    for name, value in _ASSIGNMENT.findall(command):
+        value = value.strip("\"'")
+        command = re.sub(r"\$\{" + name + r"\}|\$" + name + r"\b", lambda _match: value, command)
+    return command
+
+
+def _brace_choices(piece):
+    groups = _BRACES.findall(piece)
+    if not groups or len(groups) > 4:
+        return [piece]
+    template = _BRACES.sub("{}", piece.replace("{}", ""))
+    return [template.format(*choice) for choice in itertools.product(*(group.split(",") for group in groups))]
+
+
+def _working_folders(command, where):
+    folders = [where]
+    for target in _CD_TARGET.findall(command):
+        target = os.path.expandvars(os.path.expanduser(target.strip("\"'")))
+        folders.append(target if os.path.isabs(target) else os.path.join(folders[-1], target))
+    return folders
+
+
+def _name_fits(name, pattern):
+    if name.startswith(".") and not pattern.startswith("."):
+        return False
+    return fnmatch.fnmatchcase(name, pattern)
+
+
+def _parts_fit(pattern_parts, path_parts):
+    return all(_name_fits(name, pattern) for name, pattern in zip(path_parts, pattern_parts))
+
+
+def _pattern_names_a_secret(pattern):
+    parts = Path(pattern).parts
+    return any(len(parts) >= len(secret.parts) and _parts_fit(parts, secret.parts) for secret in _SECRET_PATHS)
+
+
+def _pattern_holds_a_secret(pattern):
+    parts = Path(pattern).parts
+    return any(len(parts) <= len(secret.parts) and _parts_fit(parts, secret.parts) for secret in _SECRET_PATHS)
+
+
+def _candidate_paths(command, where):
+    try:
+        words = shlex.split(command, posix=not shell.is_windows())
+    except ValueError:
+        words = command.split()
+    pieces = [piece for word in words for piece in _SHELL_PUNCTUATION.split(word)]
+    for piece in pieces:
+        for choice in _brace_choices(piece):
+            candidate = os.path.expandvars(os.path.expanduser(choice))
+            if not candidate or candidate.startswith("-"):
+                continue
+            if "$" in candidate:
+                candidate = candidate.split("$", 1)[0] + "*"
+            for folder in _working_folders(command, where):
+                yield os.path.normpath(candidate if os.path.isabs(candidate) else os.path.join(folder, candidate))
+
+
+def _names_a_secret_path(command, where):
+    command = _with_assignments(command)
+    recurses = bool(_RECURSES.search(command))
+    for full in itertools.chain(_candidate_paths(command, where), _working_folders(command, where) if recurses else []):
+        has_wildcard = any(mark in full for mark in "*?[")
+        if has_wildcard and (_pattern_names_a_secret(full) or (recurses and _pattern_holds_a_secret(full))):
+            return True
+        named = itertools.islice(glob.iglob(full), COMMAND_GLOB_MATCHES) if has_wildcard else [full]
+        for path in named:
+            resolved = Path(path).resolve()
+            if _is_secret(resolved) or (recurses and _holds_a_secret(resolved)):
+                return True
+    return False
+
+
+def _holds_a_secret(p):
+    return any(p == secret or p in secret.parents for secret in _SECRET_PATHS)
+
+
 def computer_run_command(command, cwd="", timeout_seconds=None):
     command = (command or "").strip()
     if not command:
         return "No command given."
-    if _SECRET_COMMANDS.search(command):
-        return "Not running that: it reaches into their passwords or keys, which are off limits."
     if _DRIVES_INPUT.search(command):
         return ("Not running that: it works their mouse or keyboard behind the checks. Use "
                 "computer_type, computer_key and computer_click, which look at what's in "
@@ -141,6 +277,8 @@ def computer_run_command(command, cwd="", timeout_seconds=None):
         limit = min(float(timeout_seconds or TIMEOUT), 1800.0)
     except (ValueError, TypeError) as e:
         return str(e)
+    if _SECRET_COMMANDS.search(command) or _names_a_secret_path(command, str(where)):
+        return "Not running that: it reaches into their passwords or keys, which are off limits."
     print(f"[computer] $ {command}", flush=True)
     proc = subprocess.Popen(shell.argv(command), cwd=where, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -161,36 +299,59 @@ def computer_read_file(path, start_line=1, end_line=None):
         p = _path(path, must_exist=True)
         start = max(1, int(start_line or 1))
         end = int(end_line) if end_line else start + READ_LINES - 1
-        lines = p.read_text(errors="replace").splitlines()
+        size = p.stat().st_size
+        if size > READ_FILE_BYTES:
+            return (f"{p} is too big to read whole ({size} bytes). Use computer_search, or "
+                    "computer_run_command with head, tail or sed -n for the part you need.")
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     except (ValueError, TypeError, OSError) as e:
         return str(e)
     body = "\n".join(f"{n:5d}  {line}" for n, line in enumerate(lines[start - 1:end], start))
     return _clip(f"({len(lines)} lines)\n{body}")
 
 
+def _line_ending_of(text):
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def _with_line_ending(text, ending):
+    plain = text.replace("\r\n", "\n")
+    return plain.replace("\n", ending) if ending != "\n" else plain
+
+
 def computer_write_file(path, content):
+    text = content if isinstance(content, str) else str(content or "")
     try:
         p = _path(path)
+        if p.is_file():
+            text = _with_line_ending(text, _line_ending_of(p.read_text(encoding="utf-8", errors="replace", newline="")))
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content if isinstance(content, str) else str(content or ""))
+        p.write_text(text, encoding="utf-8", newline="")
     except (ValueError, OSError) as e:
         return f"Could not write {path}: {e}"
     print(f"[computer] wrote {p}", flush=True)
-    return f"Wrote {p} ({len(p.read_text().splitlines())} lines)."
+    return f"Wrote {p} ({len(text.splitlines())} lines)."
 
 
 def computer_edit_file(path, old_text, new_text):
     try:
         p = _path(path, must_exist=True)
-        current = p.read_text()
+        current = p.read_text(encoding="utf-8", newline="")
+    except UnicodeDecodeError:
+        return f"{path} isn't UTF-8 text, so it can't be edited safely here."
     except (ValueError, OSError) as e:
         return str(e)
-    count = current.count(old_text or "")
+    ending = _line_ending_of(current)
+    old = _with_line_ending(old_text or "", ending)
+    new = _with_line_ending(new_text or "", ending)
+    if old_text and ending != "\n" and current.count(old) == 0:
+        old, new = old_text, new_text or ""
+    count = current.count(old)
     if not old_text or count == 0:
         return "old_text was not found in the file. Read it again and copy the text exactly."
     if count > 1:
         return f"old_text appears {count} times. Include more surrounding lines so it is unique."
-    p.write_text(current.replace(old_text, new_text or "", 1))
+    p.write_text(current.replace(old, new, 1), encoding="utf-8", newline="")
     print(f"[computer] edited {p}", flush=True)
     return f"Edited {p}."
 
@@ -215,7 +376,80 @@ def computer_list_files(path="", depth=2):
 
 
 def _is_secret(p):
+    if p.name not in _SHAREABLE_ENV_FILES and _ENV_FILE.match(p.name):
+        return True
     return any(p == secret or secret in p.parents for secret in _SECRET_PATHS)
+
+
+def _is_reachable(p):
+    try:
+        _path(str(p))
+    except ValueError:
+        return False
+    return True
+
+
+def _sub_patterns(value):
+    if isinstance(value, _parser.SubPattern):
+        yield value
+    elif isinstance(value, (tuple, list)):
+        for part in value:
+            yield from _sub_patterns(part)
+
+
+def _first_characters(items):
+    starts = set()
+    for op, value in items:
+        if op == _parser.AT:
+            continue
+        if op == _parser.LITERAL:
+            return starts | {value}
+        if op == _parser.SUBPATTERN:
+            inner = _first_characters(value[-1])
+            if _EMPTY not in inner:
+                return starts | inner
+            starts |= inner - {_EMPTY}
+            continue
+        if op in _REPEATS:
+            low, _high, body = value
+            inner = _first_characters(body) - {_EMPTY}
+            if low > 0:
+                return starts | inner
+            starts |= inner
+            continue
+        if op == _parser.BRANCH:
+            branches = set().union(*(_first_characters(branch) for branch in value[1]))
+            if _EMPTY not in branches:
+                return starts | branches
+            starts |= branches - {_EMPTY}
+            continue
+        return starts | {_ANY_START}
+    return starts | {_EMPTY}
+
+
+def _alternatives_overlap(branches):
+    seen = set()
+    for branch in branches:
+        starts = _first_characters(branch)
+        if starts & seen or (_ANY_START in starts and seen) or (_ANY_START in seen and starts):
+            return True
+        seen |= starts
+    return False
+
+
+def _has_repeat_inside_repeat(items, inside_repeat=False):
+    for op, value in items:
+        if op == _parser.BRANCH and inside_repeat and _alternatives_overlap(value[1]):
+            return True
+        if op in _REPEATS:
+            _low, high, body = value
+            repeats = high > 1
+            if (inside_repeat and repeats) or _has_repeat_inside_repeat(body, inside_repeat or repeats):
+                return True
+            continue
+        if any(_has_repeat_inside_repeat(body, inside_repeat) for body in _sub_patterns(value)):
+            return True
+    return False
 
 
 def _project_files(root, folders=False):
@@ -224,7 +458,9 @@ def _project_files(root, folders=False):
         for name in sorted(dirnames) if folders else []:
             yield Path(dirpath) / name
         for name in sorted(filenames):
-            yield Path(dirpath) / name
+            found = Path(dirpath) / name
+            if not _is_secret(found):
+                yield found
 
 
 def _matches_glob(p, root, glob):
@@ -247,18 +483,25 @@ def computer_find_files(pattern, path=""):
 
 
 def computer_search(pattern, path="", glob="", ignore_case=False):
+    flags = re.I if ignore_case else 0
     try:
         root = _path(path or "~", must_exist=True)
-        regex = re.compile(pattern or "", re.I if ignore_case else 0)
+        regex = re.compile(pattern or "", flags)
+        too_slow = _has_repeat_inside_repeat(_parser.parse(pattern or "", flags))
     except ValueError as e:
         return str(e)
     except re.error as e:
         return f"That isn't a valid regular expression: {e}"
     if not (pattern or "").strip():
         return "Give some text or a regular expression to search for."
+    if too_slow:
+        return ("That pattern could be too slow to search with: it has a repeat inside a repeat, like (a+)+. "
+                "Write it without the nesting, e.g. a+ or \\w+ on its own.")
     files = [root] if root.is_file() else (p for p in _project_files(root) if _matches_glob(p, root, glob))
     hits = []
     for p in files:
+        if p != root and p.is_symlink() and not _is_reachable(p):
+            continue
         try:
             if p.stat().st_size > SEARCH_FILE_BYTES:
                 continue
@@ -577,8 +820,10 @@ def computer_click(target="", x=None, y=None, button="left", double=False):
 def _as_typed(text):
     """Undo the escaping models sometimes put in tool arguments: &amp; for &,
     and a written-out \\n for a new line when there are no real ones."""
+    if _CODE_OR_MARKUP.search(text):
+        return text
     text = html.unescape(text)
-    if "\n" not in text and "\\n" in text:
+    if "\n" not in text and "\\n" in text and not _TYPED_LITERALLY.search(text):
         text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
     return text
 
@@ -707,12 +952,25 @@ def _bring_forward(app, wait=10.0, settle=0.0):
         if front is None:
             time.sleep(settle)
             return None
-        text = " ".join(front).lower()
-        if want in text or (front[0] and front[0].lower() in want):
+        if _is_window_of(want, front):
             return True
         if time.time() >= deadline:
             return False
         time.sleep(0.25)
+
+
+def _squashed(text):
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _is_window_of(want, front):
+    wanted, ident = _squashed(want), _squashed(front[0])
+    title = _squashed(front[1] if len(front) > 1 else "")
+    if wanted and len(ident) >= MIN_APP_ID_CHARS and (wanted in ident or ident in wanted):
+        return True
+    if _BROWSER_WINDOWS.search(ident) and not _BROWSER_WINDOWS.search(wanted):
+        return False
+    return bool(wanted) and title.endswith(wanted)
 
 
 def _app_dirs():
@@ -843,6 +1101,11 @@ def computer_open(app="", url="", new_document=False):
 # --- what the app shows and asks ----------------------------------------------
 
 def describe(name, args):
+    label = _described(name, args)
+    return label if len(label) <= MAX_LABEL_CHARS else label[:MAX_LABEL_CHARS - 1] + "…"
+
+
+def _described(name, args):
     def p():
         return args.get("path") or "home"
     if name == "computer_run_command":
@@ -875,10 +1138,32 @@ def consent_key(name):
     return "gui" if name in GUI_TOOLS or name == "computer_open" else name
 
 
+def consent_key_for(name, question):
+    if name == "computer_open" and question and question.startswith(_RUN_PROGRAM_QUESTION):
+        return "run_program"
+    return consent_key(name)
+
+
+def _runs_or_starts_things(p):
+    parts = p.relative_to(HOME).parts if p != HOME else ()
+    if not parts:
+        return False
+    if parts[0].startswith(".") or parts[0] == "bin" or ".git" in parts:
+        return True
+    if any(parts[:len(folder)] == folder for folder in _STARTUP_FOLDERS):
+        return True
+    if p.name in _RUN_ON_OPEN_FILES or p.suffix == ".desktop":
+        return True
+    return len(parts) >= 2 and (parts[-2].lstrip("."), p.name) in _EDITOR_TASK_FILES and parts[-2].startswith(".")
+
+
 def needs_ok(name, args, consented):
     """The question to ask them first, or None."""
+    app = (args.get("app") or "").strip()
+    if name == "computer_open" and app and not args.get("url") and _find_app(app) is None:
+        return f"{_RUN_PROGRAM_QUESTION} “{app[:60]}” on your computer? It isn't one of your installed apps."
     if presses_keys(name, args):
-        if not setting("computer", "ask_before_mouse_and_keyboard", False) or "gui" in consented:
+        if not setting("computer", "ask_before_mouse_and_keyboard", True) or "gui" in consented:
             return None
         return "Let Arty use your mouse and keyboard for this?"
     if name == "computer_run_command":
@@ -890,6 +1175,8 @@ def needs_ok(name, args, consented):
             p = _path(args.get("path", ""))
         except ValueError:
             return None  # the tool will refuse it anyway
+        if _runs_or_starts_things(p):
+            return f"Let Arty change {p}? Files like this can run programs or change how your computer starts."
         if name == "computer_write_file" and p.exists():
             return f"Let Arty overwrite {p}?"
     return None
@@ -944,7 +1231,8 @@ SPECS = [
             "amount": {"type": "integer"}}}}),
     ("computer_run_command", computer_run_command, {
         "description": "Run a bash command on their computer, in their home folder unless you "
-                       "give cwd. Risky commands ask them first.",
+                       "give cwd. Unlike the file tools, which stay inside their home folder, a command "
+                       "can reach anything their account can. Risky commands ask them first.",
         "parameters": {"type": "object", "properties": {
             "command": {"type": "string"}, "cwd": {"type": "string"},
             "timeout_seconds": {"type": "number"}}, "required": ["command"]}}),

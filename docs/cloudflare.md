@@ -38,12 +38,14 @@ You need a domain on Cloudflare and a Zero Trust account (the free plan is enoug
    tunnel's token, and the tunnel is managed from the dashboard, with no local config file.
 2. **Route.** In the tunnel's Public Hostnames, add `arty.<your domain>` with service `http://192.0.2.13:8081` (the
    brain).
-3. **Service token.** Zero Trust > Access > Service credentials > Create a service token, named e.g. "Arty Android
-   app". Copy the Client ID and Client Secret now; the secret is only shown once.
-4. **Access application.** Zero Trust > Access > Applications > Add > Self-hosted, named "Arty API", on
+3. **Service token.** Zero Trust > Access controls > Service credentials > Service Tokens > Create Service Token,
+   named e.g. "Arty Android app". Copy the Client ID and Client Secret now; the secret is only shown once (if it
+   is lost, **Rotate secret** makes a new one).
+4. **Access application.** Zero Trust > Access controls > Applications > Add > Self-hosted, named "Arty API", on
    `arty.<your domain>`. Give it one policy with action **Service Auth** that includes that service token. No other
    policies, so no one can log in with an email or a browser.
-5. **The app.** In the shareable Android app's **Connect to Arty** screen, enter `https://arty.<your domain>`, the API
+5. **The app.** Scan the setup code from Arty Desktop ([connecting-a-phone.md](connecting-a-phone.md)), or in the
+   shareable Android app's **Connect to Arty** screen choose **Enter details manually** and enter `https://arty.<your domain>`, the API
    key, turn on **Behind Cloudflare Access** and paste both halves of the token. (For the personal build, put them
    in `~/.arty-android.properties` instead and rebuild - see [apps/android/README.md](../apps/android/README.md).)
    The app sends them as the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on every request,
@@ -57,12 +59,12 @@ brain's 401.
 Safari can't add the service token to the page itself, only to the requests the page makes, so the iPhone app's
 files need their own Access application that lets them through:
 
-6. **Access application for the page.** Zero Trust > Access > Applications > Add > Self-hosted, named "Arty for
+6. **Access application for the page.** Zero Trust > Access controls > Applications > Add > Self-hosted, named "Arty for
    iPhone", on `arty.<your domain>` with path `ios`. Give it one policy with action **Bypass** for Everyone. A more
    specific path wins, so only `/ios/...` is affected: those are static files with no keys in them, and the brain
-   only serves known file types from `apps/beta/ios` there. Everything else, including `/v1/...` and `/arty-files/...`,
+   only serves known file types from `apps/ios` there. Everything else, including `/v1/...` and `/arty-files/...`,
    stays behind "Arty API" and the service token.
-7. Open `https://arty.<your domain>/ios/` in Safari and follow [apps/beta/ios/README.md](../apps/beta/ios/README.md). Give the
+7. Open `https://arty.<your domain>/ios/` in Safari and follow [apps/ios/README.md](../apps/ios/README.md). Give the
    iPhone its own service token if you want to be able to revoke it separately.
 
 Check it: `/ios/` loads without the token, and `/v1/models` still gets Cloudflare's 401/403 without it.
@@ -77,7 +79,7 @@ Check it: `/ios/` loads without the token, and `/v1/models` still gets Cloudflar
 
 ## Revoking Access
 
-If a phone with the app is lost, delete its service token (Access > Service credentials): it stops working
+If a phone with the app is lost, delete its service token (Access controls > Service credentials): it stops working
 immediately. Rotate `ARTY_API_KEY` in `/srv/ai/secrets/brain.env` on the brain too; the shareable app then asks
 for the new key, and the personal build needs rebuilding with it.
 

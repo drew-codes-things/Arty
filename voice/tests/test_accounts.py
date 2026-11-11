@@ -39,3 +39,34 @@ def test_verify(tmp_path):
     assert store.verify("DREW@example.com", GOOD)
     assert not store.verify("drew@example.com", "wrong password")
     assert not store.verify("someone@example.com", GOOD)
+
+
+@pytest.mark.parametrize("password", ["x" * 100, "é" * 60, "long passphrase " * 15])
+def test_passphrases_longer_than_bcrypt_can_take_still_work(tmp_path, password):
+    store = AccountStore(str(tmp_path))
+    store.create_first("drew@example.com", password, password)
+    assert store.verify("drew@example.com", password)
+    assert not store.verify("drew@example.com", password[:-1] + "!")
+
+
+def test_a_long_passphrase_is_checked_beyond_the_first_72_bytes(tmp_path):
+    store = AccountStore(str(tmp_path))
+    password = "a" * 80
+    store.create_first("drew@example.com", password, password)
+    assert not store.verify("drew@example.com", "a" * 72 + "b" * 8)
+
+
+def test_a_wrong_long_password_for_an_unknown_email_is_refused_not_an_error(tmp_path):
+    store = AccountStore(str(tmp_path))
+    store.create_first("drew@example.com", GOOD, GOOD)
+    assert not store.verify("nobody@example.com", "z" * 200)
+
+
+def test_accounts_made_before_the_change_still_log_in(tmp_path):
+    import json
+    import bcrypt
+    (tmp_path / "accounts.json").write_text(json.dumps(
+        [{"email": "drew@example.com", "password_hash": bcrypt.hashpw(GOOD.encode(), bcrypt.gensalt(4)).decode()}]))
+    store = AccountStore(str(tmp_path))
+    assert store.verify("drew@example.com", GOOD)
+    assert not store.verify("drew@example.com", GOOD + "x" * 80)

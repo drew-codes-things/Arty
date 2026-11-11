@@ -18,8 +18,8 @@ history_file: chat_history.json
 # Arty using this computer: screenshots, mouse, keyboard, apps, files and commands.
 # Risky actions (deleting, sending, installing, secrets) are asked about first.
 computer:
-  enabled: true
-  ask_before_mouse_and_keyboard: false   # true: ask once per request before clicking or typing
+  enabled: false
+  ask_before_mouse_and_keyboard: true    # true: ask once per request before clicking or typing
 
 tools:
   enabled: true

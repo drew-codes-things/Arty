@@ -15,7 +15,7 @@
 ## Overview
 
 Google blocks automated browsers from signing in, and Arty isn't given an app password or IMAP access, so this is
-how it reads email: a normal Google Chrome window on Arty's PC (VM 105), signed in by you, with this extension
+how it reads email: a normal Google Chrome window on Arty's PC (its desktop VM), signed in by you, with this extension
 inside it.
 
 ---
@@ -34,13 +34,15 @@ Reads the results list back  ->  Arty sorts what matters and answers
 
 It only reads: it can open a search and read the results, but can't send, delete, archive or change anything.
 
+The agent only answers requests that carry its key. On every start it copies the key into this folder as `agent-token.json` (readable only by its owner); the extension reads it from its own files, which web pages can't do, and sends it with each request.
+
 ---
 
 ## Setup
 
-`./deploy.sh` copies this folder to `~/.local/browser-agent/gmail-extension` on VM 105. Then, once:
+`./deploy.sh` copies this folder to `~/.local/browser-agent/gmail-extension` on Arty's desktop VM. Then, once:
 
-1. On VM 105's desktop, double-click **Sign in to Google** and sign in to Gmail in that window.
+1. On Arty's desktop, double-click **Sign in to Google** and sign in to Gmail in that window.
 2. In the same window, go to `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and choose `~/.local/browser-agent/gmail-extension`. If the file picker's Open button is
    off the screen, maximise the picker first.
@@ -59,7 +61,7 @@ your important unread emails the same way.
 
 ## Tested On
 
-Google Chrome 156.0.8078.47 on VM 105 (Debian 13 trixie, XFCE 4.20), profile `~/.gmail-chrome`. The sign-in
+Google Chrome 156.0.8078.47 on Arty's desktop VM (Debian 13 trixie, XFCE 4.20), profile `~/.gmail-chrome`. The sign-in
 survives restarts of Chrome and of the VM.
 
 ## License

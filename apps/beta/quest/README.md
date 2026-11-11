@@ -57,35 +57,47 @@ whether Spotify is signed in, so a signed-out Spotify just opens on its login sc
 
 ## Setup
 
-> **Beta:** built and unit-tested, not yet tried on a headset.
+> **Beta:** built and unit-tested, and run on a real Quest 3S (it connects and shows its panels); the voice commands are not all tried on the headset yet.
 
-The first time it opens, the orb panel asks for two things, typed with the headset's keyboard:
+The first time it opens, the orb panel shows **Connect to Arty** and asks for two short things, typed with the
+headset's keyboard:
 
 | Field | What to enter |
 |---|---|
-| Headset address | Your voice server's headset socket, e.g. `ws://192.0.2.16:8790/ws/headset` |
-| Headset key | `HEADSET_TOKEN` from `/etc/arty-voice/secrets.env` on the voice server |
+| Server address | Your voice server, e.g. `192.0.2.16` (or a full `wss://...` address away from home) |
+| Setup code | A one-time code like `K7Q9-XM3P`, made on the voice server with `/opt/ai-arty/quest-code` |
+
+Redeeming a code sends the headset's model name, and the voice server gives this headset its own key and id. Each
+headset can then be listed or forgotten on the server without touching the others, and the headset checks the server
+with its own key before connecting. In the **personal** build the long owner key (`HEADSET_TOKEN` from
+`/etc/arty-voice/secrets.env`) can also be typed in the third box instead of a code; the **shareable** build hides that
+box and only pairs with a code. The full steps, what the code does, and what to do when it fails are in
+[docs/connecting-a-headset.md](../../../docs/connecting-a-headset.md).
 
 `ws://` is only accepted on your home network (private addresses and `.local`, `.lan` or `.home.arpa` names); use
-`wss://` anywhere else, so the key isn't sent unencrypted. The details are saved in the app's private storage,
+`wss://` anywhere else, so the key isn't sent unencrypted. Pair with a code only on your home Wi-Fi: over `ws://` on
+another network a different device could answer at that address, and the form says so. The details are saved in the app's private storage,
 encrypted with a key that never leaves the headset's Android Keystore, and backups are off. **Server** next to the
-wake-word switch changes them later, and a refused key opens the form again.
+wake-word switch changes them later, and a refused key opens the form again. A damaged saved value is cleared and the
+form opens; a Keystore that is busy for a moment keeps it for the next start. If the server can't be reached for about
+eight minutes, the headset stops listening and says so; opening Arty again retries.
 
-For your own headset you can build them in instead, from `~/.arty-android.properties`:
+There are two builds. **shareable** has nothing built in and always asks. **personal** builds the address and key in
+from `~/.arty-android.properties`:
 
 ```
 quest.headsetUrl=ws://192.0.2.16:8790/ws/headset
 quest.headsetToken=<HEADSET_TOKEN>
 ```
 
-Anyone with an APK built that way can reach your headset socket, so keep it private.
+Anyone with a personal APK can reach your headset socket, so keep it private, and give others the shareable one.
 
 ## Build and install
 
 ```
 cd apps/beta/quest
-ANDROID_HOME=~/Android/Sdk ./gradlew testDebugUnitTest assembleRelease
-~/Android/Sdk/platform-tools/adb install -r app/build/outputs/apk/release/app-release.apk
+ANDROID_HOME=~/Android/Sdk ./gradlew testPersonalDebugUnitTest testShareableDebugUnitTest assemblePersonalRelease
+~/Android/Sdk/platform-tools/adb install -r app/build/outputs/apk/personal/release/app-personal-release.apk
 ```
 
 The Quest needs Developer Mode on and a USB-C data cable; accept "Allow USB debugging" in the headset the first time.
@@ -94,6 +106,7 @@ adb devices. The app is in the library under "Unknown sources".
 
 ## Tests
 
-`./gradlew testDebugUnitTest` covers the socket messages both ways, the action mapping, reconnect backoff, the setup
-rules (which addresses and keys are accepted, and when the form reopens) and the microphone frame size (it must
-match the server's 30 ms frames).
+`./gradlew testPersonalDebugUnitTest testShareableDebugUnitTest` covers the socket messages both ways, the action
+mapping, reconnect backoff and when it gives up, the setup rules (which addresses and keys are accepted, when the form
+reopens, the home Wi-Fi pairing warning), reading a damaged saved connection, the microphone frame size (it must
+match the server's 30 ms frames) and that the shareable build carries no address or key.

@@ -5,6 +5,7 @@ scheduler sends as a deadline approaches. Revision cards use a simple Leitner sc
 right moves up a box and comes back later; one answered wrong goes back to box 1 and comes back soon.
 """
 import re
+import threading
 import time
 from datetime import datetime
 
@@ -27,64 +28,29 @@ CREATE TABLE IF NOT EXISTS cards (
   created REAL NOT NULL
 );
 """
-# A starter deck for a Level 3 Cybersecurity diploma, so quizzes work from day one (Arty adds more with card_add).
-STARTER_DECK = [
-    ("networking", "What does the TCP three-way handshake consist of?", "SYN, SYN-ACK, ACK"),
-    ("networking", "Which port does HTTPS use by default?", "443 (TCP)"),
-    ("networking", "Which port does SSH use by default?", "22 (TCP)"),
-    ("networking", "Which port does DNS use?", "53 (UDP, and TCP for large responses and zone transfers)"),
-    ("networking", "What is the main difference between TCP and UDP?", "TCP is connection-oriented and reliable (ordered, acknowledged); UDP is connectionless and faster with no delivery guarantee"),
-    ("networking", "What does ARP do?", "Maps an IPv4 address to a MAC address on the local network"),
-    ("networking", "How many usable host addresses are in a /24 IPv4 subnet?", "254"),
-    ("networking", "What does DHCP do?", "Automatically gives devices an IP address, subnet mask, gateway and DNS server"),
-    ("networking", "At which OSI layer does a router mainly work?", "Layer 3, the network layer"),
-    ("networking", "At which OSI layer does a switch mainly work?", "Layer 2, the data link layer"),
-    ("networking", "What is NAT used for?", "Translating private internal IP addresses to a public address (and back), so many devices share one public IP"),
-    ("networking", "What is a VLAN?", "A logical network segment on a switch that separates traffic as if it were on a separate physical network"),
-    ("security principles", "What does the CIA triad stand for?", "Confidentiality, Integrity, Availability"),
-    ("security principles", "What is the principle of least privilege?", "Users and programs get only the minimum access they need to do their job"),
-    ("security principles", "What is defence in depth?", "Using several layers of security controls so that one failing doesn't expose the system"),
-    ("security principles", "What is the difference between authentication and authorisation?", "Authentication proves who you are; authorisation decides what you're allowed to do"),
-    ("security principles", "Name the three common types of authentication factor.", "Something you know, something you have, something you are"),
-    ("security principles", "What is a vulnerability, a threat and a risk?", "A vulnerability is a weakness; a threat is something that could exploit it; risk is the likelihood and impact of that happening"),
-    ("cryptography", "What is the difference between symmetric and asymmetric encryption?", "Symmetric uses one shared key; asymmetric uses a public/private key pair"),
-    ("cryptography", "What is hashing used for, and can it be reversed?", "Checking integrity and storing passwords; a good hash is one-way and can't be reversed"),
-    ("cryptography", "Why is a salt added to a password before hashing?", "So identical passwords give different hashes, defeating rainbow tables"),
-    ("cryptography", "What does a digital signature prove?", "That the message came from the private key holder (authenticity) and wasn't changed (integrity), plus non-repudiation"),
-    ("cryptography", "Name a symmetric encryption algorithm in common use today.", "AES"),
-    ("threats", "What is phishing?", "Tricking people (usually by email or message) into revealing information or running malware by pretending to be trusted"),
-    ("threats", "What is ransomware?", "Malware that encrypts a victim's files and demands payment for the key"),
-    ("threats", "What is a DDoS attack?", "Flooding a service from many machines so legitimate users can't reach it"),
-    ("threats", "What is SQL injection, and how is it prevented?", "Inserting SQL into input so the database runs it; prevented with parameterised queries and input validation"),
-    ("threats", "What is a man-in-the-middle attack?", "An attacker secretly relays or alters communication between two parties"),
-    ("threats", "What is social engineering?", "Manipulating people rather than technology to get access or information"),
-    ("threats", "What is a zero-day vulnerability?", "A flaw unknown to the vendor, with no patch available yet"),
-    ("linux", "What does chmod 755 set on a file?", "Owner read/write/execute; group and others read/execute"),
-    ("linux", "Which file stores hashed user passwords on Linux?", "/etc/shadow"),
-    ("linux", "What does sudo do?", "Runs a command with another user's (usually root's) privileges"),
-    ("linux", "Which command shows listening network ports on Linux?", "ss -ltn (or netstat -tulpn)"),
-    ("law and ethics", "Which UK law makes unauthorised access to computer material an offence?", "The Computer Misuse Act 1990"),
-    ("law and ethics", "Which UK law, alongside UK GDPR, governs how personal data is processed?", "The Data Protection Act 2018"),
-    ("law and ethics", "What must a penetration tester have before testing a system?", "Written authorisation from the system owner, with an agreed scope"),
-    ("tools", "What is Wireshark used for?", "Capturing and analysing network traffic"),
-    ("tools", "What is Nmap used for?", "Discovering hosts and open ports/services on a network"),
-    ("tools", "What does a firewall do?", "Allows or blocks network traffic according to rules"),
-]
 
 DAY = 86400
+CARD_PARTS = 3
 BOX_DAYS = {1: 0, 2: 1, 3: 3, 4: 7, 5: 21}  # when a card in each box comes back
 # Reminders before a deadline: (seconds before, how to say it).
 DEADLINE_WARNINGS = [(7 * DAY, "within a week"), (2 * DAY, "within 2 days"), (DAY, "within a day"), (3 * 3600, "within 3 hours")]
 NOTE_RESULTS = 8
+NOTE_SEARCH_CHARS = 1500
 
 
-def init():
+def deck_cards(deck) -> list[tuple[str, str, str]]:
+    return [tuple(str(part) for part in card) for card in deck or []
+            if isinstance(card, (list, tuple)) and len(card) == CARD_PARTS and all(card)]
+
+
+def init(starter_deck=None):
     with store.write_lock, store.connect() as connection:
         connection.executescript(SCHEMA)
-        if connection.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0:
+        cards = deck_cards(starter_deck)
+        if cards and connection.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0:
             now = time.time()
             connection.executemany("INSERT INTO cards (topic, question, answer, due, created) VALUES (?, ?, ?, ?, ?)",
-                                   [(topic, question, answer, now, now) for topic, question, answer in STARTER_DECK])
+                                   [(topic, question, answer, now, now) for topic, question, answer in cards])
 
 
 def _list_name(name) -> str:
@@ -94,10 +60,32 @@ def _list_name(name) -> str:
 
 # ---------- lists ----------
 
+PAIRED_NAMES = ["salt and vinegar", "salt and pepper", "mac and cheese", "macaroni and cheese", "fish and chips",
+                "bread and butter", "cheese and onion", "ham and cheese", "cheese and tomato", "sweet and sour", "gin and tonic",
+                "strawberries and cream", "bangers and mash", "rhubarb and custard", "pen and paper", "nuts and bolts",
+                "black and white", "spaghetti and meatballs", "peanut butter and jelly", "rock and roll"]
+PAIRED_JOIN = "\x00"
+
+
+def _split_items(text: str) -> list[str]:
+    for paired in sorted(PAIRED_NAMES, key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(paired)}\b", lambda found: found.group(0).replace(" and ", f" {PAIRED_JOIN} "), text,
+                      flags=re.IGNORECASE)
+    parts = re.split(r",|\band\b|\n", text)
+    return [part.replace(f" {PAIRED_JOIN} ", " and ").strip() for part in parts]
+
+
+def _number(value) -> int | None:
+    try:
+        return int(str(value).strip().lstrip("#"))
+    except (TypeError, ValueError):
+        return None
+
+
 def list_add(list_name, items) -> str:
     name = _list_name(list_name)
     if isinstance(items, str):
-        items = [part.strip() for part in re.split(r",|\band\b|\n", items)]
+        items = _split_items(items)
     items = [str(item).strip() for item in items or [] if str(item).strip()]
     if not items:
         return "Say what to add."
@@ -147,13 +135,22 @@ def list_clear(list_name) -> str:
 
 # ---------- notes ----------
 
-def note_save(text) -> str:
+NOTE_CHARS = 4000
+
+
+def note_save(text, limit: int = NOTE_CHARS) -> str:
     text = str(text or "").strip()
     if not text:
         return "Say what to note."
     with store.write_lock, store.connect() as connection:
-        note_id = connection.execute("INSERT INTO notes (text, created) VALUES (?, ?)", (text[:4000], time.time())).lastrowid
+        note_id = connection.execute("INSERT INTO notes (text, created) VALUES (?, ?)", (text[:limit], time.time())).lastrowid
     return f"Noted (#{note_id})."
+
+
+def _shown_note(text: str) -> str:
+    if len(text) <= NOTE_SEARCH_CHARS:
+        return text
+    return text[:NOTE_SEARCH_CHARS] + f"... (cut: the full note is {len(text)} characters)"
 
 
 def note_search(query="") -> str:
@@ -163,12 +160,12 @@ def note_search(query="") -> str:
     found = [r for r in rows if all(w in r["text"].lower() for w in words)] if words else rows
     if not found:
         return "No notes match that." if words else "There are no notes yet."
-    return "Notes:\n" + "\n".join(f"#{r['id']} ({datetime.fromtimestamp(r['created']):%d %b}): {r['text']}" for r in found[:NOTE_RESULTS])
+    return "Notes:\n" + "\n".join(f"#{r['id']} ({datetime.fromtimestamp(r['created']):%d %b}): {_shown_note(r['text'])}" for r in found[:NOTE_RESULTS])
 
 
 def note_delete(note_id) -> str:
     with store.write_lock, store.connect() as connection:
-        removed = connection.execute("DELETE FROM notes WHERE id = ?", (int(note_id or 0),)).rowcount
+        removed = connection.execute("DELETE FROM notes WHERE id = ?", (_number(note_id) or 0,)).rowcount
     return "Deleted that note." if removed else f"There's no note #{note_id}."
 
 
@@ -207,10 +204,10 @@ def deadlines_show() -> str:
 
 def deadline_done(deadline_id) -> str:
     with store.write_lock, store.connect() as connection:
-        row = connection.execute("SELECT title FROM deadlines WHERE id = ?", (int(deadline_id or 0),)).fetchone()
+        row = connection.execute("SELECT title FROM deadlines WHERE id = ?", (_number(deadline_id) or 0,)).fetchone()
         if row is None:
             return f"There's no deadline #{deadline_id}."
-        connection.execute("UPDATE deadlines SET done = 1 WHERE id = ?", (int(deadline_id),))
+        connection.execute("UPDATE deadlines SET done = 1 WHERE id = ?", (_number(deadline_id),))
     return f"Marked done: {row['title']}. Nice one."
 
 
@@ -226,7 +223,9 @@ def due_deadline_reminders() -> list[str]:
                 # The closest warning point that applies ("in 3 hours"), with the earlier ones counted as done.
                 messages.append(f"{r['title']} is due {passed[-1][1]} ({datetime.fromtimestamp(r['due']):%a %d %b %H:%M}).")
             sent.update(str(seconds) for seconds, _ in passed)
-            connection.execute("UPDATE deadlines SET reminded = ? WHERE id = ?", (",".join(sorted(sent)), r["id"]))
+            reminded = ",".join(sorted(sent))
+            if reminded != r["reminded"]:
+                connection.execute("UPDATE deadlines SET reminded = ? WHERE id = ?", (reminded, r["id"]))
     return messages
 
 
@@ -263,7 +262,7 @@ def quiz_mark(card_id, correct) -> str:
     """Records whether the user got a card right; it comes back later if right, soon if wrong."""
     correct = str(correct).lower() in ("true", "1", "yes", "right", "correct")
     with store.write_lock, store.connect() as connection:
-        row = connection.execute("SELECT * FROM cards WHERE id = ?", (int(card_id or 0),)).fetchone()
+        row = connection.execute("SELECT * FROM cards WHERE id = ?", (_number(card_id) or 0,)).fetchone()
         if row is None:
             return f"There's no card #{card_id}."
         box = min(row["box"] + 1, max(BOX_DAYS)) if correct else 1
@@ -317,7 +316,7 @@ TOOLS = {
     "deadline_done": (lambda a: deadline_done(a.get("deadline_id")), _tool(
         "deadline_done", "Mark a deadline as done by its #number.", {"deadline_id": {"type": "integer"}}, ["deadline_id"])),
     "card_add": (lambda a: card_add(a.get("topic"), a.get("question"), a.get("answer")), _tool(
-        "card_add", "Add a revision flashcard for the user's studies (Level 3 Cybersecurity and anything else they're revising). "
+        "card_add", "Add a revision flashcard for the user's studies (anything they're revising). "
                     "Write clear exam-style questions with short, correct answers.",
         {"topic": {"type": "string", "description": "e.g. networking, cryptography, linux, law and ethics"},
          "question": {"type": "string"}, "answer": {"type": "string"}}, ["topic", "question", "answer"])),
@@ -338,7 +337,16 @@ TOOLS = {
 QUIZ_START = re.compile(r"\b(quiz|test) me\b(?:\s+(?:on|about)\s+(?P<topic>[\w\s&-]+?))?\s*[.!?]*$|\brevision (quiz|session)\b", re.I)
 QUIZ_STOP = re.compile(r"^\W*(stop|end|quit|enough|that's enough|no more|i'?m done|done)\b", re.I)
 QUIZ_IDLE_SECONDS = 30 * 60
-_quiz = {"card": None, "topic": "", "asked": 0.0}
+MAX_QUIZ_CLIENTS = 16
+_quizzes: dict[str, dict] = {}
+_quizzes_lock = threading.Lock()
+
+
+def _quiz_for(client: str) -> dict:
+    with _quizzes_lock:
+        if (client or "") not in _quizzes and len(_quizzes) >= MAX_QUIZ_CLIENTS:
+            del _quizzes[min(_quizzes, key=lambda name: _quizzes[name]["asked"])]
+        return _quizzes.setdefault(client or "", {"card": None, "topic": "", "asked": 0.0})
 
 
 def _card_due(topic: str):
@@ -347,34 +355,38 @@ def _card_due(topic: str):
         return connection.execute(query, (time.time(), f"%{topic}%") if topic else (time.time(),)).fetchone()
 
 
-def _ask(topic: str, opening: str = "") -> str:
+def _ask(quiz: dict, topic: str, opening: str = "") -> str:
     card = _card_due(topic)
     if card is None:
-        _quiz.update(card=None)
+        quiz.update(card=None)
         nothing = f"Nothing left to revise{' in ' + topic if topic else ''} right now: cards come back as they fall due."
         return (opening + "\n\n" + nothing).strip() + "\n\n" + quiz_progress()
-    _quiz.update(card=dict(card), topic=topic, asked=time.time())
+    quiz.update(card=dict(card), topic=topic, asked=time.time())
     return (opening + "\n\n" if opening else "") + f"{card['topic'].capitalize()}: {card['question']}"
 
 
-def quiz_turn(text: str, judge) -> str | None:
+def quiz_turn(text: str, judge, client: str = "", something_else: bool = False) -> str | None:
     """The reply if this message starts, answers or stops a quiz; None if it's nothing to do with one.
     judge(question, expected, given) -> (correct, feedback) asks the model to mark an answer."""
     text = text.strip()
+    quiz = _quiz_for(client)
     if match := QUIZ_START.search(text):
         topic = (match.group("topic") or "").strip().lower()
-        return _ask(topic, f"Quiz{' on ' + topic if topic else ''}: answer each one, or say stop.")
-    card = _quiz["card"]
-    if card is None or time.time() - _quiz["asked"] > QUIZ_IDLE_SECONDS:
+        return _ask(quiz, topic, f"Quiz{' on ' + topic if topic else ''}: answer each one, or say stop.")
+    card = quiz["card"]
+    if card is None or time.time() - quiz["asked"] > QUIZ_IDLE_SECONDS:
         return None
     if QUIZ_STOP.search(text):
-        _quiz.update(card=None)
+        quiz.update(card=None)
         return "Quiz over.\n\n" + quiz_progress()
     if "?" in text:  # a question of their own, not an answer: the quiz is over, Arty answers it normally
-        _quiz.update(card=None)
+        quiz.update(card=None)
+        return None
+    if something_else:
+        quiz.update(card=None)
         return None
     correct, feedback = judge(card["question"], card["answer"], text)
     quiz_mark(card["id"], correct)
     # The model's feedback adds something when they're right; when wrong, the answer itself says it all.
     verdict = f"Right! {feedback}".strip() if correct else f"Not quite: the answer is {card['answer']}."
-    return _ask(_quiz["topic"], verdict)
+    return _ask(quiz, quiz["topic"], verdict)

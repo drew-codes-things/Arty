@@ -105,6 +105,29 @@
       </form>
     </section>
 
+    <section id="phone-code" class="phone-code" hidden>
+      <h2>Phone setup code</h2>
+      <p class="connect-help">In Arty on your phone, choose <b>Scan QR code</b> and point the camera at this. It holds your API key and Cloudflare token, so don't photograph or share it.</p>
+      <img id="phone-code-image" class="phone-code-image" alt="QR code with this computer's Arty connection">
+      <div id="phone-code-status" class="connect-status" role="status"></div>
+      <div class="connect-actions">
+        <button id="phone-code-close" type="button" class="add">Done</button>
+      </div>
+    </section>
+
+    <section id="chrome-sites" class="chrome-sites" hidden>
+      <h2>Chrome sites</h2>
+      <p class="connect-help">Sites Arty may read and use in your Chrome. Forget one and Arty asks again before using it.</p>
+      <div id="site-list" class="site-list"></div>
+      <h2>Pair the Chrome extension</h2>
+      <p class="connect-help">Click the Arty for Chrome icon in Chrome and paste this code. Keep it to yourself: it lets a program drive your browser through Arty.</p>
+      <code id="pairing-code" class="pairing-code"></code>
+      <div id="chrome-sites-status" class="connect-status" role="status"></div>
+      <div class="connect-actions">
+        <button id="chrome-sites-close" type="button" class="add">Done</button>
+      </div>
+    </section>
+
     <form id="composer" class="composer">
       <div class="input-box">
         <textarea id="input" rows="1" placeholder="Message Arty"></textarea>
@@ -122,6 +145,8 @@
       </div>
     </form>
   </main>
+  <script src="bridge.js"></script>
+  <script src="sites.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

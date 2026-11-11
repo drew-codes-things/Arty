@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
+import app.arty.LaunchToken
 import app.arty.MainActivity
 import app.arty.R
 import app.arty.ui.speakableText
@@ -45,7 +46,7 @@ class ArtyWidget : AppWidgetProvider() {
         private fun open(context: Context, action: String?, requestCode: Int): PendingIntent =
             PendingIntent.getActivity(
                 context, requestCode,
-                Intent(context, MainActivity::class.java).putExtra(EXTRA_ACTION, action)
+                LaunchToken.stamp(context, Intent(context, MainActivity::class.java).putExtra(EXTRA_ACTION, action))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )

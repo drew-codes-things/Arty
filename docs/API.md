@@ -17,6 +17,8 @@ Any OpenAI client library works: set `base_url` to `http://192.0.2.13:8081/v1` a
 ```
 
 - `model`: `assistant-core` uses Arty's main model; `arty/<ollama model>` (e.g. `arty/qwen2.5-coder:14b`) uses that model for this request only. `GET /v1/models` lists them.
+- `GET /v1/models?all=1` lists every downloaded chat model. A request sending `X-Arty-Client-Tools: 1` and `X-Arty-Any-Model: 1` may name any of them; a model that isn't downloaded or only makes embeddings is a 400, and Ollama being down is a 503. See [Who Can Run Arty's Tools](tools-trust-boundary.md).
+- `client` (optional, on chats and chat jobs): your app's name, such as `desktop`, `voice`, `telegram` or `discord`. Lowercase letters, digits, `_` and `-`, up to 32 characters.
 - Arty adds its persona, long-term memory, recent conversations and all its tools itself, and remembers the exchange. Send only your app's messages; a `system` message is added as extra instructions.
 - The reply has the usual `choices[0].message.content`, plus `tools_used`.
 - Behind Cloudflare (https://arty.example.com, which cuts requests off at 100 s), use chat jobs instead: `POST /v1/chat/jobs` with the same body returns `{"id"}` at once (202); poll `GET /v1/chat/jobs/{id}` until `status` is `done` (`answer`, `tools_used`) or `failed` (`error`); while it's `running`, `partial` holds the answer's first sentences so far. Jobs live in memory for an hour.
@@ -40,6 +42,8 @@ Any OpenAI client library works: set `base_url` to `http://192.0.2.13:8081/v1` a
   If it would act in your name (see approvals below) you get `409` with `type: needs_approval` and a `reason`; resend with `"approved": true` once the user agrees.
 
 Tool names are `server__tool` (e.g. `research__web_search`, `workspace__browser_open`, `homelab__proxmox_status`) plus Arty's own (`schedule_task`, `start_background_task`, `list_models`, ...).
+
+Any key holder can approve its own request, so a key is as good as the owner's password: see [Who Can Run Arty's Tools](tools-trust-boundary.md).
 
 ## Background tasks
 
@@ -101,7 +105,14 @@ Attach audio to a chat message (above) and Arty transcribes it. The server mic a
 
 ## Approvals
 
-Held for approval: clicking post/send/connect/apply/delete-style buttons, submitting forms or pressing Enter on social, mail, shopping and code-hosting sites (list in `brain.json` > `approval`), any buy/pay/checkout button anywhere, and shell commands that push code, SSH out, POST data or send mail. Reading and browsing never are.
+Held for approval: clicking post/send/connect/apply/delete-style buttons, submitting forms, downloading, or pressing Enter or Space (in the browser or on the desktop, and desktop clicks) while a social, mail, shopping or code-hosting site is open (list in `brain.json` > `approval`), any buy/pay/checkout button anywhere, and shell commands that push code, SSH out, POST data or send mail. Typed text is checked like a command only on lines that look like one. Reading and browsing never are.
+
+## Approved computers
+
+- `POST /v1/device/start` (no key) with `{"name"}` starts the "approve this computer" flow and returns a `device_code`, a `user_code` and a link for a signed-in app; `POST /v1/device/token` (no key) with `{"device_code"}` returns the computer's own key once the owner has approved it.
+- `GET /v1/device/pending?code=` and `POST /v1/device/approve` with `{"user_code", "approve": true | false}` are for the signed-in app.
+- `GET /v1/devices` lists the approved computers (`id`, `name`, `address`, `created`, `last_used`; never the key). `DELETE /v1/devices/{id}` turns one key off at once.
+- A device key works everywhere the shared key does. Its `/v1/identity` proof is the HMAC keyed with the SHA-256 hex of the key.
 
 ## Health
 
@@ -109,6 +120,6 @@ Held for approval: clicking post/send/connect/apply/delete-style buttons, submit
 
 ## Arty for iPhone
 
-`GET /ios/...` (no key) serves the iPhone web app's files from `apps/beta/ios` (`ARTY_IOS_DIR` to move it): only known
+`GET /ios/...` (no key) serves the iPhone web app's files from `apps/ios` (`ARTY_IOS_DIR` to move it): only known
 file types, never hidden files or its tests, with a Content-Security-Policy that keeps the page talking to this
-server only. `/ios` redirects to `/ios/`. See [apps/beta/ios/README.md](../apps/beta/ios/README.md).
+server only. `/ios` redirects to `/ios/`. See [apps/ios/README.md](../apps/ios/README.md).

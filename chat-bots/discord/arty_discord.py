@@ -1,6 +1,6 @@
 """Arty on Discord, for its owner only.
 
-- /arty works anywhere once the app is added to Drew's account (User Install): any server,
+- /arty works anywhere once the app is added to the owner's account (User Install): any server,
   group chat or DM, even ones the bot isn't in. A "private" option makes the reply visible only to him.
 - Right-click a message > Apps > "Ask Arty" to have Arty reply to or explain it (private).
 - DMs to the bot, and @mentions in servers where the bot itself was added.
@@ -8,7 +8,7 @@ Anyone else gets a short private refusal (slash command and menu) or is ignored 
 their text never reaches Arty. Each channel keeps a short rolling history so follow-ups,
 including saying "yes" to an approval, work.
 
-Runs as a PufferPanel server on core-sys: settings (bot token, owner, Arty API key) come from
+Runs as a PufferPanel server on the home server: settings (bot token, owner, Arty API key) come from
 config.env in its folder, edited in PufferPanel's file manager, and discord.py lives in ./deps.
 """
 import asyncio
@@ -54,6 +54,7 @@ OWNER_ID = int(os.environ["DISCORD_OWNER_ID"])
 API_KEY = os.environ["ARTY_API_KEY"]
 BRAIN_URL = os.environ.get("BRAIN_URL", "http://127.0.0.1:8081/v1/chat/completions")
 BRAIN_BASE = BRAIN_URL.split("/v1/", 1)[0]
+CLIENT_NAME = "discord"
 DOWNLOAD_LINK = re.compile(r"!?\[([^\]]*)\]\((https?://[^)\s]+?(/arty-files/[^)\s]+))\)")
 DISCORD_FILE_BYTES = 10 * 1024 * 1024
 DISCORD_FILES_PER_MESSAGE = 10
@@ -82,7 +83,7 @@ def trimmed(history: list) -> list:
 
 
 def ask_brain(messages: list[dict]) -> str:
-    body = json.dumps({"model": "assistant-core", "messages": messages}).encode()
+    body = json.dumps({"model": "assistant-core", "messages": messages, "client": CLIENT_NAME}).encode()
     request = urllib.request.Request(BRAIN_URL, data=body, headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     with urllib.request.urlopen(request, timeout=BRAIN_TIMEOUT_SECONDS) as response:
         return json.loads(response.read())["choices"][0]["message"]["content"].strip() or "(no reply)"
@@ -95,7 +96,7 @@ async def answer(channel_key: str, prompt: str) -> str:
         reply = await asyncio.to_thread(ask_brain, messages)
     except (OSError, KeyError, ValueError) as error:  # OSError covers URLError, timeouts and dropped connections
         log.error("brain request failed: %s", error)
-        return f"I couldn't reach my brain just now ({error}). The AI server (CT 104) may be switched off."
+        return f"I couldn't reach my brain just now ({error}). The AI server may be switched off."
     histories[channel_key] = trimmed(history + [{"role": "user", "content": prompt}, {"role": "assistant", "content": reply}])
     return reply
 

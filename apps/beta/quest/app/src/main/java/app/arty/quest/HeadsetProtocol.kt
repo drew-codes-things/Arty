@@ -39,6 +39,8 @@ sealed interface ServerMessage {
 
 sealed interface HeadsetAction {
     data class SpotifyPlay(val query: String) : HeadsetAction
+    data class YoutubePlay(val query: String, val link: String) : HeadsetAction
+    data class AppPlay(val app: String, val query: String) : HeadsetAction
     data class Media(val command: MediaCommand) : HeadsetAction
     data class Volume(val louder: Boolean) : HeadsetAction
     data class OpenApp(val name: String) : HeadsetAction
@@ -77,6 +79,14 @@ object HeadsetProtocol {
     private fun actionFrom(message: JSONObject): HeadsetAction = when (val name = message.optString("action")) {
         "spotify_play" -> message.optString("query").trim().let {
             if (it.isEmpty()) HeadsetAction.Unknown(name) else HeadsetAction.SpotifyPlay(it)
+        }
+        "youtube_play" -> message.optString("query").trim().let {
+            if (it.isEmpty()) HeadsetAction.Unknown(name) else HeadsetAction.YoutubePlay(it, message.optString("url").trim())
+        }
+        "app_play" -> {
+            val app = message.optString("app").trim()
+            val query = message.optString("query").trim()
+            if (app.isEmpty() || query.isEmpty()) HeadsetAction.Unknown(name) else HeadsetAction.AppPlay(app, query)
         }
         "media_play" -> HeadsetAction.Media(MediaCommand.PLAY)
         "media_pause" -> HeadsetAction.Media(MediaCommand.PAUSE)

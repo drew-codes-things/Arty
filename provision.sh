@@ -20,9 +20,15 @@ HEAL_GUESTS=${HEAL_GUESTS-100 101 102 103 $DESKTOP_VMID}
 NEXTCLOUD_CT=${NEXTCLOUD_CT-100}
 TIMEZONE=${TIMEZONE:-Europe/London}
 SET_BACKUP_JOBS=${SET_BACKUP_JOBS:-yes}
+YT_DLP_VERSION=${YT_DLP_VERSION:-}
+case "$YT_DLP_VERSION" in
+  *[!0-9.]*) echo "YT_DLP_VERSION may only hold digits and dots" >&2; exit 1 ;;
+esac
 
 echo "== desktop VM: document, OCR and clipboard tools"
-ssh "$DESKTOP" 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq poppler-utils pandoc tesseract-ocr tesseract-ocr-eng xlsx2csv python3-openpyxl xclip wmctrl file ffmpeg >/dev/null && mkdir -p ~/library ~/repos ~/Downloads ~/.local/bin && python3 -m venv ~/.local/yt-dlp-venv && ~/.local/yt-dlp-venv/bin/pip install -q --upgrade "yt-dlp[default]" && ln -sf ~/.local/yt-dlp-venv/bin/yt-dlp ~/.local/bin/yt-dlp && echo "   installed"'
+ssh "$DESKTOP" 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq poppler-utils pandoc tesseract-ocr tesseract-ocr-eng xlsx2csv python3-openpyxl xclip wmctrl file ffmpeg >/dev/null && mkdir -p ~/library ~/repos ~/Downloads ~/.local/bin'
+ssh "$DESKTOP" "pinned='$YT_DLP_VERSION' sh -s" < arty-pc/install-yt-dlp
+echo "   installed"
 
 scp -q bin/homelab-facts "$PROXMOX:/usr/local/sbin/homelab-facts"
 scp -q bin/homelab-security "$PROXMOX:/usr/local/sbin/homelab-security"

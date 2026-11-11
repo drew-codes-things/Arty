@@ -64,4 +64,28 @@ class SetupRulesTest {
         assertTrue(needsNewKey(KEY_REFUSED))
         assertFalse(needsNewKey("closed (1006)"))
     }
+
+    @Test
+    fun ipv6AddressesGetTheHeadsetPortOnlyWhenTheyHaveNone() {
+        assertEquals("ws://[fe80::1]:8790/ws/headset", headsetUrlFrom("[fe80::1]"))
+        assertEquals("ws://[fe80::1]:8790/ws/headset", headsetUrlFrom("ws://[fe80::1]"))
+        assertEquals("ws://[::1]:9000/ws/headset", headsetUrlFrom("ws://[::1]:9000"))
+        assertEquals("wss://[2001:db8::1]/ws/headset", headsetUrlFrom("wss://[2001:db8::1]"))
+    }
+
+    @Test
+    fun ipv6LoopbackLinkLocalAndPrivateAddressesAreHome() {
+        listOf("[::1]", "[fe80::1]", "[FE80::abcd]", "[fd12:3456::1]", "[fc00::2]").forEach { assertTrue(it, isHomeNetworkHost(it)) }
+        listOf("[2001:db8::1]", "[2606:4700::1111]", "[fe7f::1]").forEach { assertFalse(it, isHomeNetworkHost(it)) }
+        assertNull(headsetAddressProblem("ws://[fe80::1]:8790/ws/headset"))
+        assertEquals(ADDRESS_PLAIN_PROBLEM, headsetAddressProblem("ws://[2001:db8::1]:8790/ws/headset"))
+    }
+
+    @Test
+    fun pairingByCodeOverPlainWebSocketsWarnsToStayOnTheHomeNetwork() {
+        assertEquals(PAIRING_HOME_ONLY, pairingWarning("arty-server.local"))
+        assertEquals(PAIRING_HOME_ONLY, pairingWarning("ws://192.168.1.16:8790"))
+        assertNull(pairingWarning("wss://arty.example.com/ws/headset"))
+        assertNull(pairingWarning(""))
+    }
 }

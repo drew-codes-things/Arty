@@ -63,3 +63,17 @@ def test_device_name_cannot_break_the_script():
     name_line = next(line for line in body.decode().splitlines() if line.startswith("DEVICE_NAME="))
     value = name_line[len('DEVICE_NAME="'):-1]
     assert not set(value) & set('"$`\\')
+
+
+def test_a_device_seen_again_within_a_minute_does_not_rewrite_the_file(tmp_path, monkeypatch):
+    import devices
+    store = DeviceStore(str(tmp_path))
+    device, _ = store.add("PC", "debian", "pc")
+    writes = []
+    real_write = devices.write_private_json
+    monkeypatch.setattr(devices, "write_private_json", lambda path, data: (writes.append(1), real_write(path, data)))
+    store.touch(device.id)
+    store.touch(device.id)
+    store.touch(device.id)
+    assert len(writes) == 1
+    assert store.list()[0].last_seen > 0

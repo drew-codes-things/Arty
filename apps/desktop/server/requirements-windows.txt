@@ -10,3 +10,4 @@ soundfile>=0.12
 numpy>=1.26
 kokoro-onnx>=0.4.7
 pillow>=10.0
+segno>=1.6

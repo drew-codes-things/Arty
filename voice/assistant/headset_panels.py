@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import math
 import re
 import time
+from datetime import datetime
 
 import aiohttp
 
@@ -10,6 +12,7 @@ REQUEST_TIMEOUT_SECONDS = 60
 CALENDAR_DAYS = 7
 MAX_EVENTS = 6
 MAX_REMINDERS = 6
+REMINDER_TIME_FORMAT = "%Y-%m-%dT%H:%M"
 GUEST_LINE = re.compile(r"^(?:CT|VM) \d+ (?P<name>[\w.-]+)(?: \([\d.]+\))?: (?P<state>\w+)(?:, (?P<detail>.*))?$")
 HOST_LINE = re.compile(r"^Host (?P<name>[\w.-]+)(?: \([\d.]+\))?: (?P<state>\w+)(?:, (?P<detail>.*))?$")
 HEALTHY = {"running", "online"}
@@ -34,11 +37,43 @@ def events_from(calendar: dict) -> list[dict]:
             for event in (calendar.get("events") or [])[:MAX_EVENTS]]
 
 
+def is_epoch_seconds(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def parse_reminder_time(next_run) -> datetime | None:
+    try:
+        if is_epoch_seconds(next_run):
+            return datetime.fromtimestamp(next_run)
+        return datetime.fromisoformat(str(next_run))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def reminder_time(next_run) -> str:
+    moment = parse_reminder_time(next_run)
+    if moment is None:
+        return str(next_run)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone()
+    return moment.strftime(REMINDER_TIME_FORMAT)
+
+
+def reminder_sort_key(next_run) -> float:
+    moment = parse_reminder_time(next_run)
+    if moment is None:
+        return math.inf
+    try:
+        return moment.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return math.inf
+
+
 def reminders_from(schedules: dict) -> list[dict]:
     active = [s for s in schedules.get("schedules") or [] if s.get("enabled", True) and s.get("next_run")]
-    active.sort(key=lambda s: s["next_run"])
-    return [{"title": s.get("title") or s.get("message") or "Reminder", "next_run": s["next_run"]}
-            for s in active[:MAX_REMINDERS]]
+    soonest_first = sorted(active, key=lambda s: reminder_sort_key(s["next_run"]))
+    return [{"title": s.get("title") or s.get("message") or "Reminder", "next_run": reminder_time(s["next_run"])}
+            for s in soonest_first[:MAX_REMINDERS]]
 
 
 class Dashboard:

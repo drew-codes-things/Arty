@@ -121,8 +121,9 @@ class Honesty(unittest.TestCase):
 
 
     def test_sign_in_help_only_for_websites(self):
-        self.assertNotIn("VM 105", brain.question_for_user("Please sign in to your home phone and call your mother"))
-        self.assertIn("VM 105", brain.question_for_user("Please sign in to LinkedIn in the browser"))
+        console = {"desktop_console": "Proxmox web UI > VM 900 test-desktop > Console"}
+        self.assertNotIn("VM 900", brain.question_for_user("Please sign in to your home phone and call your mother", console))
+        self.assertIn("VM 900", brain.question_for_user("Please sign in to LinkedIn in the browser", console))
 
     def test_stray_punctuation_in_argument_names_is_repaired(self):
         with unittest.mock.patch.object(brain, "tool_parameters", lambda name: {"url", "max_length"}):

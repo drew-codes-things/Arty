@@ -1,6 +1,6 @@
 package app.arty.quest
 
-data class LaunchableApp(val label: String, val packageName: String)
+data class LaunchableApp(val label: String, val packageName: String, val activityName: String = "")
 
 private val NOT_LETTERS_OR_DIGITS = Regex("[^a-z0-9]+")
 private val STORE_PREFIXES = listOf("meta quest ", "meta ", "oculus ")

@@ -4,7 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-const val SETUP_HELP = "Enter your Arty voice server's headset address and key."
+const val SETUP_HELP = "Enter your Arty voice server's address and the setup code it gives you. Or type the long headset key instead."
 const val KEY_REFUSED_HELP = "Arty refused that headset key. Check it and connect again."
 const val CONNECTING = "Connecting to Arty..."
 const val MIC_REFUSED = "Arty can't hear you: allow the microphone in the headset's app permissions."
@@ -26,6 +26,7 @@ class QuestState {
     var panels by mutableStateOf(Panels())
     var setupOpen by mutableStateOf(false)
     var setupProblem by mutableStateOf("")
+    var setupBusy by mutableStateOf(false)
     var canCancelSetup by mutableStateOf(false)
 
     fun apply(message: ServerMessage) {

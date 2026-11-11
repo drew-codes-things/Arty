@@ -8,9 +8,26 @@ const THREAD_WAIT_MS = 12000;
 const POLL_MS = 400;
 const SETTLE_MS = 1000;
 const SEARCH_URL = "https://mail.google.com/mail/u/0/#search/";
+const TOKEN_FILE = "agent-token.json";
+const TOKEN_HEADER = "X-Arty-Agent-Token";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let running = false;
+
+async function agentToken() {
+  const response = await fetch(chrome.runtime.getURL(TOKEN_FILE), { cache: "no-store" });
+  const { token } = await response.json();
+  if (!token) throw new Error(`${TOKEN_FILE} holds no token`);
+  return token;
+}
+
+async function askAgent(path, body, token) {
+  return fetch(`${AGENT}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", [TOKEN_HEADER]: token },
+    body: JSON.stringify(body),
+  });
+}
 
 async function serve() {
   if (running) return;
@@ -19,9 +36,12 @@ async function serve() {
     while (true) {
       chrome.runtime.getPlatformInfo(() => {}); // any extension call keeps this worker from being put to sleep
       let job;
+      let token;
       try {
-        const response = await fetch(`${AGENT}/job`, { method: "POST" });
+        token = await agentToken();
+        const response = await askAgent("/job", {}, token);
         if (response.status === 204) continue; // nothing to do yet (the agent holds each request open a while)
+        if (!response.ok) throw new Error(`the agent said ${response.status}`);
         job = await response.json();
       } catch (error) {
         await sleep(RETRY_MS); // the agent is restarting
@@ -33,7 +53,7 @@ async function serve() {
       } catch (error) {
         result = { error: String((error && error.message) || error) };
       }
-      await fetch(`${AGENT}/result`, { method: "POST", body: JSON.stringify({ id: job.id, result }) }).catch(() => {});
+      await askAgent("/result", { id: job.id, result }, token).catch(() => {});
     }
   } finally {
     running = false;

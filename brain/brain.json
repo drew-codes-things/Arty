@@ -687,7 +687,12 @@
       "\\bgit\\s+push\\b",
       "\\b(ssh|scp|rsync|sftp)\\b",
       "\\bcurl\\b.*\\s(-X\\s*(POST|PUT|PATCH|DELETE)|--data|-d\\s|-F\\s)",
-      "\\b(mail|sendmail|mutt|msmtp)\\b"
+      "\\b(mail|sendmail|mutt|msmtp)\\b",
+      "\\b(curl|wget)\\b[^|;&]*\\|\\s*(sudo\\s+)?\\w*sh\\b",
+      "\\bcurl\\b.*\\s(-T\\s|--upload-file|--json\\b|--form\\b)",
+      "\\bwget\\b.*--(post-data|post-file|method|body-data|body-file)",
+      "\\b(nc|ncat|netcat|socat|telnet)\\s",
+      "\\b(python[\\d.]*|perl|ruby|node|php)\\s+-\\w*[ce]\\b"
     ],
     "always": [
       "homelab__start_guest",
@@ -807,5 +812,10 @@
       22,
       8
     ]
-  }
+  },
+  "desktop_console": "",
+  "time_zone": "Europe/London",
+  "time_zone_label": "UK time",
+  "crisis_help": "Samaritans are free, any time, day or night, on 116 123, or you can text SHOUT to 85258. If you're in danger right now, call 999.",
+  "starter_deck": []
 }

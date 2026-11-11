@@ -40,9 +40,9 @@ def test_mouse_and_keyboard_ask_once_per_reply_when_set_to(monkeypatch):
                              {computer.consent_key("computer_click")}) is None
 
 
-def test_mouse_and_keyboard_dont_ask_by_default(monkeypatch):
+def test_mouse_and_keyboard_ask_by_default(monkeypatch):
     monkeypatch.setattr(computer, "setting", lambda section, key, default=None: default)
-    assert computer.needs_ok("computer_click", {"target": "Send"}, set()) is None
+    assert computer.needs_ok("computer_click", {"target": "Send"}, set())
 
 
 def test_secrets_and_outside_home_are_refused():

@@ -31,8 +31,10 @@ HISTORY_SECONDS = 5 * 60
 HISTORY_MESSAGES = 8
 SLOW_ANSWER_SECONDS = 6
 BRAIN_TIMEOUT_SECONDS = 300
+CLIENT_NAME = "voice"
 NO_SPEECH_LIMIT = 0.6
 RETRY_SECONDS = (1, 2, 5, 10, 30)
+HEALTHY_RUN_SECONDS = 300
 SPOKEN_STYLE = ("You are speaking out loud through speakers at home (voice mode). Answer in at most two or "
                 "three short spoken sentences of plain words: no markdown, lists, tables, links, code or emoji. If the "
                 "full answer is long, give the gist and offer to put the details in a chat. The microphone also "
@@ -60,11 +62,11 @@ class Senses:
         self.wake_model = WhisperModel(WAKE_MODEL, device="cpu", compute_type="int8")
         self.command_model = WhisperModel(COMMAND_MODEL, device="cpu", compute_type="int8")
         self.voice = Voice(VOICE_MODEL)
-        self.model_lock = threading.Lock()
+        self.model_locks = {id(self.wake_model): threading.Lock(), id(self.command_model): threading.Lock()}
         self.voice_lock = threading.Lock()
 
     def transcribe(self, model: WhisperModel, audio: bytes, beam_size: int, primer: str | None = None) -> str:
-        with self.model_lock:
+        with self.model_locks[id(model)]:
             segments, _ = model.transcribe(to_float(audio), language="en", beam_size=beam_size,
                                            condition_on_previous_text=False, without_timestamps=True,
                                            initial_prompt=primer)
@@ -127,8 +129,20 @@ class Assistant:
     async def handle_utterances(self) -> None:
         while True:
             utterance = await self.utterances.get()
-            if not self.muted():
+            if self.muted():
+                continue
+            try:
                 await self.handle_utterance(utterance)
+            except Exception:
+                log.exception("that turn failed; still listening")
+                await self.recover_after_failed_turn()
+
+    async def recover_after_failed_turn(self) -> None:
+        self.speaking = False
+        try:
+            await self.show_resting_state()
+        except Exception as error:
+            log.warning("couldn't show the resting state after a failed turn: %r", error)
 
     async def handle_utterance(self, utterance: bytes) -> None:
         opening = await asyncio.to_thread(self.senses.transcribe, self.senses.wake_model,
@@ -214,8 +228,10 @@ class Assistant:
             spoken.put_nowait("Sorry, I can't reach my brain right now.")
         finally:
             spoken.put_nowait(None)
-            await speaker
-            await self.finish_speaking(follow_up=not ignored)
+            try:
+                await speaker
+            finally:
+                await self.finish_speaking(follow_up=not ignored)
 
     async def finish_speaking(self, follow_up: bool) -> None:
         self.speaking = False
@@ -237,7 +253,7 @@ class Assistant:
             spoken.put_nowait("One moment.")
 
     async def ask_brain(self, question: str):
-        body = {"model": "assistant-core", "stream": True,
+        body = {"model": "assistant-core", "stream": True, "client": CLIENT_NAME,
                 "messages": [{"role": "system", "content": SPOKEN_STYLE}, *self.conversation.history(),
                              {"role": "user", "content": question}]}
         headers = {"Authorization": f"Bearer {BRAIN_KEY}"}
@@ -257,7 +273,10 @@ class Assistant:
 
     async def speak_queue(self, spoken: asyncio.Queue) -> None:
         while (text := await spoken.get()) is not None:
-            await self.say(text)
+            try:
+                await self.say(text)
+            except Exception:
+                log.exception("couldn't speak a sentence; carrying on with the rest")
 
     async def say_all(self, texts: list[str], follow_up: bool = False) -> None:
         self.speaking = True
@@ -289,8 +308,8 @@ class HubOutput:
                 result = await response.json(content_type=None)
                 if response.status != 200 or not result.get("ok"):
                     log.warning("hub couldn't play everywhere: %s", result)
-        except (aiohttp.ClientError, ValueError) as error:
-            log.error("couldn't send speech to the hub: %s", error)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            log.error("couldn't send speech to the hub: %r", error)
 
     async def state(self, name: str, text: str = "", seconds: float = 0) -> None:
         return None
@@ -386,6 +405,22 @@ async def room_command(assistant: Assistant, output: HubOutput, command: str) ->
     return True
 
 
+async def keep_running(name: str, run: Callable[[], Awaitable[None]]) -> None:
+    attempt = 0
+    while True:
+        started = time.monotonic()
+        try:
+            await run()
+            return
+        except Exception:
+            log.exception("%s stopped unexpectedly; restarting it", name)
+        if time.monotonic() - started >= HEALTHY_RUN_SECONDS:
+            attempt = 0
+        delay = RETRY_SECONDS[min(attempt, len(RETRY_SECONDS) - 1)]
+        attempt += 1
+        await asyncio.sleep(delay)
+
+
 async def main() -> None:
     import headset
     import satellite
@@ -394,8 +429,10 @@ async def main() -> None:
         output = HubOutput(http)
         server_room = Assistant(senses, output, http)
         server_room.act = lambda command: room_command(server_room, output, command)
-        await asyncio.gather(HubLink(server_room).keep_listening(), server_room.handle_utterances(),
-                             headset.serve(senses, http), satellite.serve(senses))
+        await asyncio.gather(keep_running("the server mic", HubLink(server_room).keep_listening),
+                             keep_running("the room assistant", server_room.handle_utterances),
+                             keep_running("the headset server", lambda: headset.serve(senses, http)),
+                             keep_running("the speech server", lambda: satellite.serve(senses)))
 
 
 if __name__ == "__main__":

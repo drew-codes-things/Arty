@@ -8,9 +8,11 @@ replies into speech (Kokoro), and runs the brain's requests on this computer.
 Replies stream as NDJSON, one spoken sentence per event, so speech starts early.
 """
 import base64
+import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import queue
 import signal
@@ -36,6 +38,7 @@ from process import confirm
 from process import connection
 from process.notice import Noticer
 from process import notifications
+from process import phone_setup
 from process.asr_func.asr_push_to_talk import build_model, transcribe_audio, transcribe_file
 from process.asr_func.listen import Ear, wake_match
 from process.asr_func.recorder import Recorder, SAMPLERATE
@@ -51,39 +54,78 @@ from process.tts_func.engine import warmup as warmup_tts
 config = load_config()
 app = FastAPI(title="Arty Desktop")
 
-# This service can use the computer, so only its own callers may reach it. Every request needs the
-# token below (in X-Arty-Token), which this service writes to a file only this user can read: the Arty
-# window gets it from Electron, local scripts read the file. The one exception is the Arty Chrome
-# extension: Chrome marks its requests Sec-Fetch-Site "none" (or, for POSTs, a chrome-extension://
-# origin), and a web page can produce neither. A web page can fake "Origin: null" (a sandboxed frame)
-# or send no Origin at all (an <img> tag), so those alone are never enough. The Host check stops DNS rebinding.
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 TOKEN = secrets.token_urlsafe(32)
 TOKEN_FILE = cfg.DATA_ROOT / ".arty_token"
+EXTENSION_ID = "lepggpdmafbgbgfgacpglpjelmiofkli"
+EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
+EXTENSION_ROUTES = {("POST", "/browser/next"), ("POST", "/browser/result")}
+OPEN_ROUTES = {("GET", "/whoami")}
+PAIRING_FILE = cfg.DATA_ROOT / ".arty_browser_pairing"
+PAIRING_CODE = re.compile(r"[0-9a-f]{32}")
+PAIRING_BYTES = 16
+_pairing = {}
+_pairing_lock = threading.Lock()
+SERVICE_PROOF_CONTEXT = "arty-service:"
+NONCE = re.compile(r"[0-9a-f]{32}")
 
 
 def _write_token():
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as handle:
-        handle.write(TOKEN)
+    cfg.write_private(TOKEN_FILE, TOKEN)
+
+
+def _has_token(request):
+    return hmac.compare_digest(request.headers.get("x-arty-token", "").encode(), TOKEN.encode())
+
+
+def pairing_code():
+    with _pairing_lock:
+        if "code" not in _pairing:
+            _pairing["code"] = _stored_pairing_code() or _new_pairing_code()
+        return _pairing["code"]
+
+
+def _stored_pairing_code():
+    try:
+        stored = PAIRING_FILE.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+    return stored if PAIRING_CODE.fullmatch(stored) else ""
+
+
+def _new_pairing_code():
+    code = secrets.token_hex(PAIRING_BYTES)
+    PAIRING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_private(PAIRING_FILE, code)
+    return code
+
+
+def _is_arty_extension(request):
+    is_extension_route = (request.method, request.url.path) in EXTENSION_ROUTES
+    if not is_extension_route or request.headers.get("origin") != EXTENSION_ORIGIN:
+        return False
+    return hmac.compare_digest(request.headers.get("x-arty-pairing", "").encode(), pairing_code().encode())
+
+
+def _is_from_a_web_page(request):
+    return "origin" in request.headers or "sec-fetch-site" in request.headers
 
 
 @app.middleware("http")
 async def only_local_callers(request, call_next):
     host = (request.headers.get("host") or "").rsplit(":", 1)[0]
     origin = request.headers.get("origin") or ""
-    from_extension = origin.startswith("chrome-extension://") or request.headers.get("sec-fetch-site") == "none"
-    has_token = hmac.compare_digest(request.headers.get("x-arty-token", ""), TOKEN)
-    if request.method == "OPTIONS" or (host in ALLOWED_HOSTS and (has_token or from_extension)):
+    is_open_route = (request.method, request.url.path) in OPEN_ROUTES and not _is_from_a_web_page(request)
+    if request.method == "OPTIONS" or (host in ALLOWED_HOSTS and (is_open_route or _has_token(request) or _is_arty_extension(request))):
         return await call_next(request)
     fetch_from = "/".join(request.headers.get(h, "-") for h in ("sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"))
     print(f"[security] refused {request.method} {request.url.path} (origin {origin or 'none'}, host {host or 'none'}, fetch {fetch_from})", flush=True)
     return JSONResponse({"error": "not allowed"}, status_code=403)
 
 
-app.add_middleware(CORSMiddleware, allow_origin_regex=r"^(null|chrome-extension://[a-p]{32})$", allow_methods=["*"],
-                   allow_headers=["Content-Type", "X-Arty-Token"])
+app.add_middleware(CORSMiddleware, allow_origin_regex=rf"^(null|{EXTENSION_ORIGIN})$", allow_methods=["*"],
+                   allow_headers=["Content-Type", "X-Arty-Token", "X-Arty-Pairing"])
 
 _listen_cfg = config.get("listen") or {}
 LISTEN_SECONDS = float(_listen_cfg.get("max_seconds", 15))
@@ -101,6 +143,7 @@ LOOK_NOTE = ("<screen>This is about what's on my screen right now. Here is what 
              "Answer from that. If there's an error, say what it means and how to fix it.</screen>")
 LOOK_DEFAULT = "What's on my screen? If there's an error or a problem, explain it and how to fix it."
 MEDIA_CHUNK_BYTES = 64 * 1024
+REPLY_FAILED = "Something went wrong on this computer partway through that reply. Try again, and check service.log if it keeps happening."
 
 _whisper = None
 _whisper_lock = threading.Lock()
@@ -164,6 +207,7 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
     splitter = SentenceSplitter()
     spoken = []
     shown = []  # everything shown, spoken or not (a draft to copy is only shown)
+    actions = []
     index = 0
     interrupted = False
     if look:
@@ -193,6 +237,8 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
                     interrupted = True
                     break
                 if isinstance(delta, brain.Activity):
+                    if not delta.confirm and delta.label:
+                        actions.append(delta.label)
                     yield _ndjson({"type": "confirm" if delta.confirm else "activity", "id": delta.confirm,
                                    "where": delta.where, "text": delta.label})
                     continue
@@ -208,8 +254,13 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
             generator.close()
     except brain.BrainError as error:
         print(f"[brain] {error}", flush=True)
-        brain.save_turn(user_text, " ".join(spoken))
+        brain.save_turn(user_text, " ".join(spoken), actions=actions)
         yield _ndjson({"type": "error", "message": str(error)})
+        return
+    except Exception as error:
+        print(f"[reply] {type(error).__name__}: {error}", flush=True)
+        brain.save_turn(user_text, " ".join(spoken), actions=actions)
+        yield _ndjson({"type": "error", "message": REPLY_FAILED})
         return
 
     limit = stop_at()
@@ -219,8 +270,7 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
         heard = f"{heard}..." if heard else ""
     else:
         heard = " ".join(shown)
-    brain.save_turn(user_text, heard)
-    print(f"[arty] {heard}", flush=True)
+    brain.save_turn(user_text, heard, actions=actions)
     yield _ndjson({"type": "interrupted" if interrupted else "done", "chunks": index, "reply": heard})
 
 
@@ -229,7 +279,6 @@ def chat_stream(body: ChatIn):
     text = body.text.strip()
     if not text:
         return StreamingResponse(iter([_ndjson({"type": "error", "message": "Empty message."})]), media_type="application/x-ndjson")
-    print(f"[you] {text}", flush=True)
     return StreamingResponse(_stream_reply(text, body.speak, body.look), media_type="application/x-ndjson")
 
 
@@ -258,6 +307,8 @@ def call_status():
 
 
 NOTICE_CHECK_SECONDS = 30
+MAX_FAILED_READINGS_IN_A_ROW = 10
+NOTICE_SLOW_CHECK_SECONDS = 300
 _notices = {"id": 0, "pending": None}
 _notices_lock = threading.Lock()
 
@@ -267,7 +318,13 @@ def offer_notice(notice):
         _notices["id"] += 1
         _notices["pending"] = (_notices["id"], notice)
         notice_id = _notices["id"]
-    notifications.record_notice(notice.said(), notice_id)
+    try:
+        notifications.record_notice(notice.said(), notice_id)
+    except Exception:
+        with _notices_lock:
+            if _notices["pending"] and _notices["pending"][0] == notice_id:
+                _notices["pending"] = None
+        raise
     return notice_id
 
 
@@ -281,15 +338,31 @@ def take_notice(notice_id):
 
 
 def watch_for_notices(watcher, read_idle=idle.seconds_idle, read_app=context.frontmost_app, sleep=time.sleep):
+    failed_in_a_row = 0
     while True:
-        seconds = read_idle()
-        if seconds is None:
-            print("[notice] this desktop doesn't say how long it has been idle, so Arty won't notice comings and goings", flush=True)
-            return
-        notice = watcher.observe(seconds, read_app())
-        if notice and not call.is_on():
-            offer_notice(notice)
-        sleep(NOTICE_CHECK_SECONDS)
+        try:
+            seconds = read_idle()
+            if seconds is None:
+                print("[notice] this desktop doesn't say how long it has been idle, so Arty won't notice comings and goings", flush=True)
+                return
+            notice = watcher.observe(seconds, read_app(), holding_back=call.is_on())
+            if notice:
+                try:
+                    offer_notice(notice)
+                except Exception:
+                    watcher.retract(notice)
+                    raise
+            failed_in_a_row = 0
+        except Exception as error:
+            failed_in_a_row += 1
+            if failed_in_a_row == MAX_FAILED_READINGS_IN_A_ROW:
+                print(f"[notice] the notice check failed {failed_in_a_row} times in a row "
+                      f"({type(error).__name__}: {error}); slowing down to one check every "
+                      f"{NOTICE_SLOW_CHECK_SECONDS // 60} minutes", flush=True)
+            elif failed_in_a_row < MAX_FAILED_READINGS_IN_A_ROW:
+                print(f"[notice] the notice check failed ({type(error).__name__}: {error}); trying again", flush=True)
+        is_struggling = failed_in_a_row >= MAX_FAILED_READINGS_IN_A_ROW
+        sleep(NOTICE_SLOW_CHECK_SECONDS if is_struggling else NOTICE_CHECK_SECONDS)
 
 
 def start_noticing():
@@ -342,7 +415,6 @@ def confirm_answer(body: ConfirmIn):
 # ---------- listening ----------
 
 def _reply_to(transcript, look=False):
-    print(f"[you] {transcript}", flush=True)
     yield _ndjson({"type": "transcript", "text": transcript})
     yield from _stream_reply(transcript, True, look)
 
@@ -588,10 +660,30 @@ def say(body: SayIn):
     return {"audio": base64.b64encode(wav).decode("ascii")}
 
 
-@app.get("/browser/next")
+@app.post("/browser/next")
 def browser_next(timeout: float = 25.0):
     """For the Chrome extension: the next thing to do in the browser, or {} after `timeout`."""
     return browser.next_command(min(timeout, 55.0)) or {}
+
+
+class SiteIn(BaseModel):
+    site: str
+
+
+@app.get("/browser/pairing")
+def browser_pairing():
+    return {"code": pairing_code()}
+
+
+@app.get("/browser/sites")
+def browser_sites():
+    return {"sites": browser.allowed_sites()}
+
+
+@app.post("/browser/sites/forget")
+def browser_forget_site(body: SiteIn):
+    browser.forget_site(body.site)
+    return {"sites": browser.allowed_sites()}
 
 
 class BrowserResultIn(BaseModel):
@@ -682,7 +774,7 @@ def restart_service():
 
 
 def _from_arty_window(request):
-    return hmac.compare_digest(request.headers.get("x-arty-token", ""), TOKEN)
+    return _has_token(request)
 
 
 @app.get("/connection")
@@ -701,6 +793,23 @@ def connection_set(body: ConnectionIn, request: Request):
         return JSONResponse({"error": str(problem)}, status_code=400)
     connection.save(entered)
     return JSONResponse({"ok": True, "reached": reached}, background=BackgroundTask(restart_service))
+
+
+@app.get("/phone-setup-code")
+def phone_setup_code(request: Request):
+    if not _from_arty_window(request):
+        return JSONResponse({"error": "Only the Arty window can show the phone setup code."}, status_code=403)
+    try:
+        return phone_setup.phone_code()
+    except phone_setup.NothingToShare as problem:
+        return JSONResponse({"error": str(problem)}, status_code=400)
+
+
+@app.get("/whoami")
+def whoami(nonce: str = ""):
+    if not NONCE.fullmatch(nonce):
+        return JSONResponse({"error": "nonce must be 32 lowercase hex characters"}, status_code=400)
+    return {"proof": hmac.new(TOKEN.encode(), f"{SERVICE_PROOF_CONTEXT}{nonce}".encode(), hashlib.sha256).hexdigest()}
 
 
 @app.get("/health")

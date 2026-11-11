@@ -2,13 +2,8 @@
 // Arty Desktop's window. Everything goes through the local service on 127.0.0.1:8765
 // (server/arty_server.py), which talks to Arty's brain and runs things on this computer.
 
-const BRIDGE = 'http://127.0.0.1:8765';
-
-/** A request to the local service, with the token that proves it comes from this window. */
-function api(path, options = {}) {
-  return fetch(`${BRIDGE}${path}`, { ...options, headers: { ...(options.headers || {}), 'X-Arty-Token': window.arty?.token() || '' } });
-}
 const HEALTH_EVERY_MS = 15000;
+const CALL_CHECK_TIMEOUT_MS = 5000;
 const WAKE_TIMEOUT_S = 120;
 
 const $ = (id) => document.getElementById(id);
@@ -275,6 +270,7 @@ function handle(event, stream) {
       add('you', event.text);
       break;
     case 'start':
+      stream.replying = true;
       speech.played = 0;
       setState('thinking', 'Thinking…');
       break;
@@ -290,22 +286,28 @@ function handle(event, stream) {
       // A quoted draft (a post or email to copy) keeps its own lines.
       stream.reply.textContent += (stream.reply.textContent ? (event.quoted ? '\n\n' : ' ') : '') + event.reply;
       scrollDown();
-      if (event.audio) enqueueSpeech(event.audio);
+      if (event.audio && !stream.hungUp) enqueueSpeech(event.audio);
       if (event.error) add('error', event.error);
       break;
     case 'cancelled':
+      stream.replying = false;
       if (stream.kind !== 'wake' && event.message) stateLabel.textContent = event.message;
       break;
     case 'error':
+      stream.replying = false;
       add('error', event.message);
       if (callState.on) hangUp();
       break;
     case 'done':
+      stream.replying = false;
       showMedia(stream.reply);
       if (event.reply) notifyIfAway(event.reply);
       break;
+    case 'interrupted':
+      stream.replying = false;
+      break;
     default:
-      break; // 'waiting', 'idle', 'interrupted'
+      break;
   }
 }
 
@@ -335,7 +337,7 @@ window.addEventListener('focus', () => replyNotification?.close());
 async function run(kind, path, options = {}) {
   if (current && current.kind === 'wake' && !current.engaged) current.controller.abort();
   else if (current) return;
-  const stream = { kind, controller: new AbortController(), engaged: kind !== 'wake', reply: null, finished: false };
+  const stream = { kind, controller: new AbortController(), engaged: kind !== 'wake', replying: false, reply: null, finished: false };
   current = stream;
   input.disabled = kind !== 'wake';
   send.disabled = kind !== 'wake';
@@ -442,6 +444,25 @@ function stopListeningForCall() {
   if (current && current.kind === 'listen') current.controller.abort();
 }
 
+function isReplying() {
+  return Boolean(current && current.replying);
+}
+
+async function endCallLeftOpen() {
+  try {
+    const response = await api('/call', { signal: AbortSignal.timeout(CALL_CHECK_TIMEOUT_MS) });
+    if (!response.ok) throw new Error(`the service answered ${response.status} when asked about the call`);
+    const status = await response.json();
+    if (!status.on || callState.on) return false;
+    const ended = await api('/call/end', { method: 'POST', signal: AbortSignal.timeout(CALL_CHECK_TIMEOUT_MS) });
+    if (!ended.ok) throw new Error(`the service answered ${ended.status} when asked to end it`);
+    return true;
+  } catch (error) {
+    console.error(`Arty: couldn't check for a call left open: ${error.message}`);
+    return false;
+  }
+}
+
 async function startCall() {
   if (callState.on) return hangUp();
   if (current && current.engaged) return;
@@ -461,8 +482,10 @@ async function hangUp() {
   callState.on = false;
   clearInterval(callState.timer);
   showCallBar(false);
-  stopListeningForCall();
-  if (speech.playing || speech.queue.length) await stopSpeaking();
+  const replying = isReplying();
+  if (current && current.kind !== 'wake') current.hungUp = true;
+  if (!replying) stopListeningForCall();
+  if (replying || speech.playing || speech.queue.length) await stopSpeaking();
   await api(`/call/end`, { method: 'POST' }).catch(() => {});
   addActivity(`Call ended after ${lasted}`, 'Call');
   settle();
@@ -980,6 +1003,94 @@ async function saveConnection(event) {
   }
 }
 
+const SECONDS_PER_MINUTE = 60;
+const MILLISECONDS_PER_SECOND = 1000;
+let phoneCodeTimer = null;
+
+function phoneCodeStatus(text, problem = false) {
+  const status = $('phone-code-status');
+  status.textContent = text;
+  status.classList.toggle('problem', problem);
+}
+
+function hidePhoneCode() {
+  clearTimeout(phoneCodeTimer);
+  $('panel').classList.remove('showing-code');
+  $('phone-code').hidden = true;
+  $('phone-code-image').removeAttribute('src');
+}
+
+async function showPhoneCode() {
+  hidePhoneCode();
+  hideChromeSites();
+  $('panel').classList.add('showing-code');
+  $('phone-code').hidden = false;
+  phoneCodeStatus('Making the code…');
+  try {
+    const response = await api('/phone-setup-code');
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      phoneCodeStatus(answer.error || `Arty's local service answered ${response.status}.`, true);
+      return;
+    }
+    $('phone-code-image').src = answer.image;
+    phoneCodeStatus(`For ${answer.address}. It closes by itself after ${Math.round(answer.seconds / SECONDS_PER_MINUTE)} minutes.`);
+    phoneCodeTimer = setTimeout(hidePhoneCode, answer.seconds * MILLISECONDS_PER_SECOND);
+  } catch (error) {
+    phoneCodeStatus(`Couldn't reach Arty's local service: ${error.message}`, true);
+  }
+}
+
+$('phone-code-close').addEventListener('click', hidePhoneCode);
+window.arty?.onPhoneCode(showPhoneCode);
+
+function chromeSitesStatus(text, problem = false) {
+  const status = $('chrome-sites-status');
+  status.textContent = text;
+  status.classList.toggle('problem', problem);
+}
+
+function hideChromeSites() {
+  $('panel').classList.remove('showing-sites');
+  $('chrome-sites').hidden = true;
+  $('pairing-code').textContent = '';
+}
+
+async function answerOf(response) {
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(answer.error || `Arty's local service answered ${response.status}`);
+  return answer;
+}
+
+async function forgetChromeSite(site) {
+  try {
+    const { sites } = await answerOf(await api('/browser/sites/forget', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site }),
+    }));
+    fillSiteList($('site-list'), sites, forgetChromeSite);
+    chromeSitesStatus(`Forgot ${site}.`);
+  } catch (error) {
+    chromeSitesStatus(`Couldn't forget ${site}: ${error.message}`, true);
+  }
+}
+
+async function showChromeSites() {
+  hidePhoneCode();
+  $('panel').classList.add('showing-sites');
+  $('chrome-sites').hidden = false;
+  chromeSitesStatus('Loading…');
+  try {
+    const [{ sites }, { code }] = await Promise.all([answerOf(await api('/browser/sites')), answerOf(await api('/browser/pairing'))]);
+    fillSiteList($('site-list'), sites, forgetChromeSite);
+    $('pairing-code').textContent = code;
+    chromeSitesStatus('');
+  } catch (error) {
+    chromeSitesStatus(`Couldn't reach Arty's local service: ${error.message}`, true);
+  }
+}
+
+$('chrome-sites-close').addEventListener('click', hideChromeSites);
+window.arty?.onChromeSites(showChromeSites);
 $('connect-form').addEventListener('submit', saveConnection);
 $('connect-cancel').addEventListener('click', hideConnect);
 window.arty?.onConnect(async () => showConnect(await readConnection(), true));
@@ -990,6 +1101,7 @@ async function start() {
   settle();
   showEmpty();
   const known = await waitForConnection();
+  const staleCallCheck = known ? endCallLeftOpen() : Promise.resolve(false);
   if (known && !known.configured) {
     showConnect(known, false);
     return;
@@ -998,6 +1110,7 @@ async function start() {
     await pause(SERVICE_RETRY_MS);
   }
   if (!log.querySelector('.msg')) showEmpty();
+  if (await staleCallCheck) addActivity('A call was still open from before the window reloaded, so it was ended', 'Call');
   refreshHealth();
   setInterval(refreshHealth, HEALTH_EVERY_MS);
   listenForWake();

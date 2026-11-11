@@ -1,4 +1,5 @@
 import csv
+import http.client
 import importlib
 import io
 import ipaddress
@@ -39,7 +40,8 @@ PICTURE_CANDIDATES = 6
 MAX_PICTURE_BYTES = 3 * 1024 * 1024
 PICTURE_EDGE = 2048
 PRIVATE_FOLDERS = (".ssh", ".gnupg", ".password-store", ".local/share/keyrings", ".config/chromium", ".config/google-chrome",
-                   ".mozilla", ".pki", ".aws", ".kube", ".docker", ".config/gh", ".mcp")
+                   ".mozilla", ".pki", ".aws", ".kube", ".docker", ".config/gh", ".mcp", ".gmail-chrome", ".browser-profile",
+                   ".local/browser-agent")
 PRIVATE_NAMES = (".env", ".netrc", ".git-credentials", ".pem", ".key", "id_rsa", "id_ed25519", "id_ecdsa", "cookies",
                  "credentials", "token", "secret", "password")
 DOCUMENTS_FOLDER = "~/Documents/Arty"
@@ -204,12 +206,46 @@ def send_file(path) -> str:
     return _sent(meta, name)
 
 
-def is_public_host(host: str) -> bool:
+def public_addresses(host: str) -> list[str]:
     try:
-        addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
+        addresses = list(dict.fromkeys(info[4][0] for info in socket.getaddrinfo(host, None)))
     except (socket.gaierror, UnicodeError):
-        return False
-    return bool(addresses) and all(ipaddress.ip_address(address.split("%")[0]).is_global for address in addresses)
+        return []
+    if addresses and all(ipaddress.ip_address(address.split("%")[0]).is_global for address in addresses):
+        return addresses
+    return []
+
+
+def is_public_host(host: str) -> bool:
+    return bool(public_addresses(host))
+
+
+def checked_address(host: str) -> str:
+    addresses = public_addresses(host)
+    if not addresses:
+        raise ShareError(f"{host} isn't a public website")
+    return addresses[0]
+
+
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.create_connection((checked_address(self.host), self.port), self.timeout)
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        plain = socket.create_connection((checked_address(self.host), self.port), self.timeout)
+        self.sock = self._context.wrap_socket(plain, server_hostname=self.host)
+
+
+class PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, request):
+        return self.do_open(PinnedHTTPConnection, request)
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(PinnedHTTPSConnection, request)
 
 
 def check_public_url(url: str):
@@ -226,7 +262,7 @@ class PublicOnlyRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, response, code, message, headers, new_url)
 
 
-_opener = urllib.request.build_opener(PublicOnlyRedirects)
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), PublicOnlyRedirects, PinnedHTTPHandler, PinnedHTTPSHandler)
 
 
 def fetch_media(url: str) -> tuple[bytes, str]:
@@ -253,6 +289,10 @@ def phone_sized(data: bytes, mime: str, name: str) -> tuple[bytes, str, str]:
     with tempfile.TemporaryDirectory() as folder:
         source, target = Path(folder) / "in", Path(folder) / "out.jpg"
         source.write_bytes(data)
+        try:
+            media.refuse_scripted_image(str(source))
+        except media.MediaError as error:
+            raise ShareError(str(error)) from None
         try:
             media._run(["magick", f"{source}[0]", "-auto-orient", "-resize", f"{PICTURE_EDGE}x{PICTURE_EDGE}>",
                         "-quality", "85", str(target)], 120, "Shrinking the picture")
@@ -285,9 +325,9 @@ def send_picture(query="", url="") -> str:
     if url:
         try:
             data, mime = fetch_media(url)
+            meta = save_web(data, mime, _web_name(url, mime, "picture"))
         except ShareError as error:
             return f"Couldn't send that: {error}"
-        meta = save_web(data, mime, _web_name(url, mime, "picture"))
         return _sent(meta, "the picture", url)
     if not query:
         return "Say what picture to find, or give its web address."
@@ -299,10 +339,10 @@ def send_picture(query="", url="") -> str:
     for result in results[:PICTURE_CANDIDATES]:
         try:
             data, mime = fetch_media(result["img_src"])
+            meta = save_web(data, mime, _web_name(result["img_src"], mime, query[:40] or "picture"))
         except ShareError as error:
             problems.append(str(error))
             continue
-        meta = save_web(data, mime, _web_name(result["img_src"], mime, query[:40] or "picture"))
         title = str(result.get("title") or "").strip()
         return _sent(meta, f"a picture of {query}" + (f" ({title})" if title else ""), str(result.get("url") or result["img_src"]))
     if not results:
@@ -354,6 +394,17 @@ def _desktop(command: str, stdin: bytes | None = None) -> None:
         raise ShareError(output.strip()[:400] or f"exit code {code}")
 
 
+SHEET_TITLE_CHARS = 31
+NOT_IN_SHEET_TITLES = re.compile(r"[\\/?*\[\]:]")
+PANDOC_SAFELY = "--sandbox -f markdown-raw_html-raw_attribute"
+CHROME_WITHOUT_SCRIPTS = "--blink-settings=scriptEnabled=false"
+
+
+def sheet_title(title: str) -> str:
+    cleaned = " ".join(NOT_IN_SHEET_TITLES.sub(" ", title).split()).strip("'")
+    return cleaned[:SHEET_TITLE_CHARS].strip() or "Sheet1"
+
+
 def _build_document(content: str, title: str, extension: str, target: str) -> None:
     folder = remote.quoted(DOCUMENTS_FOLDER)
     path = remote.quoted(target)
@@ -365,7 +416,7 @@ def _build_document(content: str, title: str, extension: str, target: str) -> No
         if extension == "csv":
             _desktop(f"cat > {path}", _csv_text(rows).encode())
             return
-        job = {"path": target, "sheet": title[:31], "rows": rows}
+        job = {"path": target, "sheet": sheet_title(title), "rows": rows}
         _desktop(f"cd ~ && python3 -c {shlex.quote(XLSX_SCRIPT)}", json.dumps(job).encode())
         return
     source = target.rsplit(".", 1)[0] + ".src.md"
@@ -379,13 +430,14 @@ def _build_document(content: str, title: str, extension: str, target: str) -> No
         if extension == "pdf":
             html = remote.quoted(target.rsplit(".", 1)[0] + ".print.html")
             _desktop(f"style=$(mktemp) && printf %s {shlex.quote(PDF_STYLE)} > \"$style\" && "
-                     f"pandoc {source_path} -s {metadata} -H \"$style\" -o {html} && profile=$(mktemp -d) && "
-                     f"google-chrome --headless=new --disable-gpu --user-data-dir=\"$profile\" --no-pdf-header-footer "
+                     f"pandoc {PANDOC_SAFELY} {source_path} -s {metadata} -H \"$style\" -o {html} && profile=$(mktemp -d) && "
+                     f"google-chrome --headless=new --disable-gpu {CHROME_WITHOUT_SCRIPTS} --user-data-dir=\"$profile\" "
+                     f"--no-pdf-header-footer "
                      f"--print-to-pdf={path} \"file://$(realpath {html})\" >/dev/null 2>&1; "
                      f"rm -rf \"$profile\" \"$style\" {html}; [ -s {path} ] || {{ echo 'Chrome made no PDF'; exit 1; }}")
         else:
             standalone = "-s" if extension in ("html", "rtf") else ""
-            _desktop(f"pandoc {source_path} {standalone} {metadata} -o {path}")
+            _desktop(f"pandoc {PANDOC_SAFELY} {source_path} {standalone} {metadata} -o {path}")
     finally:
         remote.text(f"rm -f {source_path}")
 

@@ -63,7 +63,7 @@ def fake_brain(monkeypatch):
         yield "Hiya, what's up?"
 
     monkeypatch.setattr(arty_server.brain, "llm_stream", llm_stream)
-    monkeypatch.setattr(arty_server.brain, "save_turn", lambda said, reply: saved.append((said, reply)))
+    monkeypatch.setattr(arty_server.brain, "save_turn", lambda said, reply, actions=(): saved.append((said, reply)))
     return sent, saved
 
 

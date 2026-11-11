@@ -3,10 +3,13 @@ package app.arty.core
 import com.sun.net.httpserver.HttpServer
 import org.json.JSONObject
 import java.net.InetSocketAddress
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -18,6 +21,10 @@ class ArtyClientTest {
     private lateinit var server: HttpServer
     private val seen = mutableListOf<Seen>()
     private val routes = mutableMapOf<String, Pair<Int, String>>()
+    private val identityNonces = mutableListOf<String>()
+    private val identityHeaders = mutableListOf<Map<String, String>>()
+    private var identityKeys = listOf("other-key", "test-key")
+    private var identityStatus = 200
 
     private val client get() = ArtyClient(
         ArtyConfig("http://127.0.0.1:${server.address.port}/", "test-key", "access-id", "access-secret"),
@@ -28,6 +35,23 @@ class ArtyClientTest {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
             val headers = exchange.requestHeaders.entries.associate { it.key.lowercase() to it.value.first() }
+            if (exchange.requestURI.path == "/v1/identity") {
+                assertNull(headers["authorization"])
+                val nonce = exchange.requestURI.query.removePrefix("nonce=")
+                identityNonces += nonce
+                identityHeaders += headers
+                val proofs = identityKeys.joinToString(",") { "\"${proofFor(it, nonce)}\"" }
+                val bytes = """{"proofs":[$proofs]}""".toByteArray()
+                exchange.sendResponseHeaders(identityStatus, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+                return@createContext
+            }
+            routes["redirect ${exchange.requestURI}"]?.let { (status, location) ->
+                exchange.responseHeaders.add("Location", location)
+                exchange.sendResponseHeaders(status, -1)
+                exchange.close()
+                return@createContext
+            }
             val body = exchange.requestBody.readBytes().decodeToString()
             seen += Seen(exchange.requestMethod, exchange.requestURI.toString(), headers, body)
             val (status, reply) = routes["${exchange.requestMethod} ${exchange.requestURI}"] ?: (404 to """{"error":{"message":"not found"}}""")
@@ -50,6 +74,15 @@ class ArtyClientTest {
         assertEquals("Bearer test-key", headers["authorization"])
         assertEquals("access-id", headers["cf-access-client-id"])
         assertEquals("access-secret", headers["cf-access-client-secret"])
+    }
+
+    @Test
+    fun `the identity check never sends the Cloudflare Access secret to the unproven server`() {
+        routes["GET /v1/models"] = 200 to """{"data":[]}"""
+        client.models()
+        val asked = identityHeaders.single()
+        assertNull(asked["cf-access-client-id"])
+        assertNull(asked["cf-access-client-secret"])
     }
 
     @Test
@@ -236,5 +269,58 @@ class ArtyClientTest {
         assertTrue(client.addEvent("Gym", "Tuesday 3pm").startsWith("Added"))
         val sent = JSONObject(seen.single().body)
         assertEquals("Tuesday 3pm", sent.getString("when"))
+    }
+
+    @Test
+    fun `plain http proves the server knows the key before sending it, with a fresh nonce each time`() {
+        routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
+        client.memory()
+        client.memory()
+        assertEquals(2, identityNonces.size)
+        assertNotEquals(identityNonces[0], identityNonces[1])
+        assertTrue(identityNonces.all { it.matches(Regex("[0-9a-f]{32}")) })
+        assertEquals(2, seen.size)
+    }
+
+    @Test
+    fun `a server that can't prove it knows the key never gets it`() {
+        identityKeys = listOf("someone-elses-key")
+        routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
+        val error = assertFailsWith<ArtyException> { client.memory() }
+        assertEquals(ArtyClient.IDENTITY_NOT_PROVEN, error.status)
+        assertTrue(error.message!!.contains("isn't your Arty"))
+        assertTrue(seen.isEmpty())
+    }
+
+    @Test
+    fun `a brain too old to prove itself over plain http is refused`() {
+        identityStatus = 404
+        val error = assertFailsWith<ArtyException> { client.memory() }
+        assertEquals(ArtyClient.IDENTITY_NOT_PROVEN, error.status)
+        assertTrue(seen.isEmpty())
+    }
+
+    @Test
+    fun `https skips the identity check`() {
+        val error = assertFailsWith<ArtyException> {
+            ArtyClient(ArtyConfig("https://127.0.0.1:1", "k"), connectTimeoutMs = 500).memory()
+        }
+        assertEquals(0, error.status)
+        assertTrue(identityNonces.isEmpty())
+    }
+
+    @Test
+    fun `a Cloudflare login redirect is reported as refused and not followed`() {
+        routes["redirect /v1/memory"] = 302 to "http://127.0.0.1:${server.address.port}/login"
+        routes["GET /login"] = 200 to """{"entities":[]}"""
+        val error = assertFailsWith<ArtyException> { client.memory() }
+        assertEquals(403, error.status)
+        assertTrue(error.message!!.contains("Cloudflare refused"))
+        assertTrue(seen.none { it.path == "/login" })
+    }
+
+    private fun proofFor(key: String, nonce: String): String {
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(key.toByteArray(), "HmacSHA256")) }
+        return mac.doFinal("arty-identity:$nonce".toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }

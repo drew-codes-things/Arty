@@ -1,6 +1,6 @@
 {
   "name": "arty",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Arty on your desktop: talk to it, and let it use your computer",
   "main": "main.js",
   "scripts": {
@@ -28,6 +28,7 @@
       "main.js",
       "dependencies.js",
       "platform.js",
+      "service-proof.js",
       "preload.js",
       "renderer/**/*",
       "assets/**/*"

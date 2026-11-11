@@ -11,4 +11,6 @@ contextBridge.exposeInMainWorld('arty', {
   onExplain: (callback) => ipcRenderer.on('explain', (_event, copied) => callback(copied)),
   onTransparency: (callback) => ipcRenderer.on('transparency', (_event, solidity) => callback(solidity)),
   onConnect: (callback) => ipcRenderer.on('connect', () => callback()),
+  onPhoneCode: (callback) => ipcRenderer.on('phone-code', () => callback()),
+  onChromeSites: (callback) => ipcRenderer.on('chrome-sites', () => callback()),
 });

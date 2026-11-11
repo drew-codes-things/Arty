@@ -9,6 +9,9 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
+import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Blocking client for Arty's brain API (see docs/API.md in the Arty project).
@@ -193,8 +196,34 @@ class ArtyClient(
         }
     }
 
-    /** One HTTP exchange with the auth headers. Returns the body, or streams it into [into] (and returns nothing). */
     private fun exchange(method: String, path: String, timeoutMs: Int, into: OutputStream? = null, send: (HttpURLConnection) -> Unit): ByteArray {
+        if (isPlainHttp()) requireProvenIdentity()
+        return exchangeWith(method, path, timeoutMs, into, withKey = true, send)
+    }
+
+    private fun isPlainHttp(): Boolean = config.baseUrl.trim().startsWith("http://", ignoreCase = true)
+
+    private fun requireProvenIdentity() {
+        val nonce = newNonce()
+        val reply = try {
+            exchangeWith("GET", "$IDENTITY_PATH?nonce=$nonce", readTimeoutMs, into = null, withKey = false) { }.decodeToString()
+        } catch (error: ArtyException) {
+            if (error.status == 0) throw error
+            throw ArtyException(IDENTITY_NOT_PROVEN, "The server at ${config.baseUrl} can't prove it's your Arty, so the key wasn't sent. Update Arty's brain, or use its https address.")
+        }
+        val proofs = try {
+            JSONObject(reply).optJSONArray("proofs")?.let { list -> (0 until list.length()).map { list.optString(it) } }.orEmpty()
+        } catch (error: JSONException) {
+            emptyList()
+        }
+        if (config.apiKey.isEmpty() || identityProof(config.apiKey, nonce) !in proofs) {
+            throw ArtyException(IDENTITY_NOT_PROVEN, "The server at ${config.baseUrl} isn't your Arty (it couldn't prove it knows the key), so the key wasn't sent. On another Wi-Fi, use Arty's https address.")
+        }
+    }
+
+    private fun exchangeWith(
+        method: String, path: String, timeoutMs: Int, into: OutputStream?, withKey: Boolean, send: (HttpURLConnection) -> Unit,
+    ): ByteArray {
         val connection = try {
             URI(config.baseUrl.trimEnd('/') + path).toURL().openConnection() as HttpURLConnection
         } catch (error: IllegalArgumentException) {
@@ -204,14 +233,16 @@ class ArtyClient(
             connection.requestMethod = method
             connection.connectTimeout = connectTimeoutMs
             connection.readTimeout = timeoutMs
-            connection.setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+            connection.instanceFollowRedirects = false
+            if (withKey) connection.setRequestProperty("Authorization", "Bearer ${config.apiKey}")
             connection.setRequestProperty("Accept", if (into == null) "application/json" else "*/*")
-            if (config.accessClientId.isNotEmpty()) {
+            if (withKey && config.accessClientId.isNotEmpty()) {
                 connection.setRequestProperty("CF-Access-Client-Id", config.accessClientId)
                 connection.setRequestProperty("CF-Access-Client-Secret", config.accessClientSecret)
             }
             send(connection)
             val status = connection.responseCode
+            if (status in REDIRECTS) throw ArtyException(CLOUDFLARE_REFUSED, "Cloudflare refused the access id or secret. Check them in Connection.")
             if (status >= 400) {
                 val text = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                 throw ArtyException(status, if (status == 404 && into != null) "That file has expired: Arty keeps files for 24 hours." else errorMessage(status, text))
@@ -261,6 +292,22 @@ class ArtyClient(
 
     companion object {
         const val MAX_UPLOAD_BYTES = 95L * 1024 * 1024 // the brain's limit, set by Cloudflare's 100 MB cap
+        const val IDENTITY_NOT_PROVEN = -2
+        private const val CLOUDFLARE_REFUSED = 403
+        private const val IDENTITY_PATH = "/v1/identity"
+        private const val NONCE_BYTES = 16
+        private const val HMAC = "HmacSHA256"
+        private val REDIRECTS = 300..399
+        private val random = SecureRandom()
+
+        private fun newNonce(): String = ByteArray(NONCE_BYTES).also { random.nextBytes(it) }.toHex()
+
+        fun identityProof(key: String, nonce: String): String {
+            val mac = Mac.getInstance(HMAC).apply { init(SecretKeySpec(key.toByteArray(), HMAC)) }
+            return mac.doFinal("arty-identity:$nonce".toByteArray()).toHex()
+        }
+
+        private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
         const val DOWNLOAD_PATH = "/arty-files/"
         private val ARTY_FILE_PATH = Regex("""/arty-files/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[^/?#]+$""")
     }

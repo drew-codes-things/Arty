@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
     /** What opened the app: a share from another app, a widget button, or a notification. */
     private fun handleLaunch(intent: Intent?) {
         takeSharedText(intent)
+        if (!LaunchToken.isOurs(this, intent)) return
         when (intent?.getStringExtra(ArtyWidget.EXTRA_ACTION)) {
             ArtyWidget.TALK -> vm.requestVoice()
             ArtyWidget.CALL ->

@@ -12,6 +12,7 @@ Settings (brain address, alert token, network, extra server addresses): /etc/hom
 import ipaddress
 import json
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -66,7 +67,7 @@ def running_containers() -> list[tuple[str, str]]:
 def ssh_log(since: float) -> list[tuple[str, str]]:
     """(machine, log line) for SSH log lines since `since`, from the host and every running container."""
     window = ["journalctl", "--since", f"@{int(since)}", "-o", "cat", "--no-pager", "-t", "sshd", "-t", "sshd-session"]
-    lines = [("servmox", line) for line in run(window).splitlines()]
+    lines = [(socket.gethostname(), line) for line in run(window).splitlines()]
     for vmid, name in running_containers():
         lines += [(name, line) for line in run(["pct", "exec", vmid, "--", *window]).splitlines()]
     return lines

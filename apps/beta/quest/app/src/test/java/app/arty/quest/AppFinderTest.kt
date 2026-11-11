@@ -42,4 +42,12 @@ class AppFinderTest {
     fun notFoundIsSaidInPlainWords() {
         assertEquals("I couldn't find an app called chess on the headset.", appNotFound("chess"))
     }
+
+    @Test
+    fun anAppFoundThroughMetasVrCategoryKeepsItsPlayerActivity() {
+        val youtube = LaunchableApp("YouTube", "com.google.android.apps.youtube.vr.oculus", "com.google.android.apps.youtube.vr.activities.YouTubeVrActivity")
+        val found = bestAppMatch("youtube", listOf(LaunchableApp("Beat Saber", "com.beatgames.beatsaber"), youtube))
+        assertEquals(youtube, found)
+        assertEquals("com.google.android.apps.youtube.vr.activities.YouTubeVrActivity", found?.activityName)
+    }
 }

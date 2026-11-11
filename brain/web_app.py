@@ -3,7 +3,7 @@ from pathlib import Path
 
 PREFIX = "ios"
 INDEX = "index.html"
-ROOT = Path(os.environ.get("ARTY_IOS_DIR", Path(__file__).resolve().parents[1] / "apps" / "beta" / "ios"))
+ROOT = Path(os.environ.get("ARTY_IOS_DIR", Path(__file__).resolve().parents[1] / "apps" / "ios"))
 NOT_SERVED = {"tests"}
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",

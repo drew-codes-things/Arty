@@ -26,6 +26,7 @@ import app.arty.core.CalendarEvent
 import app.arty.core.Lecture
 import app.arty.lectures.LectureRecorder
 import app.arty.core.ChatMessage
+import app.arty.core.ChatWait
 import app.arty.core.MemoryEntity
 import app.arty.core.ModelOption
 import app.arty.core.Schedule
@@ -385,8 +386,9 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
             val job = try {
                 withContext(Dispatchers.IO) { client.chatJob(jobId) }
             } catch (error: ArtyException) {
-                if (error.status == 404) {
-                    finishTurn(conversationId, StoredMessage("assistant", "Arty restarted before answering. Tap retry to ask again.", System.currentTimeMillis(), failed = true))
+                val failure = ChatWait.failure(error)
+                if (failure != null) {
+                    finishTurn(conversationId, StoredMessage("assistant", failure, System.currentTimeMillis(), failed = true))
                     return
                 }
                 null // offline for a moment: keep waiting

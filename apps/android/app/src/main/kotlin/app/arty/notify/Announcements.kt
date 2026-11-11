@@ -20,12 +20,14 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import app.arty.LaunchToken
 import app.arty.MainActivity
 import app.arty.R
 import app.arty.ui.speakableText
 import app.arty.core.Announcement
 import app.arty.core.ArtyClient
 import app.arty.core.ArtyException
+import app.arty.core.LockScreen
 import app.arty.Connection
 import app.arty.newArtyClient
 import app.arty.widget.ArtyWidget
@@ -102,11 +104,12 @@ object Announcements {
         val urgent = item.kind == "approval" || item.kind == "alert"
         val open = PendingIntent.getActivity(
             context, item.id.toInt(),
-            Intent(context, MainActivity::class.java).putExtra(EXTRA_OPEN_UPDATES, true)
+            LaunchToken.stamp(context, Intent(context, MainActivity::class.java)).putExtra(EXTRA_OPEN_UPDATES, true)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val builder = NotificationCompat.Builder(context, if (urgent) ALERT_CHANNEL else CHANNEL)
+        val channel = if (urgent) ALERT_CHANNEL else CHANNEL
+        val builder = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(item.title)
             .setContentText(item.message)
@@ -114,10 +117,23 @@ object Announcements {
             .setContentIntent(open)
             .setAutoCancel(true)
             .setPriority(if (urgent) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+        if (LockScreen.hidesText(item)) {
+            builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(
+                NotificationCompat.Builder(context, channel)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(LockScreen.HIDDEN_TITLE)
+                    .setContentText(LockScreen.HIDDEN_TEXT)
+                    .build(),
+            )
+        }
         val taskId = item.taskId
-        if (taskId != null) {
+        if (taskId != null && LockScreen.allowsActions(Build.VERSION.SDK_INT)) {
             item.actions.filter { it in DecisionReceiver.ACTIONS }.forEach { action ->
-                builder.addAction(0, action.replaceFirstChar { it.uppercase() }, DecisionReceiver.intent(context, item.id.toInt(), taskId, action))
+                builder.addAction(
+                    NotificationCompat.Action.Builder(0, action.replaceFirstChar { it.uppercase() }, DecisionReceiver.intent(context, item.id.toInt(), taskId, action))
+                        .setAuthenticationRequired(true)
+                        .build(),
+                )
             }
         }
         try {
@@ -134,7 +150,7 @@ object Announcements {
         ) return
         val open = PendingIntent.getActivity(
             context, REPLY_NOTIFICATION_ID,
-            Intent(context, MainActivity::class.java).putExtra(EXTRA_OPEN_CHAT, conversationId)
+            LaunchToken.stamp(context, Intent(context, MainActivity::class.java)).putExtra(EXTRA_OPEN_CHAT, conversationId)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

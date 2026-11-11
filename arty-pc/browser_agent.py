@@ -5,12 +5,13 @@ made by the user in this window are kept. Listens on 127.0.0.1 only; the workspa
 tools reach it over SSH. Single-threaded on purpose: Playwright's sync API isn't
 thread-safe, and one browser should do one thing at a time.
 """
-import itertools
+import hmac
 import json
 import os
 import queue
 import random
 import re
+import secrets
 import signal
 import subprocess
 import threading
@@ -76,6 +77,7 @@ CHALLENGE_PHRASES = (
     "press and hold", "checking your browser", "access denied", "bot detection",
 )
 CHALLENGE_URLS = ("/checkpoint/", "/challenge", "captcha", "/sorry/")
+SURE_CHALLENGE_URLS = ("/checkpoint/challenge", "google.com/sorry/")
 POSTS_JS = """
 () => Array.from(document.querySelectorAll('div.feed-shared-update-v2, div[data-urn^="urn:li:activity"]')).map(post => {
   const pick = (selector) => { const el = post.querySelector(selector); return el ? el.innerText.trim() : ''; };
@@ -90,7 +92,16 @@ POSTS_JS = """
 """
 POSTS_MAX = 50
 POSTS_SCROLLS = 15
-LOGIN_URLS = ("/login", "/signin", "/sign-in", "/uas/login", "/authwall", "accounts.google.com", "/auth/", "/sso")
+SIGN_IN_PATHS = ("/uas/login", "/authwall")
+SIGN_IN_HOSTS = ("accounts.google.com",)
+LOGIN_URLS = ("/login", "/signin", "/sign-in", "/auth/", "/sso")
+SHORT_PAGE_CHARS = 800
+VISIBLE_PASSWORD_JS = """
+() => Array.from(document.querySelectorAll('input[type=password]')).some(field => {
+  const box = field.getBoundingClientRect();
+  return box.width > 2 && box.height > 2 && getComputedStyle(field).visibility !== 'hidden';
+})
+"""
 
 
 VISIBLE_CHALLENGE_JS = """
@@ -113,6 +124,16 @@ GMAIL_START_SECONDS = 30
 GMAIL_CONNECTED_SECONDS = 45  # an extension that asked for a job this recently is running
 GMAIL_UNREAD_QUERY = "in:inbox is:unread"
 GMAIL_ACTIONS = ("gmail_unread", "gmail_list", "gmail_read", "gmail_tabs")
+AGENT_FOLDER = os.path.expanduser("~/.local/browser-agent")
+PRIVATE_FOLDERS = (PROFILE, GMAIL_PROFILE, AGENT_FOLDER, os.path.expanduser("~/.ssh"))
+TOKEN_FILE = os.path.join(AGENT_FOLDER, "token")
+TOKEN_HEADER_FILE = os.path.join(AGENT_FOLDER, "token.header")
+EXTENSION_TOKEN_FILE = os.path.join(AGENT_FOLDER, "gmail-extension", "agent-token.json")
+TOKEN_HEADER = "X-Arty-Agent-Token"
+TOKEN_MIN_CHARS = 32
+JSON_TYPE = "application/json"
+EXTENSION_ORIGIN = "chrome-extension://"
+LOCAL_HOST_NAMES = ("127.0.0.1", "localhost")
 
 
 ACCEPT_COOKIE_LABEL = (r"^(?:(?:yes,? )?i (?:accept|agree)|(?:accept|allow|agree)(?: to)?(?: all| additional| optional)?"
@@ -160,21 +181,90 @@ def accept_cookies(page) -> bool:
     return False
 
 
+def page_shows(page, script, *args) -> bool:
+    try:
+        return bool(page.evaluate(script, *args))
+    except PlaywrightError:
+        return False
+
+
+def looks_like_bot_check(page, url, title, text) -> bool:
+    if page_shows(page, VISIBLE_CHALLENGE_JS, list(CHALLENGE_FRAMES)):
+        return True
+    if any(marker in url for marker in SURE_CHALLENGE_URLS):
+        return True
+    if len(text.strip()) >= SHORT_PAGE_CHARS:
+        return False
+    head = f"{title}\n{text}".lower()
+    return any(marker in url for marker in CHALLENGE_URLS) or any(phrase in head for phrase in CHALLENGE_PHRASES)
+
+
+def looks_like_login_wall(page, url) -> bool:
+    address = urllib.parse.urlparse(url)
+    if (address.hostname or "") in SIGN_IN_HOSTS or any(marker in address.path for marker in SIGN_IN_PATHS):
+        return True
+    return any(marker in address.path for marker in LOGIN_URLS) and page_shows(page, VISIBLE_PASSWORD_JS)
+
+
 def blocked_reason(page, title, text):
     """Why a human is needed on this page (bot check or login wall), or None.
     Only visible challenge frames count: many sites embed an invisible reCAPTCHA on every page."""
     url = page.url.lower()
-    head = f"{title}\n{text[:1500]}".lower()
-    try:
-        visible_challenge = page.evaluate(VISIBLE_CHALLENGE_JS, list(CHALLENGE_FRAMES))
-    except PlaywrightError:
-        visible_challenge = False
-    if visible_challenge or any(marker in url for marker in CHALLENGE_URLS) \
-            or any(phrase in head for phrase in CHALLENGE_PHRASES):
+    if looks_like_bot_check(page, url, title, text):
         return "bot check (CAPTCHA or human verification)"
-    if any(marker in url for marker in LOGIN_URLS):
+    if looks_like_login_wall(page, url):
         return "login required"
     return None
+
+
+def write_private(path: str, text: str):
+    temporary = f"{path}.{os.getpid()}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(text)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+def load_or_make_token(path: str = TOKEN_FILE) -> str:
+    try:
+        with open(path) as handle:
+            token = handle.read().strip()
+    except FileNotFoundError:
+        token = ""
+    if len(token) < TOKEN_MIN_CHARS:
+        token = secrets.token_urlsafe(TOKEN_MIN_CHARS)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        write_private(path, token)
+    os.chmod(path, 0o600)
+    return token
+
+
+def share_token(token: str, header_file: str = TOKEN_HEADER_FILE, extension_file: str = EXTENSION_TOKEN_FILE):
+    write_private(header_file, f"{TOKEN_HEADER}: {token}\n")
+    if os.path.isdir(os.path.dirname(extension_file)):
+        write_private(extension_file, json.dumps({"token": token}))
+
+
+def refusal(headers, port: int, token: str, extension_origin_allowed: bool = False) -> tuple[int, str] | None:
+    if headers.get("Host", "") not in {f"{name}:{port}" for name in LOCAL_HOST_NAMES}:
+        return 403, "requests must be addressed to this computer"
+    origin = headers.get("Origin")
+    if origin is not None and not (extension_origin_allowed and origin.startswith(EXTENSION_ORIGIN)):
+        return 403, "requests from web pages are refused"
+    if headers.get("Content-Type", "").split(";")[0].strip().lower() != JSON_TYPE:
+        return 415, f"send {JSON_TYPE}"
+    supplied = headers.get(TOKEN_HEADER, "")
+    if not token or not hmac.compare_digest(supplied.encode(), token.encode()):
+        return 401, "missing or wrong token"
+    return None
+
+
+def read_json_object(handler) -> dict:
+    body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", "0"))) or b"{}")
+    if not isinstance(body, dict):
+        raise ValueError("the request body must be a JSON object")
+    return body
 
 
 def chrome_listening() -> bool:
@@ -272,6 +362,8 @@ class Browser:
         return result
 
     def handle(self, action, args):
+        if action == "upload" and (reason := private_upload_reason(os.path.expanduser(str(args.get("path", ""))))):
+            raise ValueError(reason)
         page = self.page()
         if action == "open":
             url = args["url"]
@@ -431,8 +523,8 @@ class GmailWindow:
     def __init__(self):
         self.jobs = queue.Queue()
         self.results = {}
+        self.waiting = set()
         self.answered = threading.Condition()
-        self.ids = itertools.count(1)
         self.last_asked = 0.0
 
     def ask(self, action, args):
@@ -441,17 +533,25 @@ class GmailWindow:
         if action == "gmail_tabs":  # for checking the Gmail window: its tabs, without any mail
             action = "tabs"
         self.make_sure_open()
-        job_id = next(self.ids)
+        job_id = secrets.token_hex(16)
         job = {"id": job_id, "action": action, "args": args, "expires": time.time() + GMAIL_JOB_SECONDS}
+        with self.answered:
+            self.waiting.add(job_id)
         self.jobs.put(job)
         with self.answered:
             # Half the time, then once more: a job handed to an extension that had just restarted is lost without
             # an error. Gmail jobs only read, so doing one twice is harmless.
             for _ in range(2):
                 if self.answered.wait_for(lambda: job_id in self.results, GMAIL_JOB_SECONDS / 2):
-                    return self.results.pop(job_id)
+                    return self.collect(job_id)
                 self.jobs.put(job)
+            self.collect(job_id)
             raise RuntimeError("the Gmail window on my desktop didn't answer in time")
+
+    def collect(self, job_id):
+        with self.answered:
+            self.waiting.discard(job_id)
+            return self.results.pop(job_id, None)
 
     def connected(self):
         return time.time() - self.last_asked < GMAIL_CONNECTED_SECONDS
@@ -480,7 +580,7 @@ class GmailWindow:
                 job = self.jobs.get(timeout=left)
             except queue.Empty:
                 return None
-            if job["expires"] > time.time():
+            if job["expires"] > time.time() and job["id"] in self.waiting:
                 return job
         return None
 
@@ -488,11 +588,23 @@ class GmailWindow:
         """A job whose hand-over failed (the extension restarted mid-request): the next request gets it."""
         self.jobs.put(job)
 
-    def answer(self, job_id, result):
+    def answer(self, job_id, result) -> bool:
         with self.answered:
+            if job_id not in self.waiting or job_id in self.results:
+                return False
             self.results[job_id] = result
             self.answered.notify_all()
         self.last_asked = time.time()
+        return True
+
+
+def private_upload_reason(path: str) -> str | None:
+    real = os.path.realpath(path)
+    for folder in PRIVATE_FOLDERS:
+        root = os.path.realpath(folder)
+        if real == root or real.startswith(root + os.sep):
+            return f"{path} is in a private folder ({folder}), so it can't be uploaded"
+    return None
 
 
 def open_gmail_window(url="https://mail.google.com/mail/u/0/"):
@@ -506,6 +618,10 @@ class GmailHandler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        refused = refusal(self.headers, GMAIL_PORT, AGENT_TOKEN, extension_origin_allowed=True)
+        if refused:
+            self.reply(refused[0], {"error": refused[1]})
+            return
         if self.path == "/job":
             job = gmail.next_job()
             if job is None:
@@ -519,10 +635,13 @@ class GmailHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/result":
             try:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
-                gmail.answer(int(body["id"]), body.get("result") or {})
+                body = read_json_object(self)
+                accepted = gmail.answer(str(body["id"]), body.get("result") or {})
             except (KeyError, TypeError, ValueError) as error:
                 self.reply(400, {"error": str(error)})
+                return
+            if not accepted:
+                self.reply(404, {"error": "no job is waiting with that id"})
                 return
             self.reply(200, {"ok": True})
             return
@@ -539,6 +658,7 @@ class GmailHandler(BaseHTTPRequestHandler):
 
 browser = Browser()
 gmail = GmailWindow()
+AGENT_TOKEN = ""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -546,8 +666,12 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        refused = refusal(self.headers, PORT, AGENT_TOKEN)
+        if refused:
+            self.reply(refused[0], {"error": refused[1]})
+            return
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
+            body = read_json_object(self)
             action = self.path.strip("/")
             if action in GMAIL_ACTIONS:  # never through the main browser: see GmailWindow
                 result = gmail.ask(action, body)
@@ -562,11 +686,18 @@ class Handler(BaseHTTPRequestHandler):
                 browser.context = None
                 result = browser.handle(action, body)
             status = 200
-        except (PlaywrightError, KeyError, ValueError, RuntimeError) as error:
-            result, status = {"error": str(error).splitlines()[0][:400]}, 400
+        except (PlaywrightError, KeyError, ValueError, RuntimeError, TypeError, AttributeError) as error:
+            result, status = {"error": first_line(error)}, 400
+        except OSError as error:
+            result, status = {"error": f"the desktop couldn't do that: {first_line(error)}"}, 500
         self.reply(status, result)
 
     reply = GmailHandler.reply
+
+
+def first_line(error: Exception) -> str:
+    lines = str(error).splitlines()
+    return (lines[0] if lines else type(error).__name__)[:400]
 
 
 def stop(_signal, _frame):
@@ -576,6 +707,8 @@ def stop(_signal, _frame):
 if __name__ == "__main__":
     # Deploys and the sign-in shortcut stop the agent with SIGTERM: close the browser cleanly first.
     signal.signal(signal.SIGTERM, stop)
+    AGENT_TOKEN = load_or_make_token()
+    share_token(AGENT_TOKEN)
     gmail_server = ThreadingHTTPServer(("127.0.0.1", GMAIL_PORT), GmailHandler)
     gmail_server.daemon_threads = True
     threading.Thread(target=gmail_server.serve_forever, daemon=True).start()

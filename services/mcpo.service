@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 EnvironmentFile=/srv/ai/secrets/mcpo.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/mcpo --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/mcpo.json --api-key ${MCPO_API_KEY}
+ExecStart=/usr/local/bin/mcpo-start --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/mcpo.json
 Restart=on-failure
 RestartSec=5
 

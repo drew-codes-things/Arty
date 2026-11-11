@@ -11,16 +11,16 @@ import homelab_server as homelab
 SERVERS = [
     {"id": "b50272d1", "name": "A+A", "port": 25565},
     {"id": "142c5b72", "name": "A+A+K", "port": 25567},
-    {"id": "38398577", "name": "A+J", "port": 25568},
-    {"id": "a4e35290", "name": "drew-codes-things", "port": 25566},
+    {"id": "38398577", "name": "Survival", "port": 25568},
+    {"id": "a4e35290", "name": "creative-world", "port": 25566},
 ]
 
 
 @pytest.mark.parametrize("wanted, expected", [
-    ("A+J", "38398577"),
+    ("Survival", "38398577"),
     ("a+a", "b50272d1"),
     ("142c", "142c5b72"),
-    ("drew", "a4e35290"),
+    ("creative", "a4e35290"),
 ])
 def test_find_puffer_server_picks_one(wanted, expected):
     assert homelab.find_puffer_server(SERVERS, wanted)["id"] == expected
@@ -36,14 +36,14 @@ def test_power_posts_the_action_for_the_named_server(monkeypatch):
     calls = []
     monkeypatch.setattr(homelab, "_puffer_servers", lambda: SERVERS)
     monkeypatch.setattr(homelab, "_puffer", lambda method, path: calls.append((method, path)))
-    result = homelab.pufferpanel_power("A+J", "Stop")
+    result = homelab.pufferpanel_power("Survival", "Stop")
     assert calls == [("POST", "/servers/38398577/stop")]
-    assert "stop A+J" in result
+    assert "stop Survival" in result
 
 
 def test_power_rejects_other_actions_without_calling_the_panel(monkeypatch):
     monkeypatch.setattr(homelab, "_puffer_servers", lambda: pytest.fail("should not reach the panel"))
-    assert "must be one of" in homelab.pufferpanel_power("A+J", "kill")
+    assert "must be one of" in homelab.pufferpanel_power("Survival", "kill")
 
 
 def test_power_reports_panel_errors(monkeypatch):
@@ -53,7 +53,7 @@ def test_power_reports_panel_errors(monkeypatch):
         raise RuntimeError("PufferPanel said 403: forbidden")
 
     monkeypatch.setattr(homelab, "_puffer", refuse)
-    assert homelab.pufferpanel_power("A+J", "start").startswith("Couldn't start A+J: PufferPanel said 403")
+    assert homelab.pufferpanel_power("Survival", "start").startswith("Couldn't start Survival: PufferPanel said 403")
 
 
 def test_missing_credentials_are_reported(monkeypatch):

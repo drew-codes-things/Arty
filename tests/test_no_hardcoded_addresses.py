@@ -16,14 +16,16 @@ def is_real_code(path: Path) -> bool:
     return path.suffix in CODE_SUFFIXES or path.name.startswith("homelab-")
 
 
-def tracked_files() -> list[Path]:
-    listed = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], check=True, capture_output=True).stdout
-    return [ROOT / name for name in listed.decode().split("\0") if name]
+def project_files() -> list[Path]:
+    listing = ["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+    listed = subprocess.run(listing, check=True, capture_output=True).stdout
+    paths = {ROOT / name for name in listed.decode().split("\0") if name}
+    return sorted(path for path in paths if path.is_file())
 
 
 def offenders() -> list[str]:
     found = []
-    for path in tracked_files():
+    for path in project_files():
         relative = path.relative_to(ROOT)
         if not is_real_code(path) or TEST_FOLDERS & set(relative.parts):
             continue

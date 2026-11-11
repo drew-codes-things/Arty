@@ -1,10 +1,12 @@
 import ctypes
+import os
 
 from process.tools import shell
 
 TICK_WRAP = 2 ** 32
 MILLISECONDS = 1000
 DBUS_TIMEOUT_SECONDS = 2
+DESKTOPS_REPORTING_LOCK_TIME_IN_MILLISECONDS = ("KDE",)
 
 
 class NotSupported(Exception):
@@ -29,26 +31,42 @@ def windows_idle_seconds() -> float | None:
 
 
 def screensaver_call(method: str) -> int:
-    from jeepney import DBusAddress, new_method_call
-    from jeepney.io.blocking import open_dbus_connection
-    from jeepney.wrappers import DBusErrorResponse, unwrap_msg
+    try:
+        from jeepney import DBusAddress, new_method_call
+        from jeepney.io.blocking import open_dbus_connection
+        from jeepney.wrappers import DBusErrorResponse, unwrap_msg
+    except ImportError as error:
+        raise NotSupported(f"{method}: jeepney is not installed ({error})") from None
 
     address = DBusAddress("/ScreenSaver", bus_name="org.freedesktop.ScreenSaver", interface="org.freedesktop.ScreenSaver")
     try:
         with open_dbus_connection(bus="SESSION") as connection:
             reply = connection.send_and_get_reply(new_method_call(address, method), timeout=DBUS_TIMEOUT_SECONDS)
         return int(unwrap_msg(reply)[0])
-    except (DBusErrorResponse, OSError, TimeoutError, KeyError, ValueError) as error:
+    except DBusErrorResponse as error:
         raise NotSupported(f"{method}: {error}") from None
 
 
-def linux_idle_seconds(call=screensaver_call) -> float | None:
-    for method in ("GetSessionIdleTime", "GetActiveTime"):
-        try:
-            return float(call(method))
-        except NotSupported:
-            continue
-    return None
+def current_desktop() -> str:
+    return os.environ.get("XDG_CURRENT_DESKTOP", "")
+
+
+def lock_time_in_seconds(active_time: int, desktop: str) -> float:
+    if any(name in desktop for name in DESKTOPS_REPORTING_LOCK_TIME_IN_MILLISECONDS):
+        return active_time / MILLISECONDS
+    return float(active_time)
+
+
+def linux_idle_seconds(call=screensaver_call, desktop: str | None = None) -> float | None:
+    try:
+        return float(call("GetSessionIdleTime"))
+    except (NotSupported, IndexError, ValueError, TypeError):
+        pass
+    try:
+        active_time = call("GetActiveTime")
+    except (NotSupported, IndexError, ValueError, TypeError):
+        return None
+    return lock_time_in_seconds(active_time, current_desktop() if desktop is None else desktop)
 
 
 def seconds_idle() -> float | None:

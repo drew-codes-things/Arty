@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -20,6 +21,9 @@ from installers import build_installer
 HERE = Path(__file__).resolve().parent
 DATA_DIR = os.environ.get("HUB_DATA_DIR", "/var/lib/my-voice")
 PORT = int(os.environ.get("HUB_PORT", "8780"))
+HOST = os.environ.get("HUB_HOST", "0.0.0.0")
+SETUP_CODE_FILE = "setup-code"
+SETUP_CODE_BYTES = 9
 PUBLIC_URL = os.environ.get("HUB_PUBLIC_URL", f"http://127.0.0.1:{PORT}")
 MIC_DEVICE = os.environ.get("HUB_MIC_DEVICE", "plughw:CARD=Mic,DEV=0")
 SPEAKER_DEVICE = os.environ.get("HUB_SPEAKER_DEVICE", "plughw:CARD=PCH,DEV=0")
@@ -35,7 +39,10 @@ MAX_SPEECH_BYTES = 20 * 1024 * 1024
 SESSION_COOKIE = "my_voice_session"
 SESSION_SECONDS = 30 * 24 * 3600
 MAX_FAILED_LOGINS = 5
+MAX_FAILED_LOGINS_PER_ADDRESS = 20
+MAX_TRACKED_LOGIN_KEYS = 1000
 LOCKOUT_SECONDS = 15 * 60
+MIC_RETRY_SECONDS = 3
 
 log = logging.getLogger("my-voice")
 
@@ -95,6 +102,40 @@ class WakeSwitch:
                 self.sockets.discard(ws)
 
 
+class FailedLogins:
+
+    def __init__(self):
+        self.times: dict[str, list[float]] = {}
+
+    def keys(self, address: str, email: str) -> tuple[str, str]:
+        return f"{address}|{email}", f"{address}|*"
+
+    def recent(self, key: str, now: float) -> list[float]:
+        return [when for when in self.times.get(key, []) if now - when < LOCKOUT_SECONDS]
+
+    def locked(self, address: str, email: str) -> bool:
+        now = time.time()
+        account_key, address_key = self.keys(address, email)
+        return (len(self.recent(account_key, now)) >= MAX_FAILED_LOGINS
+                or len(self.recent(address_key, now)) >= MAX_FAILED_LOGINS_PER_ADDRESS)
+
+    def record(self, address: str, email: str) -> None:
+        now = time.time()
+        for key in self.keys(address, email):
+            recent = self.recent(key, now)
+            self.times.pop(key, None)
+            self.times[key] = recent + [now]
+        self.forget_old(now)
+
+    def clear(self, address: str, email: str) -> None:
+        self.times.pop(self.keys(address, email)[0], None)
+
+    def forget_old(self, now: float) -> None:
+        self.times = {key: times for key, times in self.times.items() if now - times[-1] < LOCKOUT_SECONDS}
+        while len(self.times) > MAX_TRACKED_LOGIN_KEYS:
+            del self.times[next(iter(self.times))]
+
+
 class Microphone:
 
     def __init__(self):
@@ -102,6 +143,7 @@ class Microphone:
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task | None = None
         self.error = ""
+        self.closed_on_purpose = False
 
     async def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE)
@@ -113,10 +155,12 @@ class Microphone:
     def unsubscribe(self, queue: asyncio.Queue) -> None:
         self.subscribers.discard(queue)
         if not self.subscribers and self.process and self.process.returncode is None:
+            self.closed_on_purpose = True
             self.process.terminate()
 
     async def _capture(self) -> None:
         while self.subscribers:
+            self.closed_on_purpose = False
             self.process = await asyncio.create_subprocess_exec(
                 "arecord", "-q", "-D", MIC_DEVICE, "-f", "S16_LE", "-r", str(MIC_RATE), "-c", "1", "-t", "raw",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -134,10 +178,10 @@ class Microphone:
             stderr = (await self.process.stderr.read()).decode(errors="replace").strip()
             await self.process.wait()
             log.info("mic closed")
-            if self.subscribers:
+            if self.subscribers and not self.closed_on_purpose:
                 self.error = stderr or f"arecord exited with {self.process.returncode}"
-                log.error("mic capture stopped: %s - retrying in 3 s", self.error)
-                await asyncio.sleep(3)
+                log.error("mic capture stopped: %s - retrying in %d s", self.error, MIC_RETRY_SECONDS)
+                await asyncio.sleep(MIC_RETRY_SECONDS)
 
 
 class Speakers:
@@ -249,10 +293,35 @@ def require_same_origin(request: web.Request) -> None:
         raise web.HTTPForbidden(text="cross-site request refused")
 
 
+def served_over_https(request: web.Request) -> bool:
+    return request.secure or PUBLIC_URL.startswith("https://")
+
+
+def setup_code_path() -> Path:
+    return Path(DATA_DIR) / SETUP_CODE_FILE
+
+
+def ensure_setup_code() -> None:
+    path = setup_code_path()
+    if path.is_file():
+        return
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as code_file:
+        code_file.write(secrets.token_urlsafe(SETUP_CODE_BYTES) + "\n")
+
+
+def setup_code_matches(typed: str) -> bool:
+    path = setup_code_path()
+    if not path.is_file():
+        return False
+    expected = path.read_text().strip()
+    return bool(expected) and hmac.compare_digest(typed.strip().encode(), expected.encode())
+
+
 def logged_in_response(request: web.Request, email: str, location: str = "/") -> web.HTTPSeeOther:
     response = web.HTTPSeeOther(location)
     response.set_cookie(SESSION_COOKIE, request.app["sessions"].create(email), max_age=SESSION_SECONDS,
-                        httponly=True, samesite="Strict", path="/")
+                        httponly=True, samesite="Strict", path="/", secure=served_over_https(request))
     return response
 
 
@@ -270,18 +339,16 @@ async def login(request: web.Request):
     require_same_origin(request)
     form = await request.post()
     email = form_text(form, "email").strip().lower()
-    failures = request.app["failures"]
-    key = f"{client_address(request)}|{email}"
-    now = time.time()
-    recent = [t for t in failures.get(key, []) if now - t < LOCKOUT_SECONDS]
-    if len(recent) >= MAX_FAILED_LOGINS:
-        log.warning("login locked for %s from %s", email, client_address(request))
+    failures: FailedLogins = request.app["failures"]
+    address = client_address(request)
+    if failures.locked(address, email):
+        log.warning("login locked for %s from %s", email, address)
         raise web.HTTPSeeOther("/login?error=locked")
     if not request.app["accounts"].verify(email, form_text(form, "password")):
-        failures[key] = recent + [now]
-        log.warning("failed login for %s from %s", email, client_address(request))
+        failures.record(address, email)
+        log.warning("failed login for %s from %s", email, address)
         raise web.HTTPSeeOther("/login?error=wrong")
-    failures.pop(key, None)
+    failures.clear(address, email)
     log.info("%s logged in from %s", email, client_address(request))
     raise logged_in_response(request, email)
 
@@ -295,11 +362,16 @@ async def setup_page(request: web.Request):
 async def setup(request: web.Request):
     require_same_origin(request)
     form = await request.post()
+    if not setup_code_matches(form_text(form, "setup_code")):
+        log.warning("first-account setup with a wrong setup code from %s", client_address(request))
+        message = f"The setup code isn't right. It's in {setup_code_path()} on the server."
+        raise web.HTTPSeeOther("/setup?" + urllib.parse.urlencode({"error": message}))
     try:
         email = request.app["accounts"].create_first(form_text(form, "email"), form_text(form, "password"),
                                                      form_text(form, "confirm"))
     except AccountError as error:
         raise web.HTTPSeeOther("/setup?" + urllib.parse.urlencode({"error": str(error)}))
+    setup_code_path().unlink(missing_ok=True)
     log.info("first account created for %s from %s", email, client_address(request))
     raise logged_in_response(request, email)
 
@@ -467,6 +539,8 @@ async def assistant_volume(request: web.Request):
         body = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise web.HTTPBadRequest(text="send JSON") from None
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="send a JSON object")
     change, wanted = body.get("change"), body.get("level")
     if change is None and wanted is None:
         level, muted = await request.app["volume"].get()
@@ -489,12 +563,14 @@ def build_app() -> web.Application:
     app = web.Application(middlewares=[security_headers], client_max_size=MAX_SPEECH_BYTES + 1024)
     app["devices"] = DeviceStore(DATA_DIR)
     app["accounts"] = AccountStore(DATA_DIR)
+    if not app["accounts"].has_accounts():
+        ensure_setup_code()
     app["sessions"] = Sessions()
     app["microphone"] = Microphone()
     app["speakers"] = Speakers()
     app["volume"] = Volume()
     app["wake"] = WakeSwitch()
-    app["failures"] = {}
+    app["failures"] = FailedLogins()
     app["connections"] = {}
     app.router.add_get("/login", login_page)
     app.router.add_post("/login", login)
@@ -518,5 +594,5 @@ def build_app() -> web.Application:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not AccountStore(DATA_DIR).has_accounts():
-        log.warning("no account yet - open %s/setup to choose your email and password", PUBLIC_URL)
-    web.run_app(build_app(), host="0.0.0.0", port=PORT, access_log=None)
+        log.warning("no account yet - open %s/setup with the code in %s", PUBLIC_URL, setup_code_path())
+    web.run_app(build_app(), host=HOST, port=PORT, access_log=None)

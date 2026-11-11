@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -12,7 +14,8 @@ from devices import write_private_json
 MIN_PASSWORD_CHARS = 10
 MAX_FIELD_CHARS = 256
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-UNUSED_HASH = bcrypt.hashpw(b"my-voice-timing-equaliser", bcrypt.gensalt()).decode()
+PREHASHED = "sha256-bcrypt$"
+BCRYPT_MAX_BYTES = 72
 
 
 class AccountError(ValueError):
@@ -28,8 +31,21 @@ def check_new_password(password: str, confirm: str) -> None:
         raise AccountError("the two passwords don't match")
 
 
+def prehashed(password: str) -> bytes:
+    return base64.b64encode(hashlib.sha256(password.encode()).digest())
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return PREHASHED + bcrypt.hashpw(prehashed(password), bcrypt.gensalt()).decode()
+
+
+def password_matches(password: str, stored: str) -> bool:
+    if stored.startswith(PREHASHED):
+        return bcrypt.checkpw(prehashed(password), stored.removeprefix(PREHASHED).encode())
+    return bcrypt.checkpw(password.encode()[:BCRYPT_MAX_BYTES], stored.encode())
+
+
+UNUSED_HASH = hash_password("my-voice-timing-equaliser")
 
 
 class AccountStore:
@@ -61,5 +77,5 @@ class AccountStore:
     def verify(self, email: str, password: str) -> bool:
         account = next((a for a in self._load() if a["email"] == email.strip().lower()), None)
         stored = account["password_hash"] if account else UNUSED_HASH
-        matches = bcrypt.checkpw(password[:MAX_FIELD_CHARS].encode(), stored.encode())
+        matches = password_matches(password[:MAX_FIELD_CHARS], stored)
         return matches and account is not None

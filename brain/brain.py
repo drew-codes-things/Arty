@@ -14,7 +14,7 @@ import logging
 import mimetypes
 import os
 import re
-import secrets
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,7 +32,6 @@ import calendar_feed
 import drafts
 import email_watch
 import expiry
-import fresh
 import lectures
 import research
 import style
@@ -44,6 +44,7 @@ import reckon
 import sharing
 import safety
 import desktop_look
+import devices
 import briefing
 import notify
 import owner
@@ -53,17 +54,30 @@ import timing
 import undo
 import weather
 import web_app
+from announcements import announced, record_announcement, wait_for_announcements
+from api_support import (
+    IDENTITY_NONCE, optional_int, ApiError, same_secret, identity_proofs, text_field, list_limit, valid_messages,
+    client_name)
+from archive import is_overheard, message_text, archive_records, recent_exchanges, recall_records, recall
+from environment import BRAIN_KEY, APP_KEY, HUB_KEY
+from settings import LISTEN_HOST, LISTEN_PORT, HUB_URL, OLLAMA_URL, CONFIG_FILE, TRUSTED_PROXIES
+from native_tools import NATIVE_TOOLS, BACKGROUND_ONLY_EXCLUDED, API_CALLABLE_NATIVE
+from reply_rules import (
+    OFFER_SENTENCE, trim_offers, URL_TAGS, PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING,
+    SEARCH_REQUEST, REMIND_REQUEST, CHAT_APP, reminder_from, PROMISE, TOOL_TALK, DO_REQUEST, PRETEND_TOOLS,
+    TOOL_META_SENTENCE, TOOL_FAILED, FAILED_NOTE, NOT_ACTIONS, NOT_FOR_ME, VOICE_MODE, ADDRESSED_PROMPT, JSON_BLOCK,
+    ANSWERED_ALREADY_CHARS, TOOLLESS_NOTE, APP_NOTES)
+from schedules import (
+    create_schedule, ensure_reminder, set_reminder, send_reminder, guarded, due_schedules_now,
+    send_calendar_and_deadline_reminders)
+from steering import (
+    LOOKUP_TOOLS, MESSAGE_PLACEHOLDER, QUERY_PADDING, MAX_LOOKUPS, LOOKUP_TEMPERATURE, WRITE_ONLY_REQUEST,
+    RUN_REQUEST, RUN_TOOLS, WRITE_ONLY_NOTE, WRITE_AND_RUN_NOTE, thinking_for, steer_last_request,
+    steer_away_from_repeats, with_thinking, LOOKUP_MAX_MESSAGE_CHARS, LOOKUP_LABEL, LOOKUP_CHARS, LOOKUP_FAILED,
+    on_my_desktop, sign_in_help, matches_lookup, with_context, parse_arguments, task_links, DESKTOP_TOOLS,
+    NOTHING_TO_SIGN_IN, question_for_user)
 
-LISTEN_HOST = os.environ.get("BRAIN_HOST", "127.0.0.1")
-LISTEN_PORT = int(os.environ.get("BRAIN_PORT", "8081"))
-PUBLIC_URL = (os.environ.get("BRAIN_PUBLIC_URL") or f"http://127.0.0.1:{LISTEN_PORT}").rstrip("/")
-BRAIN_KEY = os.environ["BRAIN_API_KEY"]
-APP_KEY = os.environ.get("ARTY_API_KEY", "")
 ALERT_TOKEN = os.environ.get("ALERT_TOKEN", "")  # Uptime Kuma's webhook puts this in its URL
-HUB_KEY = os.environ["MCPO_API_KEY"]
-HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8000")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-CONFIG_FILE = os.environ.get("BRAIN_CONFIG", "/srv/ai/brain/brain.json")
 SERVERS = ["memory", "time", "fetch", "sequential-thinking", "workspace", "research", "homelab"]
 MODEL_ID = "assistant-core"
 MAX_TOOL_ROUNDS = 12
@@ -71,129 +85,27 @@ MEMORY_CHARS = 4000
 TOOL_RESULT_CHARS = 8000
 SPEC_REFRESH_SECONDS = 300
 USER_NAME = owner.configured_name(CONFIG_FILE)
-RECENT_CHARS = 300
-RECALL_EXCERPT_CHARS = 400
 MAX_BODY_BYTES = 64 * 1024 * 1024  # chat requests can carry full-size photos as base64
 WORKER_IDLE_SECONDS = 3
 SCHEDULER_TICK_SECONDS = 30
+DEFAULT_TIME_ZONE = "Europe/London"
+DEFAULT_TIME_ZONE_LABEL = "UK time"
 TASK_ACTIONS = ("done", "approve", "deny", "cancel")
 SHORT_REPORT_CHARS = 60
-DESKTOP_HELP = "on Arty's desktop (Proxmox web UI > VM 105 ai-desktop > Console)"
+REQUEST_IDLE_SECONDS = 60
+MAX_RUNNING_CHAT_JOBS = 4
+PRUNED_JOBS_KEPT = 1000
+SECRET_QUERY_VALUE = re.compile(r"((?:token|key)=)[^&\s\"]*", re.IGNORECASE)
+DOWNLOAD_TOKEN = re.compile(r"(/arty-files/[^/\s\"?]+/)[^/\s\"?]+(?=/)")
+MAX_DIRECT_CHATS = 6
+TASK_LINK_TROUBLE = "Arty couldn't open that task just now: try again in a minute."
+GENERIC_ERROR = "Arty's brain hit an error; the details are in its log."
+NATIVE_TOOL_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OSError, sqlite3.Error, urllib.error.URLError)
+ASKED_TO_DO = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please|can you|could you|would you|will you|i want you to|i need you to)\b",
+                         re.IGNORECASE)
+PAGE_READER = "workspace__browser_read"
 SECRET_PATTERN = re.compile(r"password|passcode|passphrase|passkey|\bpin\b|api[ _-]?key|token|card number|cvv|sort code", re.IGNORECASE)
 
-
-def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
-    return {"type": "function", "function": {"name": name, "description": description,
-                                             "parameters": {"type": "object", "properties": properties, "required": required}}}
-
-
-NATIVE_TOOLS = {
-    "recall_conversations": _tool(
-        "recall_conversations",
-        "Search every past conversation with the user by a few key words. Returns dated excerpts, newest first.",
-        {"query": {"type": "string", "description": "a few key words to look for"},
-         "limit": {"type": "integer", "description": "how many excerpts to return (default 5)"}},
-        ["query"]),
-    "ask_user": _tool(
-        "ask_user",
-        "Only for things a human must do on your desktop: signing in to a website, or passing a CAPTCHA or bot check. "
-        "Not for permission or questions: ask those in your normal reply. In a background task this pauses until the user has done it.",
-        {"message": {"type": "string", "description": "what the user needs to do, written to him as 'you', e.g. 'Please sign in to LinkedIn in the browser on my desktop.'"}},
-        ["message"]),
-    "notify_user": _tool(
-        "notify_user",
-        "Send the user a notification right now (to Updates in their phone and desktop apps). Not for reminders: anything set with "
-        "schedule_task already arrives there by itself at the right time.",
-        {"message": {"type": "string", "description": "the notification, written to him as 'you'"}, "title": {"type": "string", "description": "short title (optional)"}},
-        ["message"]),
-    "start_background_task": _tool(
-        "start_background_task",
-        "Start a job that you work on by yourself in the background, so the user doesn't have to wait in the chat. "
-        "He gets a phone notification with the result.",
-        {"instructions": {"type": "string", "description": "everything needed to do the job, written as instructions to yourself"},
-         "title": {"type": "string", "description": "a short name for the job"}},
-        ["instructions"]),
-    "schedule_task": _tool(
-        "schedule_task",
-        "Set a reminder, or schedule a job for later or on repeat. For a reminder (\"remind me ...\"), give reminder_text: "
-        "that exact text is sent to the user's phone and desktop apps at that time. For a job (daily check, report), give instructions: "
-        "you do it in the background when it runs and the user gets the result. Call this whenever the user asks to be reminded.",
-        {"reminder_text": {"type": "string", "description": "for reminders: the exact message to send, written to the user, e.g. 'Time to stretch.'"},
-         "instructions": {"type": "string", "description": "for jobs: what to do each time, as instructions to yourself"},
-         "when": {"type": "string", "description": "copy the user's own words for the time, e.g. 'in 2 minutes', 'tomorrow 08:00', 'weekdays 07:30'. " + timing.HELP},
-         "title": {"type": "string", "description": "a short name"}},
-        ["when"]),
-    "list_scheduled": _tool("list_scheduled", "List the scheduled jobs and when each runs next.", {}, []),
-    "cancel_scheduled": _tool("cancel_scheduled", "Cancel a scheduled job by its number.",
-                              {"schedule_id": {"type": "integer"}}, ["schedule_id"]),
-    "list_tasks": _tool("list_tasks", "List recent background tasks and their status/results.", {}, []),
-    "list_models": _tool("list_models", "List the AI models you can run on, and which is your main one.", {}, []),
-    "ask_other_model": _tool(
-        "ask_other_model",
-        "Hand one self-contained job to another installed AI model and get its answer back. "
-        "You stay on your own model. list_models shows what's installed.",
-        {"model": {"type": "string", "description": "installed model name, e.g. qwen3:14b"},
-         "prompt": {"type": "string", "description": "the full job, with everything the other model needs to know"}},
-        ["model", "prompt"]),
-    "calendar_events": _tool(
-        "calendar_events",
-        "The user's calendar: their events for today or the next few days (your own calendar, plus Google Calendar if connected). "
-        "Your own events have #numbers for calendar_change and calendar_remove.",
-        {"days": {"type": "integer", "description": "how many days ahead, from now (default 1 = today)"}},
-        []),
-    "calendar_add": _tool(
-        "calendar_add",
-        "Put an event in the user's calendar (your own calendar, which you remind them about 15 minutes before). "
-        "Use for appointments, plans and birthdays; use schedule_task for plain reminders.",
-        {"title": {"type": "string", "description": "what it is, e.g. 'Dentist'"},
-         "when": {"type": "string", "description": "copy the user's words: 'Tuesday 3pm', '25 Dec 14:00', '24/12' (all day), "
-                                                   "'tomorrow 18:00', 'every Monday 6pm' (repeats)"},
-         "duration_minutes": {"type": "integer", "description": "how long (default 60, or all day for a date with no time)"},
-         "location": {"type": "string"}, "notes": {"type": "string"}},
-        ["title", "when"]),
-    "calendar_change": _tool(
-        "calendar_change",
-        "Move, rename or change the length or place of one of your own calendar events, by its #number from calendar_events.",
-        {"event_id": {"type": "integer"}, "title": {"type": "string"}, "when": {"type": "string"},
-         "duration_minutes": {"type": "integer"}, "location": {"type": "string"}},
-        ["event_id"]),
-    "calendar_remove": _tool(
-        "calendar_remove",
-        "Delete one of your own calendar events by its #number from calendar_events (a repeating event stops repeating).",
-        {"event_id": {"type": "integer"}},
-        ["event_id"]),
-    "weather": _tool(
-        "weather",
-        "The weather for the user's home town (set in brain.json): now, today, or the next few days.",
-        {"days": {"type": "integer", "description": "1 = today (default), up to 7"}},
-        []),
-    "week_recap": _tool(
-        "week_recap",
-        "Looking back: what the user asked you about and what you did together over the last 7 days, for summaries and "
-        "LinkedIn post ideas. Not for what's coming up (that's calendar_events).",
-        {}, []),
-    "convert_file": _tool(
-        "convert_file",
-        "Convert a file the user attached (or one you made) to another format, and get a download link for the result. "
-        "Images: png, jpg, webp, gif, bmp, tiff, ico, avif, heic (optionally resized). Audio: mp3, wav, ogg, flac, m4a, aac, opus. "
-        "Video: mp4, webm, mkv, mov, gif, or any audio format to pull out the sound.",
-        {"file_id": {"type": "string", "description": "the file id shown with the attachment"},
-         "format": {"type": "string", "description": "the target format, e.g. png, mp3, mp4"},
-         "width": {"type": "integer", "description": "optional new width in pixels (images and video)"},
-         "height": {"type": "integer", "description": "optional new height in pixels (images and video)"},
-         "quality": {"type": "integer", "description": "optional image quality 1-100 (jpg/webp), lower is smaller"}},
-        ["file_id", "format"]),
-    "switch_model": _tool(
-        "switch_model",
-        "ONLY when the user explicitly asks you to change your main model: switch to it, e.g. 'qwen3:14b'. Downloads it first if needed.",
-        {"model": {"type": "string", "description": "Ollama model name, e.g. qwen3:14b"}},
-        ["model"]),
-}
-NATIVE_TOOLS.update({name: definition for name, (_, definition) in personal.TOOLS.items()})
-NATIVE_TOOLS.update({name: definition for name, (_, definition) in reckon.TOOLS.items()})
-NATIVE_TOOLS.update({name: definition for name, (_, definition) in sharing.TOOLS.items()})
-BACKGROUND_ONLY_EXCLUDED = {"start_background_task", "schedule_task", "cancel_scheduled", "switch_model"}
-API_CALLABLE_NATIVE = {*personal.TOOLS, *sharing.TOOLS, "weather", "week_recap", "calendar_events", "calendar_add", "calendar_change", "calendar_remove", "convert_file", "recall_conversations", "notify_user", "start_background_task", "schedule_task", "list_scheduled", "cancel_scheduled", "list_tasks", "list_models", "switch_model", "ask_other_model"}
 
 EXTRACT_PROMPT = owner.fill("""You extract lasting facts that OWNER states about their own life, so their assistant can remember them.
 
@@ -225,51 +137,11 @@ You are working on a task by yourself; the user is not watching the chat. Work t
 - If you need a human (a website login, a CAPTCHA or bot check), call ask_user: the task pauses until the user has done it, then you continue.
 - Outward-facing actions (posting, sending, connecting, buying) are held for the user's approval automatically; just carry on calling the tool.
 - When finished, reply with a short report of what you did and found, written to the user as "you". It is sent to his phone."""
-# Trailing offers the user asked not to get ("Would you like...?", "Let me know if..."); small models add them anyway.
-OFFER_SENTENCE = re.compile(
-    r"(would you like|do you want me to|do you want to|shall i|should i|ready to proceed|is there anything else|anything else i can|"
-    r"let me know if|feel free to|if you need anything|if you decide|just let me know|how can i (help|assist)|"
-    r"what would you like|anything (specific|else) you need|need any (other|more|further) (help|assistance)|"
-    r"want to explore|explore this further|happy to help|here to help|have a (good|great|nice) (day|night|evening|week)|"
-    r"what would you prefer|which would you prefer|or do you have (a|any)|if you('d| would)? (want|like)( me)? to|"
-    r"i can (also )?(find|fetch|look|search|get|check)( some| more)?|i hope (this|that) helps|hope this helps|"
-    r"if you need (more|any more|any further|further|other|any)|we can (look into|explore|check)|let me know how|"
-    r"let's move on|if so, (please )?(provide|tell me|give me|let me know)|what would be a good time|i can check again|"
-    r"what else can i (help|assist|do)|anything else (for|i can)|would you like to (add|explore|know|learn|see)|"
-    r"i can help (you )?(with that|set|schedule|add)|you can check your \w+ directly|otherwise, everything is|"
-    r"(questions|tasks) i can help with|can help with today|what do you prefer|if (that|this) would (be useful|help)|"
-    r"(an honour|a pleasure) to (assist|help)|happy to assist|i'd be (happy|glad) to)", re.IGNORECASE)
-
-
-def trim_offers(answer: str) -> str:
-    """Drop the sentences at the very end that only offer more help. Only the last paragraph is touched,
-    so lists and structure stay as they are, and something of the answer always remains."""
-    paragraphs = answer.strip().split("\n\n")
-    while paragraphs:
-        sentences = re.split(r"(?<=[.!?])\s+", paragraphs[-1].strip())
-        while sentences and OFFER_SENTENCE.search(sentences[-1]):
-            sentences.pop()
-        if sentences:
-            paragraphs[-1] = " ".join(sentences)
-            break
-        if len(paragraphs) == 1:
-            return answer.strip()  # the whole answer was an offer: leave it
-        paragraphs.pop()
-    return "\n\n".join(paragraphs)
 
 
 # The user wants to be called "you", never by name; the persona's facts mention "Drew" a lot, so small
 # models still greet him by it. Only the vocative ("Goodnight Drew!", "Sure, Drew.") is removed.
 NAME_GREETING, NAME_TAIL = owner.vocative_patterns(USER_NAME)
-URL_TAGS = re.compile(r"</?url>", re.IGNORECASE)
-# Small models sometimes run on past their answer into their own instructions (the time line, the tool list).
-PROMPT_LEAK = re.compile(r"((?:^|\n)\s*It is now \w+day \d+ \w+ \d{4}, \d\d:\d\d \(UK time[^)\n]*\)|\n\s*# Tools\b|<tools>|"
-                         r"You may call one or more functions|\n\s*FACTS YOU ALREADY KNOW|\n\s*BACKGROUND ONLY, do not continue|</?notes>|"
-                         r"\[\d{4}-\d\d-\d\d \d\d:\d\d\] User:|\n\s*Arty \(you\):)")
-
-
-# A reply ending by opening a code block with nothing in it: the model began a tool call as text.
-FUMBLED_CALL = re.compile(r"\s*```[a-z]*\s*$")
 
 
 def tidy_answer(answer: str) -> str:
@@ -286,78 +158,6 @@ def tidy_answer(answer: str) -> str:
     return URL_TAGS.sub("", answer)
 
 
-# The user asked for something done, or the reply claims something was done or found: with no tool
-# used, the small model is describing results it never got (a reminder that was never set, "findings
-# from my web searches" it never ran). It's sent back once to actually do it.
-ACTION_REQUEST = re.compile(r"\b(remind me|look (it |that |this )?up|search|research|find out|google|look into|check (on |the |my )?|"
-                            r"use your (desktop|computer|pc|browser)|schedule|set (a|an|up)|send (me|it)|what'?s the (weather|news|latest|price))\b", re.I)
-CLAIMED = re.compile(r"\b(I('ve| have) (just )?(checked|searched|looked|found|set|scheduled|created|sent|opened|added|researched)|"
-                     r"here are (some|the) (findings|results)|from my (recent )?(web )?search(es)?|I found (that|some|the))", re.I)
-# Asking the user what they mean, about something it could have looked up.
-CLARIFYING = re.compile(r"(could you (please )?(provide|clarify|specify|give)|more (context|details)|what (exactly )?do you mean|"
-                        r"not sure what you('re| are) referring|doesn't appear to be|can you (clarify|explain what))", re.I)
-SEARCH_REQUEST = re.compile(r"\b(look (it |that |this )?up|search|research|find out|google|look into|what('s| is| does)|"
-                            r"who('s| is)|verdict|mean(s|ing)?|reference)\b", re.I)
-# "remind me to ...", "remind to ...", "set a reminder to ..." (but not "it reminds me of ...")
-REMIND_REQUEST = re.compile(r"\bremind(?:\s+(?:me|us))?(?=\s+(?:to|about|in|at|on|by|tomorrow|tonight|this|next|every|each)\b)|"
-                            r"\b(?:set|make|add|create|put in)\s+(?:me\s+)?(?:a|an)\s+reminder\b", re.I)
-# "... on Telegram" / "send it to Discord": left out of the reminder's text; reminders only go to Arty's apps.
-CHAT_APP = re.compile(r"[\s,]*(?:\b(?:and\s+)?(?:send|post|put)\s+(?:it|that|them)\s+)?\b(?:on|to|via|through|in|over|and)\s+(?:my\s+)?"
-                      r"(telegram|discord)\b(?:\s+(?:too|as well))?", re.I)
-REMINDER_PARTS = [
-    re.compile(r"\bremind(?: (?:me|us))? (?:to |about )(?P<what>.+?) (?P<when>(?:in|at|on|by|tomorrow|tonight|this|next|every|each)\b.+)$", re.I),
-    re.compile(r"\bremind(?: (?:me|us))? (?P<when>(?:in|at|on|tomorrow|tonight|this|next|every|each)\b.*?) (?:to|about) (?P<what>.+)$", re.I),
-    re.compile(r"\breminder (?:to |for |about )(?P<what>.+?) (?P<when>(?:in|at|on|by|tomorrow|tonight|this|next|every|each)\b.+)$", re.I),
-    re.compile(r"\breminder (?P<when>(?:in|at|on|tomorrow|tonight|this|next|every|each)\b.*?) (?:to|for|about) (?P<what>.+)$", re.I),
-]
-
-
-def reminder_from(text: str) -> tuple[str, str] | None:
-    """(what, when) from "remind me to X in 5 minutes" / "remind me in 5 minutes to X", or None."""
-    text = CHAT_APP.sub("", text)
-    text = re.sub(r"[\s,]*\b(please|pls|plz|thanks|thank you|cheers|ta|mate)\W*$", "", text.strip(), flags=re.I).rstrip(".!?")
-    for pattern in REMINDER_PARTS:
-        if match := pattern.search(text):
-            what = match["what"].strip()
-            return what[:1].upper() + what[1:] + ".", match["when"].strip()
-    return None
-
-
-PROMISE = re.compile(r"\b(I'll|I will|I've|I have|I'm going to)\s+(remind|set (up )?(a |the |your )?(reminder|alarm|schedule)|schedule|start(ed)? (a |the )?(background )?task)", re.IGNORECASE)
-# Talking about its tools ("let's use the `homelab__service_status` function", "I'll run this command"):
-# the user never needs to see that, so it isn't sent early (see run_agent).
-TOOL_TALK = re.compile(r"\b\w+__\w+|\bfunction\b|\btool\b|I'll run|let me (run|use|call)|let's (use|run|call)", re.I)
-# Asking Arty to change something ("put the dentist in my calendar", "add milk to my list"): a read-only lookup
-# may run first, but the tools to actually do it must stay on offer.
-DO_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:(?:please|can you|could you|would you|will you|i want you to|"
-                        r"i need you to)\s+)*(add|put|book|schedule|set|create|make|remind|cancel|delete|remove|move|change|update|"
-                        r"send|save|note|mark|tick|clear|rename|turn|start|stop|restart|open|close|play|pause)\b", re.I)
-
-# A reply that plays at using tools (made-up JSON results, "using the `homelab__x` function") instead of answering.
-PRETEND_TOOLS = re.compile(r"```json|\b[a-z]+__[a-z_]+\b|<tool_call>", re.I)
-# Sentences that only talk about Arty's own machinery.
-TOOL_META_SENTENCE = re.compile(r"[^.!?\n]*(\b(none of the|the provided|the available|my available)\s+(functions|tools)\b|"
-                                r"\b[a-z]+__[a-z_]+\b|answer (your question )?directly instead|(with|using) the (tool|function)\b)"
-                                r"[^.!?\n]*[.!?:]?", re.I)
-# A tool result that says it didn't work: the start of hub.call's errors, MCP errors and native refusals.
-TOOL_FAILED = re.compile(r"^\W*(unknown tool|tool error|tool unavailable|error\b|failed\b|blocked\b|(i )?(couldn't|could not|can't|cannot)\b)", re.I)
-FAILED_NOTE = ("\n\n(That didn't work. Tell the user plainly that it failed and why, in a sentence; never say it worked "
-               "and never make up a result.)")
-# Tools that do things; read-only lookups and unlocking tool groups don't count as having done anything.
-NOT_ACTIONS = {"use_tools"}
-NOT_FOR_ME = "(not for me)"
-VOICE_MODE = "(voice mode)"
-ADDRESSED_PROMPT = ("A home voice assistant called Arty heard this through a room microphone, either right after its "
-                    "wake word or in the few seconds after it last spoke. Decide whether the person was talking TO Arty "
-                    "(a question, request, command, or a reply to what Arty just said) or whether it was overheard: "
-                    "people talking to each other, an exclamation, laughter, or a fragment that asks nothing of Arty.\n\n"
-                    "What Arty last said: %s\nWhat the microphone heard: %s\n\n"
-                    'Reply with JSON only: {"for_arty": true} or {"for_arty": false}')
-JSON_BLOCK = re.compile(r"\n?```json[\s\S]*?```\n?", re.I)
-# A reply this long that only then asks to unlock tools has already answered (see run_agent).
-ANSWERED_ALREADY_CHARS = 200
-TOOLLESS_NOTE = ("You are running on a model without tool support: you can't use tools, search, your computer or the browser "
-                 "right now. Answer from what you know and from the memories above; if something needs tools, say so briefly.")
 memory_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -406,28 +206,6 @@ def load_config():
     return config
 
 
-def is_overheard(answer: str) -> bool:
-    return answer.strip().strip(".").lower() == NOT_FOR_ME
-
-def message_text(message):
-    content = message.get("content")
-    if isinstance(content, list):
-        return " ".join(part.get("text", "") for part in content if isinstance(part, dict))
-    return str(content or "")
-
-
-def archive_records(config):
-    folder = Path(config["conversations_dir"])
-    if not folder.exists():
-        return
-    for path in sorted(folder.glob("*.jsonl"), reverse=True):
-        for line in reversed(path.read_text().splitlines()):
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-
 def gather_writing() -> tuple[list[str], list[str]]:
     """The user's own writing, for style.py: their messages from the archive (every app) and their LinkedIn
     posts (read in the desktop browser; skipped if it isn't signed in)."""
@@ -457,38 +235,6 @@ def archive_turn(config, user_text, answer, tools_used):
     record = {"time": now.isoformat(timespec="seconds"), "user": user_text, "assistant": answer, "tools": tools_used}
     with open(folder / f"{now:%Y-%m}.jsonl", "a") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
-def recent_exchanges(config):
-    records = []
-    for record in archive_records(config):
-        records.append(record)
-        if len(records) >= int(config.get("recent_exchanges", 6)):
-            break
-    lines = [f"[{r['time'][:16].replace('T', ' ')}] User: {r['user'][:RECENT_CHARS]}\n  Arty (you): {r['assistant'][:RECENT_CHARS]}" for r in reversed(records)]
-    return "\n".join(lines)
-
-
-def recall_records(config, query, limit=5):
-    terms = [term for term in re.findall(r"\w+", (query or "").lower()) if len(term) > 2]
-    found = []
-    if not terms:
-        return found
-    for record in archive_records(config):
-        text = f"{record.get('user', '')} {record.get('assistant', '')}".lower()
-        if all(term in text for term in terms) or (len(terms) > 2 and sum(term in text for term in terms) >= len(terms) - 1):
-            found.append(record)
-            if len(found) >= max(1, int(limit or 5)):
-                break
-    return found
-
-
-def recall(config, query, limit=5):
-    if not re.findall(r"\w{3,}", query or ""):
-        return "Give me a few key words to search for."
-    found = recall_records(config, query, limit)
-    excerpts = [f"[{r['time'][:16].replace('T', ' ')}] User: {r['user'][:RECALL_EXCERPT_CHARS]}\n  Arty (you): {r['assistant'][:RECALL_EXCERPT_CHARS]}" for r in found]
-    return "\n\n".join(excerpts) if excerpts else f"No past conversations mention: {query}"
 
 
 # Things the small model still tries to save that aren't lasting facts about the user.
@@ -701,88 +447,23 @@ def current_context(config):
     recent = recent_exchanges(config)
     if recent:
         known += "\n\nBACKGROUND ONLY, do not continue these: your most recent earlier conversations with the user (any app), oldest first:\n" + recent
-    now = datetime.now().astimezone()
+    return known + "\n\n" + time_line(config)
+
+
+def local_zone(config) -> ZoneInfo:
+    try:
+        return ZoneInfo(str(config.get("time_zone") or DEFAULT_TIME_ZONE))
+    except (ZoneInfoNotFoundError, ValueError):
+        log.warning("unknown time_zone %r in brain.json; using %s", config.get("time_zone"), DEFAULT_TIME_ZONE)
+        return ZoneInfo(DEFAULT_TIME_ZONE)
+
+
+def time_line(config, moment: datetime | None = None) -> str:
+    now = (moment or datetime.now().astimezone()).astimezone(local_zone(config))
     offset = now.strftime("%z")
-    return known + (f"\n\nIt is now {now:%A %d %B %Y, %H:%M} (UK time, {now:%Z}, UTC{offset[:3]}:{offset[3:]}). "
-                    "For the time or time difference in another place, use the time tool's convert_time, which states the difference.")
-
-
-# Tools the brain may run by itself before the model answers (see look_up_first): read-only ones only.
-LOOKUP_TOOLS = {"homelab__proxmox_status", "homelab__service_status", "weather", "calendar_events", "deadlines_show",
-                "list_show", "quiz_progress", "week_recap", "research__web_search", "workspace__gmail_unread", "date_facts",
-                "currency_facts", "workspace__look_at_desktop", "homelab__pufferpanel_servers"}
-# In a lookup rule's arguments, this stands for the user's message (e.g. the web search query).
-MESSAGE_PLACEHOLDER = "{message}"
-# Polite padding that only makes a search query worse.
-QUERY_PADDING = re.compile(r"^(hey |hi )?(arty,? )?(can|could|would) you (please )?(tell me|show me|find( me)?|let me know)?\s*|\bplease\b", re.I)
-MAX_LOOKUPS = 2
-LOOKUP_TEMPERATURE = 0.15
-HARD_REQUEST = re.compile(r"\b(think (it |this |that )?(through|hard|carefully)|step[- ]by[- ]step|work out|figure out|calculate|"
-                          r"solve|puzzle|riddle|prove|plan (out |my |a |the )?|compare|pros and cons|"
-                          r"trade-?offs?|debug|why (is|does|do|did|won'?t|isn'?t|doesn'?t)|optimi[sz]e|design|strategy|"
-                          r"best way|what if|estimate)\b", re.I)
-MULTI_STEP_REQUEST = re.compile(r"\b(and then|after that|once (that'?s|it'?s) done|first\b.{3,80}\bthen|"
-                                r"(build|create|make|write|code) (me )?(an? |the )?(\w+ )?(app|bot|website|site|program|tool|game|"
-                                r"script|extension|server|api|dashboard)s?|set up|install|automate|orchestrat\w*|migrate|"
-                                r"refactor|research)\b", re.I)
-THINKING_MIN_TOKENS = 6144
-WRITE_ONLY_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please |can you |could you |would you )?(?:write|give me|show me|"
-                                r"what'?s|what is|how do i)\b.*\b(?:one-?liner|command|script|function|code|regex|snippet|query|alias)\b", re.I)
-RUN_REQUEST = re.compile(r"\b(run|execute|test|try (it|this|that)|on your (computer|desktop|pc)|check (it|that) works)\b", re.I)
-RUN_TOOLS = {"workspace__run_command", "workspace__read_terminal", "workspace__list_files", "workspace__read_file",
-             "workspace__write_file", "workspace__edit_file"}
-WRITE_ONLY_NOTE = "\n\n(Reply with the code itself. Don't run anything or look around your computer for this.)"
-WRITE_AND_RUN_NOTE = "\n\n(Write it, then run it on your computer with run_command and show what it printed.)"
-
-
-def thinking_for(config, request_text="", writing_job=False) -> bool:
-    setting = config.get("think", False)
-    if setting != "auto":
-        return bool(setting)
-    model = models.find(config["model"])
-    if not model or not model.get("thinking"):
-        return False
-    request_text = request_text or ""
-    return writing_job or bool(HARD_REQUEST.search(request_text) or MULTI_STEP_REQUEST.search(request_text))
-
-
-def steer_last_request(history, note: str):
-    for index in range(len(history) - 1, 0, -1):
-        if history[index].get("role") == "user":
-            if isinstance(history[index].get("content"), str):
-                history[index] = {**history[index], "content": history[index]["content"] + note}
-            return
-
-
-def steer_away_from_repeats(history: list[dict], conversation: list[dict], newest_request: str, background: bool):
-    if not background:
-        steer_last_request(history, fresh.repetition_note(conversation, newest_request))
-
-
-def with_thinking(body, think: bool):
-    options = body.get("options") or {}
-    if think:
-        options = {**options, "num_predict": max(int(options.get("num_predict", 0)), THINKING_MIN_TOKENS)}
-    return {**body, "think": think, "options": options}
-
-
-# Longer messages are mostly pasted text (an error, a document), where a keyword means nothing.
-LOOKUP_MAX_MESSAGE_CHARS = 300
-# The labels the looked-up results carry in the notes, which small models sometimes copy into the reply.
-LOOKUP_LABEL = re.compile(r"[ \t]*:?[ \t]*\[(?:" + "|".join(sorted(LOOKUP_TOOLS)) + r")\]")
-LOOKUP_CHARS = 2500
-
-
-# A lookup that didn't work: an error, or the desktop's browser not answering.
-LOOKUP_FAILED = re.compile(TOOL_FAILED.pattern + r"|isn't running|is paused|not reachable|timed out|isn't set up", re.I)
-SIGN_IN_HELP = ("I can't open your Gmail right now: the Gmail window on my desktop isn't signed in to Google. Sign in once "
-                "(Proxmox > VM 105 > Console, then the \"Sign in to Google (Gmail)\" icon on its desktop), leave that window "
-                "open, and ask me again.")
-
-
-def matches_lookup(config, said: str) -> bool:
-    return len(said) <= LOOKUP_MAX_MESSAGE_CHARS and any(
-        rule.get("tool") in LOOKUP_TOOLS and re.search(rule.get("pattern", "(?!)"), said, re.I) for rule in config.get("lookups", []))
+    label = str(config.get("time_zone_label") or DEFAULT_TIME_ZONE_LABEL)
+    return (f"It is now {now:%A %d %B %Y, %H:%M} ({label}, {now:%Z}, UTC{offset[:3]}:{offset[3:]}). "
+            "For the time or time difference in another place, use the time tool's convert_time, which states the difference.")
 
 
 def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
@@ -811,7 +492,7 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
             continue
         if str(result).startswith("BLOCKED:"):
             # Small models turn this into vague advice; say exactly what's wrong and what to do.
-            blocked = SIGN_IN_HELP if name.startswith("workspace__gmail") else str(result).split(". Do not")[0]
+            blocked = sign_in_help(config) if name.startswith("workspace__gmail") else str(result).split(". Do not")[0]
             continue
         if LOOKUP_FAILED.search(str(result)):
             # Left to the model, a failed check becomes "nothing new": say it couldn't be checked, and why.
@@ -829,19 +510,6 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
     return used, ("\n\nAlready looked up for this message. Answer the message from this, and only this, unless it "
                   "asks for something else (don't call these tools again):\n"
                   + "\n\n".join(results)), blocked
-
-
-def with_context(history: list[dict], context: str):
-    """Puts the per-message context at the start of the latest user message. Not as a system message:
-    Ollama merges every system message into the one block above the tool list, so a changing one there
-    makes the model re-read the whole prompt (some 4,000 tokens, about 9 seconds) on every message.
-    The message is replaced, not edited: it's shared with the conversation that gets saved."""
-    note = f"<notes>\nYour notes for this message (not written by the user):\n{context}\n</notes>\n\n"
-    last_user = max((i for i, m in enumerate(history) if m.get("role") == "user"), default=None)
-    if last_user is None:
-        history.append({"role": "user", "content": note.strip()})
-    else:
-        history[last_user] = {**history[last_user], "content": note + str(history[last_user].get("content") or "")}
 
 
 def tool_parameters(name: str) -> dict:
@@ -865,46 +533,6 @@ def repair_arguments(name: str, arguments: dict) -> dict:
     if repaired != arguments:
         log.info("repaired %s arguments: %s -> %s", name, json.dumps(arguments)[:200], json.dumps(repaired)[:200])
     return repaired or arguments
-
-
-def parse_arguments(raw):
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
-
-
-def task_links(task: dict, actions: list[tuple[str, str]]) -> list[dict]:
-    """Buttons for a paused task: a callback ("t:<id>:<action>") the phone and desktop apps answer through the task
-    API, and the equivalent home-network /hooks link."""
-    return [{"label": label, "callback": f"t:{task['id']}:{action}",
-             "url": f"{PUBLIC_URL}/hooks/tasks/{task['id']}/{action}?token={task['token']}"} for label, action in actions]
-
-
-ON_THE_WEB = re.compile(r"\b(site|website|web|browser|desktop|page|account|google|gmail|linkedin|captcha|\w+\.(com|co|org|net|io|uk))\b",
-                        re.IGNORECASE)
-LOGIN_WORDS = re.compile(r"sign in|log ?in|captcha|bot check|verif|human", re.IGNORECASE)
-
-
-# Tools that work on the desktop (browser, Gmail window, screen, terminal): only after one of them can a website have
-# asked for a sign-in or a CAPTCHA.
-DESKTOP_TOOLS = ("workspace__",)
-NOTHING_TO_SIGN_IN = ("Nothing on the desktop was used, so there's nothing for the user to sign in to or pass. "
-                      "Don't use ask_user; reply to the user directly.")
-
-
-def question_for_user(message: str) -> str:
-    """What Arty says in chat when it needs the user to do something on its desktop."""
-    text = message.strip().rstrip(".") + "."
-    if LOGIN_WORDS.search(text) and ON_THE_WEB.search(text):  # not "sign in to your phone": that's a confused model
-        text += (" On my desktop (Proxmox web UI > VM 105 ai-desktop > Console), double-click \"Sign in to websites\", "
-                 "sign in, then close that window. Tell me when it's done and I'll carry on.")
-    return text
 
 
 def run_native(name, arguments, config, background, task):
@@ -931,7 +559,7 @@ def run_native(name, arguments, config, background, task):
             return "Nothing is scheduled.", None
         return "\n".join(f"#{s['id']} {s['title']}: {s['description']}, next {datetime.fromtimestamp(s['next_run']):%a %d %b %H:%M}" for s in rows if s["next_run"]), None
     if name == "cancel_scheduled":
-        found = store.update_schedule(int(arguments.get("schedule_id", 0)), enabled=0, next_run=None)
+        found = store.update_schedule(optional_int(arguments.get("schedule_id")) or 0, enabled=0, next_run=None)
         return ("Cancelled." if found else "No such scheduled job."), None
     if name == "list_tasks":
         rows = store.list_tasks(limit=10)
@@ -975,10 +603,19 @@ def run_native(name, arguments, config, background, task):
     return f"unknown tool {name}", None
 
 
-def reminder_wording(text: str) -> str:
-    """The reminder as the user should read it: "Reminder: drink some water" -> "Drink some water."."""
-    text = re.sub(r"^\s*(⏰\s*)?(reminder|remember|remind me|don't forget)\s*(to\b)?\s*[:\-–]?\s*(to\s+)?", "", str(text), flags=re.I).strip()
-    return (text[:1].upper() + text[1:]) if text else "Your reminder."
+def capped_tool_result(result):
+    if not isinstance(result, str) or len(result) <= TOOL_RESULT_CHARS:
+        return result
+    return result[:TOOL_RESULT_CHARS] + f"\n(cut: the result was {len(result)} characters; ask for less to see the rest)"
+
+
+def run_native_safely(name, arguments, config, background, task):
+    try:
+        result, waiting = run_native(name, arguments, config, background, task)
+        return capped_tool_result(result), waiting
+    except NATIVE_TOOL_ERRORS as error:
+        log.warning("native tool %s failed: %r", name, error)
+        return f"tool error: {name} didn't work ({type(error).__name__}: {error}). Check what you gave it and try again.", None
 
 
 def week_recap(config) -> str:
@@ -986,8 +623,11 @@ def week_recap(config) -> str:
     cutoff = datetime.now().timestamp() - 7 * 86400
     asked = []
     for record in archive_records(config):
-        if datetime.fromisoformat(record["time"]).timestamp() < cutoff:
-            break
+        try:
+            if datetime.fromisoformat(record["time"]).timestamp() < cutoff:
+                break
+        except ValueError:
+            continue
         if not record["user"].startswith("[background task"):
             asked.append(f"- {record['time'][:10]}: {APP_NOTES.sub('', record['user'])[:150]}")
     jobs = [f"- {t['title']}" for t in store.list_tasks("done", 30) if t["updated"] >= cutoff]
@@ -995,14 +635,6 @@ def week_recap(config) -> str:
             + "\n\nBackground jobs finished:\n" + "\n".join(jobs or ["- none"])
             + "\n\nSum this up talking to the user as \"you\" (\"You asked me about...\", \"We sorted out...\"). "
               "Don't write it as their own post or in their voice unless they ask for a post.")
-
-
-def optional_int(value) -> int | None:
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
 
 
 CONVERT_REQUEST = re.compile(r"\bconvert (?:it|this|that|them|the (?:file|image|picture|photo|video|audio|recording) )?\s*(?:in)?to (?:an? )?\.?(?P<format>[a-z0-9]{2,5})\b",
@@ -1048,7 +680,7 @@ def reload_main_model(config: dict):
         try:
             http_json(f"{OLLAMA_URL}/api/generate", body={"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}, timeout=300)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            log.warning("could not reload %s after a vision look: %s", config["model"], error)
+            log.warning("could not bring %s back after another model ran: %s", config["model"], error)
     thread = threading.Thread(target=load, daemon=True)
     thread.start()
     return thread
@@ -1113,22 +745,6 @@ def expand_attachments(messages: list[dict]) -> tuple[list[dict], bool]:
     return expanded, found
 
 
-def create_schedule(arguments) -> tuple[dict | None, str]:
-    reminder = str(arguments.get("reminder_text", "") or arguments.get("message", "")).strip() or None
-    instructions = str(arguments.get("instructions", "")).strip() or (f"Remind the user: {reminder}" if reminder else "")
-    if not instructions:
-        return None, "Give reminder_text (for a reminder) or instructions (for a job)."
-    try:
-        cron, first, description = timing.parse_when(str(arguments.get("when", "")))
-    except ValueError as error:
-        return None, f"Couldn't schedule it: {error}"
-    title = str(arguments.get("title") or (reminder or instructions)[:60])
-    created = store.create_schedule(title, instructions, cron, description, first.timestamp(), reminder)
-    minutes = max(1, round((first - datetime.now()).total_seconds() / 60))
-    away = f"in {minutes} minutes" if minutes < 120 else f"in about {round(minutes / 60)} hours"
-    return created, f"Scheduled #{created['id']} ({description}). First run {away}, at {first:%H:%M on %a %d %b}."
-
-
 def to_ollama_messages(messages):
     """Client apps send OpenAI-style history: assistant tool_calls with JSON-string arguments and
     tool results keyed by tool_call_id. Ollama wants argument objects and the tool's name."""
@@ -1148,6 +764,27 @@ def to_ollama_messages(messages):
         else:
             out.append({**message, "content": message_text(message)})
     return out
+
+
+NOT_RUN_YET = "Not run: waiting for the user's OK."
+
+
+def know_the_page(name: str, context: dict):
+    if not policy.page_unknown(name, context) or PAGE_READER not in hub.routes:
+        return
+    policy.remember_tool_result(context, PAGE_READER, hub.call(PAGE_READER, {}))
+
+
+def private_upload(name: str, arguments: dict) -> str | None:
+    path = str(arguments.get("path") or "")
+    if name != "workspace__browser_upload" or not sharing.is_private(path):
+        return None
+    return f"Refused: {path} is private (keys, passwords or a browser profile), so it is never uploaded anywhere."
+
+
+def save_progress(task, state, requested):
+    state["groups"] = sorted(requested)
+    store.update_task(task["id"], history=state)
 
 
 def run_agent(config, state, background=False, chat_approved=None, task=None, client_system="", client_tools=None, skip_groups=(),
@@ -1325,7 +962,7 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 requested.update(wanted)
                 result = f"Unlocked: {', '.join(wanted) or 'nothing (unknown group)'}. Those tools are available from your next step."
             elif name in NATIVE_TOOLS:
-                result, waiting = run_native(name, arguments, config, background, task)
+                result, waiting = run_native_safely(name, arguments, config, background, task)
                 requested.update(TOOL_UNLOCKS.get(name, ()))
                 if waiting and waiting["kind"] == "chat_question" and not any(used.startswith(DESKTOP_TOOLS) for used in tool_log):
                     # Nothing on the desktop was tried, so no website can have blocked it: the model reached for this
@@ -1334,12 +971,15 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                     result, waiting = NOTHING_TO_SIGN_IN, None
                 if waiting and waiting["kind"] == "chat_question":
                     state["groups"] = sorted(requested)
-                    return {"status": "done", "answer": question_for_user(waiting["message"]), "tools_used": tool_log, "raw": raw}
+                    return {"status": "done", "answer": question_for_user(waiting["message"], config), "tools_used": tool_log, "raw": raw}
                 if waiting:
                     waiting["call"] = {"name": name, "arguments": arguments}
                     state["groups"] = sorted(requested)
                     return {"status": "waiting", "waiting": waiting, "tools_used": tool_log, "raw": raw}
+            elif refused := private_upload(name, arguments):
+                result = refused
             else:
+                know_the_page(name, context)
                 reason = policy.approval_reason(name, arguments, context, rules)
                 if reason and background:
                     state["groups"] = sorted(requested)
@@ -1348,6 +988,8 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 if reason and not policy.covers(chat_approved, reason):
                     # Ask in Arty's own words rather than handing the model an instruction it might echo.
                     state["groups"] = sorted(requested)
+                    for unanswered in calls[calls.index(call):]:
+                        add({"role": "tool", "content": NOT_RUN_YET, "tool_name": unanswered.get("function", {}).get("name") or ""})
                     return {"status": "done", "answer": policy.approval_question(reason),
                             "tools_used": tool_log, "raw": raw}
                 else:
@@ -1365,40 +1007,10 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 context["failed"].append((name, result.strip().splitlines()[0][:200] if result.strip() else "no result"))
                 result += FAILED_NOTE
             add({"role": "tool", "content": result, "tool_name": name})
+            if background and task:
+                save_progress(task, state, requested)
     state["groups"] = sorted(requested)
     return {"status": "done", "answer": "I stopped after too many tool steps. Tell me how you'd like me to continue.", "tools_used": tool_log, "raw": raw}
-
-
-# Notes an app attaches to a message for this turn only (the desktop app's <context> and <screen>):
-# useful to answer it, but not what the user said, so they're kept out of the archive and memory.
-APP_NOTES = re.compile(r"\s*<(context|screen)>.*?</\1>", re.DOTALL)
-
-
-def ensure_reminder(conversation: list[dict], tools_used: list[str], answer: str) -> str:
-    """"Remind me ..." must never end with a reminder that was promised but not set: if the model didn't
-    call schedule_task, set it here from the user's own words, or say plainly that it wasn't set."""
-    users = [m for m in conversation if m.get("role") == "user"]
-    request = APP_NOTES.sub("", message_text(users[-1])) if users else ""
-    if not REMIND_REQUEST.search(request) or "schedule_task" in tools_used:
-        return answer
-    parts = reminder_from(request)
-    if parts is None:
-        if PROMISE.search(answer) or CLAIMED.search(answer):
-            return "I didn't manage to set that reminder. Tell me what and when, e.g. 'remind me to drink water in 5 minutes'."
-        return answer  # e.g. Arty asked when
-    log.info("setting a reminder the model only described")
-    return set_reminder(parts, bool(CHAT_APP.search(request)))
-
-
-def set_reminder(parts: tuple[str, str], asked_for_a_chat_app: bool = False) -> str:
-    """Creates a reminder from (what, when) and says what happened. Reminders only go to Updates in Arty's apps,
-    so one asked for "on Telegram" says so rather than pretending."""
-    created, message = create_schedule({"reminder_text": parts[0], "when": parts[1]})
-    if created is None:
-        return f"I couldn't set that reminder: {message}"
-    elsewhere = " (Not Telegram or Discord: everything I send you goes to Updates in the apps now.)" if asked_for_a_chat_app else ""
-    return (f"Reminder set: \"{parts[0]}\" ({message.split('. ', 1)[0].split(' (', 1)[-1].rstrip(')')}). "
-            f"It'll come to Updates on your phone and the desktop app.{elsewhere}")
 
 
 # "What did we talk about earlier / today / yesterday?"
@@ -1564,13 +1176,40 @@ def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]],
     return answer or HONEST_NOTHING_DONE
 
 
+MAKING_TOOLS = {"schedule_task", "calendar_add", "list_add", "note_save", "deadline_add", "card_add"}
+TURN_SECONDS = 15 * 60
+TURN_SLACK_SECONDS = 5
+NOTHING_TO_UNDO = ("The last thing I did wasn't setting or adding something (a reminder, event, list item, note, deadline or "
+                   "card), so there's nothing for me to undo.")
+
+
+def undo_last_turn(config) -> str:
+    try:
+        last = next(archive_records(config), None)
+        finished = datetime.fromisoformat(last["time"]).timestamp() if last else None
+    except (KeyError, ValueError, OSError):
+        last, finished = None, None
+    if last is None or finished is None or not MAKING_TOOLS & set(last.get("tools") or []):
+        return NOTHING_TO_UNDO
+    return undo.undo_last(made_between=(finished - TURN_SECONDS, finished + TURN_SLACK_SECONDS))
+
+
+def phone_action(said: str) -> dict | None:
+    return None if quick.refers_back(said) else phone.from_request(said)
+
+
+def asks_for_something_else(said: str) -> bool:
+    return bool(ASKED_TO_DO.search(said) or REMIND_REQUEST.search(said) or phone.from_request(said) or undo.is_request(said)
+                or quick.calendar_add(said) or quick.list_add(said) or TALKED_ABOUT.search(said))
+
+
 def quick_action(said: str) -> tuple[str, str] | None:
     """(reply, what was done) for an everyday request done directly by code (reminders, calendar, lists), or None.
     A small model mangles these tool calls and then says they worked; code does them reliably."""
     if REMIND_REQUEST.search(said) and (parts := reminder_from(said)):
         return set_reminder(parts, bool(CHAT_APP.search(said))), "schedule_task"
     if undo.is_request(said):
-        return undo.undo_last(), "undo"
+        return undo_last_turn(load_config()), "undo"
     if abilities.is_question(said):
         hub.refresh()
         return abilities.describe(load_config().get("tool_groups", {}), set(hub.routes) | set(NATIVE_TOOLS)), "abilities"
@@ -1636,7 +1275,7 @@ def solo_conversation(messages):
 
 def solo_turn(model_name, messages):
     said = message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {}))
-    if declined := safety.check(APP_NOTES.sub("", said)):
+    if declined := safety.check(APP_NOTES.sub("", said), load_config().get("crisis_help")):
         kind, reply = declined
         return reply, [f"safety_{kind}"], {}, None
     body = {"model": model_name, "messages": solo_conversation(messages), "stream": False,
@@ -1645,7 +1284,69 @@ def solo_turn(model_name, messages):
     return ((reply.get("message") or {}).get("content") or "").strip(), [], reply, None
 
 
-def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client=""):
+OLLAMA_DOWN = "the AI server's model runner isn't answering; try again in a minute"
+OTHER_MODEL_KEEP_ALIVE = "3m"
+MAIN_RELOAD_DELAY_SECONDS = 200
+
+
+def found_model(name: str) -> dict | None:
+    try:
+        return models.find(name)
+    except (urllib.error.URLError, TimeoutError) as error:
+        log.warning("could not list Ollama models: %s", error)
+        raise ApiError(503, OLLAMA_DOWN) from error
+
+
+def chosen_model(main: str, requested: str, any_installed: bool) -> str:
+    if not requested.startswith(models.DROPDOWN_PREFIX):
+        return main
+    name = requested[len(models.DROPDOWN_PREFIX):]
+    chosen = found_model(name)
+    if models.usable(chosen):
+        return chosen["name"]
+    if not any_installed:
+        return main
+    if chosen is None:
+        raise ApiError(400, f"{name} isn't downloaded on the AI server; pick one from /v1/models?all=1")
+    if chosen["embedding"]:
+        raise ApiError(400, f"{name} is an embedding model and can't chat")
+    if models.kept_solo(chosen):
+        raise ApiError(400, f"{name} is kept for plain chats (solo_models in brain.json), so it can't use Arty's tools")
+    return chosen["name"]
+
+
+class MainModelReturn:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.timer = None
+
+    def schedule(self, main_config: dict):
+        with self.lock:
+            if self.timer is not None:
+                self.timer.cancel()
+            self.timer = threading.Timer(MAIN_RELOAD_DELAY_SECONDS, reload_main_model, args=(main_config,))
+            self.timer.daemon = True
+            self.timer.start()
+
+
+main_model_return = MainModelReturn()
+
+
+def schedule_main_reload(main_config: dict):
+    main_model_return.schedule(main_config)
+
+
+def use_requested_model(config: dict, requested: str, any_installed: bool) -> bool:
+    main_config = dict(config)
+    config["model"] = chosen_model(config["model"], requested, any_installed)
+    if config["model"] == main_config["model"]:
+        return False
+    config["keep_alive"] = OTHER_MODEL_KEEP_ALIVE
+    schedule_main_reload(main_config)
+    return True
+
+
+def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False):
     """One chat turn. Returns (answer, tools_used, raw, client_calls); client_calls is set when the
     model wants the calling app to run one of its own tools, and answer is then whatever text came with it.
     on_text gets the answer's first sentences early (see drafts.py); the answer always starts with them.
@@ -1653,31 +1354,29 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     if solo := models.solo_choice(requested_model):
         return solo_turn(solo["name"], messages)
     config = load_config()
-    if requested_model.startswith(models.DROPDOWN_PREFIX):
-        chosen = models.find(requested_model[len(models.DROPDOWN_PREFIX):])
-        if models.usable(chosen):
-            config["model"] = chosen["name"]
+    use_requested_model(config, requested_model, any_installed)
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
     if last_user is not None:
         said = APP_NOTES.sub("", message_text(last_user)).strip()
         desktop_look.user_active()
-        if declined := safety.check(said):
+        if declined := safety.check(said, config.get("crisis_help")):
             kind, reply = declined
             log.info("declined a %s request", kind)
             archive_turn(config, said, reply, [f"safety_{kind}"])
             return reply, [f"safety_{kind}"], {}, None
-        if quizzing := personal.quiz_turn(said, lambda q, e, g: judge_answer(config, q, e, g)):
+        if quizzing := personal.quiz_turn(said, lambda q, e, g: judge_answer(config, q, e, g), client,
+                                          asks_for_something_else(said)):
             archive_turn(config, said, quizzing, ["quiz"])
             return quizzing, ["quiz"], {}, None
         if TALKED_ABOUT.search(said):
             reply = tidy_answer(recap_conversations(config, said))
             archive_turn(config, said, reply, ["recall_conversations"])
             return reply, ["recall_conversations"], {}, None
-        if action := phone.from_request(said):
+        if action := phone_action(said):
             reply = phone.reply(action, client)
             archive_turn(config, said, phone.without_action(reply), [f"phone_{action['kind']}"])
             return reply, [f"phone_{action['kind']}"], {}, None
-        if done := quick_action(said):
+        if not quick.refers_back(said) and (done := quick_action(said)):
             reply, tool = done
             archive_turn(config, said, reply, [tool])
             return reply, [tool], {}, None
@@ -1704,7 +1403,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
         if desktop_look.is_request(said):
             # The model wrote how-to guides for this instead of doing it: code does it, the model only chooses.
             hub.refresh()
-            reply = desktop_look.customise(hub.call, complete_text)
+            reply = desktop_look.customise(hub.call, complete_text, desktop_look.persona_of(config.get("desktop_look")))
             archive_turn(config, said, reply, ["workspace__run_command"])
             return reply, ["workspace__run_command"], {}, None
         if style.is_learn_request(said):
@@ -1846,11 +1545,24 @@ def apply_decision(state: dict, waiting: dict, decision: str, note: str):
     state["messages"].append({"role": "tool", "content": result, "tool_name": call.get("name", "ask_user")})
 
 
+INTERRUPTED_DECISION = ("Arty restarted while carrying out what the user approved, so it may or may not have happened. "
+                        "Check whether it took effect before doing anything else, and never do it a second time unasked.")
+
+
+def carries_out_an_approval(waiting: dict) -> bool:
+    return waiting.get("kind") == "approval" and waiting.get("decision") == "approve"
+
+
 def process_task(task: dict):
     config = load_config()
     state = task["history"] or {"messages": [{"role": "user", "content": f"Background task #{task['id']}: {task['title']}\n\n{task['instructions']}"}]}
     waiting = task["waiting"] or {}
-    if waiting.get("decision"):
+    if waiting.get("decision") and waiting.get("applying"):
+        state["messages"].append({"role": "tool", "content": INTERRUPTED_DECISION,
+                                  "tool_name": (waiting.get("call") or {}).get("name", "ask_user")})
+    elif waiting.get("decision"):
+        if carries_out_an_approval(waiting):
+            store.update_task(task["id"], waiting={**waiting, "applying": True})
         hub.refresh()
         apply_decision(state, waiting, waiting["decision"], waiting.get("note", ""))
     store.update_task(task["id"], history=state, waiting=None)
@@ -1869,7 +1581,7 @@ def process_task(task: dict):
             notify.send(f"Arty wants approval (task #{task['id']})", f"{task['title']}\n\nArty wants to: {pending['message']}", buttons, urgent=True)
         else:
             buttons = task_links(refreshed, [("Done", "done"), ("Cancel task", "cancel")])
-            notify.send(f"Arty needs you (task #{task['id']})", f"{task['title']}\n\n{pending['message']}\n\nOn my desktop (Proxmox > VM 105 > Console), "
+            notify.send(f"Arty needs you (task #{task['id']})", f"{task['title']}\n\n{pending['message']}\n\n{on_my_desktop(config)}, "
                         "double-click \"Sign in to websites\", sign in, close that window, then tap Done.", buttons, urgent=True)
         log.info("task %s waiting for the user: %s", task["id"], pending["message"])
         return
@@ -1882,66 +1594,117 @@ def process_task(task: dict):
     log.info("task %s done", task["id"])
 
 
+def fail_task(task: dict, error: Exception):
+    try:
+        store.update_task(task["id"], status="failed", result=f"failed: {error}")
+        notify.send(f"Arty: task #{task['id']} failed", f"{task['title']}\n\n{error}")
+    except Exception:
+        log.exception("couldn't record that task %s failed", task["id"])
+
+
+def worker_step() -> bool:
+    try:
+        task = store.claim_next_task()
+    except Exception:
+        log.exception("couldn't take the next task")
+        return False
+    if task is None:
+        return False
+    log.info("task %s started: %s", task["id"], task["title"])
+    try:
+        process_task(task)
+    except Exception as error:
+        log.exception("task %s failed", task["id"])
+        fail_task(task, error)
+    return True
+
+
 def worker_loop():
     while True:
-        task = store.claim_next_task()
-        if task is None:
+        if not worker_step():
             time.sleep(WORKER_IDLE_SECONDS)
-            continue
-        log.info("task %s started: %s", task["id"], task["title"])
+
+
+def run_schedule(schedule: dict, now: datetime):
+    # Move it on before acting, so a failure below can't make it fire again every tick.
+    if schedule["cron"]:
+        due = datetime.fromtimestamp(schedule["next_run"]) if schedule.get("next_run") else now
         try:
-            process_task(task)
-        except Exception as error:
-            log.exception("task %s failed", task["id"])
-            store.update_task(task["id"], status="failed", result=f"failed: {error}")
-            notify.send(f"Arty: task #{task['id']} failed", f"{task['title']}\n\n{error}")
+            following = timing.following_run(schedule["cron"], due, now).timestamp()
+        except ValueError as error:
+            log.warning("schedule %s can't run again (%s); switched off", schedule["id"], error)
+            store.update_schedule(schedule["id"], enabled=0, next_run=None, last_run=now.timestamp())
+            following = None
+        if following is not None:
+            store.update_schedule(schedule["id"], next_run=following, last_run=now.timestamp())
+    else:
+        store.update_schedule(schedule["id"], enabled=0, next_run=None, last_run=now.timestamp())
+    if schedule.get("message"):
+        # A plain reminder: send the exact text, no model needed (and nothing to get wrong).
+        send_reminder(schedule, now)
+        return
+    if kind := briefing.kind_of(schedule["instructions"]):
+        # Built by code from the real data (the model made up placeholder events); in the background.
+        threading.Thread(target=send_briefing, args=(schedule["title"], kind), name="briefing", daemon=True).start()
+        return
+    created = store.create_task(schedule["title"], schedule["instructions"], "schedule", schedule["id"])
+    store.update_schedule(schedule["id"], last_task_id=created["id"])
+    log.info("schedule %s queued task %s", schedule["id"], created["id"])
+
+
+def start_style_refresh():
+    if style.due() and time.time() - _style_attempt["time"] > STYLE_RETRY_SECONDS:
+        # Weekly: relearn how the user writes, from what they've written since (in the background).
+        _style_attempt["time"] = time.time()
+        threading.Thread(target=style.refresh, args=(gather_writing, complete_text), name="style", daemon=True).start()
+
+
+def start_email_watch():
+    if email_watch.due(load_config().get("email_watch", {})):
+        # In the background: reading Gmail and sorting it can take a minute, and reminders mustn't wait.
+        threading.Thread(target=email_watch.check_new, name="email-watch", daemon=True,
+                         args=(hub.call, complete_text, lambda title, message: notify.send(title, message))).start()
+
+
+def start_desktop_look():
+    settings = load_config().get("desktop_look", {})
+    if desktop_look.due(settings):
+        threading.Thread(target=desktop_look.tinker, args=(hub.call, complete_text, desktop_look.persona_of(settings)),
+                         name="desktop-look", daemon=True).start()
+
+
+_expiry_running = threading.Lock()
+
+
+def check_expiry():
+    if not _expiry_running.acquire(blocking=False):
+        return
+    try:
+        for message in expiry.due_warnings(load_config().get("expiry_watch", {})):
+            notify.send("⌛ Expiring soon", message)
+    except Exception:
+        log.exception("expiry watch failed")
+    finally:
+        _expiry_running.release()
+
+
+def start_expiry_check():
+    threading.Thread(target=check_expiry, name="expiry", daemon=True).start()
+
+
+def scheduler_tick(now: datetime):
+    for schedule in due_schedules_now(now):
+        guarded(f"schedule {schedule['id']}", lambda schedule=schedule: run_schedule(schedule, now))
+    guarded("calendar or deadline reminders", send_calendar_and_deadline_reminders)
+    guarded("style refresh", start_style_refresh)
+    guarded("email watch", start_email_watch)
+    guarded("desktop look", start_desktop_look)
+    guarded("expiry watch", start_expiry_check)
 
 
 def scheduler_loop():
     while True:
-        now = datetime.now()
-        try:
-            for schedule in store.due_schedules(now.timestamp()):
-                # Move it on before acting, so a failure below can't make it fire again every tick.
-                if schedule["cron"]:
-                    store.update_schedule(schedule["id"], next_run=timing.next_run(schedule["cron"], now).timestamp(), last_run=now.timestamp())
-                else:
-                    store.update_schedule(schedule["id"], enabled=0, next_run=None, last_run=now.timestamp())
-                if schedule.get("message"):
-                    # A plain reminder: send the exact text, no model needed (and nothing to get wrong).
-                    notify.send("⏰ Reminder", reminder_wording(schedule["message"]))
-                    continue
-                if kind := briefing.kind_of(schedule["instructions"]):
-                    # Built by code from the real data (the model made up placeholder events); in the background.
-                    threading.Thread(target=send_briefing, args=(schedule["title"], kind), name="briefing", daemon=True).start()
-                    continue
-                created = store.create_task(schedule["title"], schedule["instructions"], "schedule", schedule["id"])
-                store.update_schedule(schedule["id"], last_task_id=created["id"])
-                log.info("schedule %s queued task %s", schedule["id"], created["id"])
-        except Exception:
-            log.exception("scheduler tick failed")
-        try:
-            for event in calendar_feed.due_reminders():
-                notify.send("📅 Coming up", calendar_feed.reminder_text(event))
-            for message in personal.due_deadline_reminders():
-                notify.send("⏰ Deadline", message)
-        except Exception:
-            log.exception("calendar or deadline reminders failed")
-        if style.due() and time.time() - _style_attempt["time"] > STYLE_RETRY_SECONDS:
-            # Weekly: relearn how the user writes, from what they've written since (in the background).
-            _style_attempt["time"] = time.time()
-            threading.Thread(target=style.refresh, args=(gather_writing, complete_text), name="style", daemon=True).start()
-        if email_watch.due(load_config().get("email_watch", {})):
-            # In the background: reading Gmail and sorting it can take a minute, and reminders mustn't wait.
-            threading.Thread(target=email_watch.check_new, name="email-watch", daemon=True,
-                             args=(hub.call, complete_text, lambda title, message: notify.send(title, message))).start()
-        if desktop_look.due(load_config().get("desktop_look", {})):
-            threading.Thread(target=desktop_look.tinker, args=(hub.call, complete_text), name="desktop-look", daemon=True).start()
-        try:
-            for message in expiry.due_warnings(load_config().get("expiry_watch", {})):
-                notify.send("⌛ Expiring soon", message)
-        except Exception:
-            log.exception("expiry watch failed")
+        guarded("scheduler tick", lambda: scheduler_tick(datetime.now()))
         time.sleep(SCHEDULER_TICK_SECONDS)
 
 
@@ -1972,39 +1735,8 @@ def public_task(task: dict, with_history: bool = False) -> dict:
 
 # ---------- HTTP API ----------
 
-class ApiError(Exception):
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
-
-
-api_context: dict = {}
 
 # ---------- announcements: everything Arty tells the user, as a feed for its own apps ----------
-
-announced = threading.Condition()
-ANNOUNCEMENT_WAIT_SECONDS = 55  # under Cloudflare's 100 s request limit
-
-
-def record_announcement(title, message, actions, urgent):
-    """notify.send listener: keeps a copy of each notification for the desktop and phone apps."""
-    task_ids = {int(a["callback"].split(":")[1]) for a in actions if str(a.get("callback", "")).startswith("t:")}
-    kind = "approval" if task_ids else "reminder" if title.startswith(("⏰", "📅")) else "alert" if urgent else "message"
-    store.add_announcement(kind, title, message, next(iter(task_ids), None),
-                           [a["callback"].split(":")[2] for a in actions if str(a.get("callback", "")).startswith("t:")])
-    with announced:
-        announced.notify_all()
-
-
-def wait_for_announcements(after: int, wait: float) -> list[dict]:
-    deadline = time.time() + min(max(wait, 0), ANNOUNCEMENT_WAIT_SECONDS)
-    with announced:
-        while True:
-            found = store.list_announcements(after)
-            remaining = deadline - time.time()
-            if found or remaining <= 0:
-                return found
-            announced.wait(remaining)
 
 
 def send_briefing(title: str, kind: str):
@@ -2020,18 +1752,43 @@ def send_briefing(title: str, kind: str):
 
 HEAL_COOLDOWN_SECONDS = 30 * 60
 _healing: dict[str, float] = {}
+_healing_lock = threading.Lock()
+
+
+def claim_healing(name: str) -> bool:
+    with _healing_lock:
+        if time.time() - _healing.get(name, 0) < HEAL_COOLDOWN_SECONDS:
+            return False
+        _healing[name] = time.time()
+        return True
+
+
+def monitor_port(monitor: dict, url) -> int:
+    try:
+        return int(monitor.get("port") or url.port or (443 if url.scheme == "https" else 80 if url.scheme == "http" else 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def usable_fix(diagnosis: dict) -> dict | None:
+    fix = diagnosis.get("fix")
+    if not isinstance(fix, dict) or fix.get("action") not in ("start", "restart") or fix.get("vmid") in (None, ""):
+        return None
+    return {**fix, "name": str(fix.get("name") or f"guest {fix['vmid']}")}
 
 
 def self_heal(monitor: dict):
     """A service went down: diagnose it, and if starting or restarting its guest would fix it, offer that
     with Fix / Ignore buttons (a background task waiting for approval, like any other)."""
-    name = monitor.get("name") or "A service"
-    if time.time() - _healing.get(name, 0) < HEAL_COOLDOWN_SECONDS:
+    name = str(monitor.get("name") or "A service")
+    if not claim_healing(name):
         return
-    _healing[name] = time.time()
-    url = urllib.parse.urlparse(monitor.get("url") or "")
-    address = monitor.get("hostname") or url.hostname or ""
-    port = int(monitor.get("port") or url.port or (443 if url.scheme == "https" else 80 if url.scheme == "http" else 0))
+    try:
+        url = urllib.parse.urlparse(str(monitor.get("url") or ""))
+        address = str(monitor.get("hostname") or url.hostname or "")
+    except ValueError:
+        url, address = urllib.parse.urlparse(""), str(monitor.get("hostname") or "")
+    port = monitor_port(monitor, url)
     if not address:
         return
     hub.refresh()
@@ -2040,9 +1797,13 @@ def self_heal(monitor: dict):
     except (ValueError, TypeError):
         log.warning("self-heal: diagnosis of %s failed", name)
         return
-    fix = diagnosis.get("fix")
+    if not isinstance(diagnosis, dict):
+        log.warning("self-heal: diagnosis of %s wasn't an object", name)
+        return
+    diagnosis["summary"] = str(diagnosis.get("summary") or f"{name} isn't answering.")
+    fix = usable_fix(diagnosis)
     if not fix:
-        notify.send(f"🔎 {name} is down", diagnosis.get("summary", ""))
+        notify.send(f"🔎 {name} is down", diagnosis["summary"])
         return
     tool = "homelab__start_guest" if fix["action"] == "start" else "homelab__restart_guest"
     task = store.create_task(f"Fix: {name} is down", f"{name} went down. {diagnosis['summary']}", "self-heal")
@@ -2061,8 +1822,8 @@ def self_heal(monitor: dict):
 def record_alert(body: dict) -> str:
     """Uptime Kuma webhook: a service went down or came back. It only goes into the feed (the desktop
     app says it out loud, the phone shows it), like every notification."""
-    monitor = (body.get("monitor") or {}).get("name") or "A service"
-    heartbeat = body.get("heartbeat") or {}
+    monitor = (body.get("monitor") if isinstance(body.get("monitor"), dict) else {}).get("name") or "A service"
+    heartbeat = body.get("heartbeat") if isinstance(body.get("heartbeat"), dict) else {}
     if heartbeat.get("status") == 0:
         title, kind = f"{monitor} is down", "alert"
     elif heartbeat.get("status") == 1:
@@ -2073,7 +1834,8 @@ def record_alert(body: dict) -> str:
     with announced:
         announced.notify_all()
     if heartbeat.get("status") == 0:
-        threading.Thread(target=self_heal, args=(body.get("monitor") or {},), name="self-heal", daemon=True).start()
+        details = body.get("monitor") if isinstance(body.get("monitor"), dict) else {}
+        threading.Thread(target=self_heal, args=(details,), name="self-heal", daemon=True).start()
     return title
 
 
@@ -2084,16 +1846,31 @@ class ChatJobs:
     While it runs, "partial" holds the answer's first sentences (the final answer starts with them)."""
     KEEP_SECONDS = 3600
 
+    class Busy(Exception):
+        pass
+
     def __init__(self):
         self.jobs: dict[str, dict] = {}
+        self.pruned: dict[str, None] = {}
         self.lock = threading.Lock()
+
+    def prune(self, now: float):
+        for old in [k for k, j in self.jobs.items() if now - j["created"] > self.KEEP_SECONDS]:
+            del self.jobs[old]
+            self.pruned[old] = None
+        while len(self.pruned) > PRUNED_JOBS_KEPT:
+            del self.pruned[next(iter(self.pruned))]
+
+    def running(self) -> int:
+        return sum(1 for job in self.jobs.values() if job["status"] == "running")
 
     def start(self, messages, model, client="") -> str:
         job_id = uuid.uuid4().hex
         with self.lock:
             now = time.time()
-            for old in [k for k, j in self.jobs.items() if now - j["created"] > self.KEEP_SECONDS]:
-                del self.jobs[old]
+            self.prune(now)
+            if self.running() >= MAX_RUNNING_CHAT_JOBS:
+                raise ChatJobs.Busy()
             self.jobs[job_id] = {"status": "running", "created": now}
         threading.Thread(target=self._run, args=(job_id, messages, model, client), daemon=True).start()
         return job_id
@@ -2103,9 +1880,9 @@ class ChatJobs:
             answer, tools_used, _, _ = run_turn(messages, model, on_text=lambda text: self._add_partial(job_id, text),
                                                 client=client)
             outcome = {"status": "done", "answer": answer, "tools_used": tools_used}
-        except Exception as error:
+        except Exception:
             log.exception("chat job %s failed", job_id)
-            outcome = {"status": "failed", "error": str(error)}
+            outcome = {"status": "failed", "error": GENERIC_ERROR}
         with self.lock:
             if job_id in self.jobs:
                 self.jobs[job_id].update(outcome)
@@ -2120,13 +1897,45 @@ class ChatJobs:
             job = self.jobs.get(job_id)
             return dict(job) if job else None
 
+    def expired(self, job_id) -> bool:
+        with self.lock:
+            self.prune(time.time())
+            return job_id in self.pruned
+
 
 chat_jobs = ChatJobs()
+device_requests = devices.Requests()
+direct_chat_slots = threading.BoundedSemaphore(MAX_DIRECT_CHATS)
+
+
+def logged_request_line(line: str) -> str:
+    return DOWNLOAD_TOKEN.sub(r"\1...", SECRET_QUERY_VALUE.sub(r"\1...", line))
+
+
+def issue_device_key(request: devices.Request) -> str:
+    key = devices.new_device_key()
+    store.add_device(request.name, request.address, devices.key_hash(key))
+    return key
+
+
+def is_device_key(supplied: str) -> bool:
+    token = supplied.removeprefix("Bearer ")
+    if not token.startswith(devices.DEVICE_KEY_PREFIX):
+        return False
+    return store.active_device(devices.key_hash(token)) is not None
+
+
+def device_started(request: devices.Request) -> dict:
+    return {"device_code": request.device_code, "user_code": request.user_code,
+            "verify_path": f"/{web_app.PREFIX}/?authorise={request.user_code}",
+            "interval": devices.POLL_SECONDS, "expires_in": device_requests.seconds_left(request)}
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = REQUEST_IDLE_SECONDS
+
     def log_message(self, fmt, *args):
-        log.info("%s %s", self.address_string(), fmt % args)
+        log.info("%s %s", self.address_string(), logged_request_line(fmt % args))
 
     def send_json(self, status, body):
         data = json.dumps(body, ensure_ascii=False).encode()
@@ -2150,7 +1959,7 @@ class Handler(BaseHTTPRequestHandler):
     def authorised(self):
         supplied = self.headers.get("Authorization", "")
         keys = [key for key in (BRAIN_KEY, APP_KEY) if key]
-        if any(secrets.compare_digest(supplied, f"Bearer {key}") for key in keys):
+        if any(same_secret(supplied, f"Bearer {key}") for key in keys) or is_device_key(supplied):
             return True
         self.send_json(401, {"error": {"message": "invalid API key"}})
         return False
@@ -2184,12 +1993,19 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- hooks: tapped from phone notifications, authenticated by the task's own token --
     def hook(self, method):
+        try:
+            return self.task_link(method)
+        except sqlite3.Error:
+            log.exception("task link failed")
+            return self.send_html(503, "Please try again", f"<p>{escape(TASK_LINK_TROUBLE)}</p>")
+
+    def task_link(self, method):
         segments, query = self.route()
         if len(segments) != 4 or segments[1] != "tasks" or segments[3] not in TASK_ACTIONS or not segments[2].isdigit():
             return self.send_html(404, "Not found", "")
         task = store.get_task(int(segments[2]))
         token = (query.get("token") or [""])[0]
-        if task is None or not secrets.compare_digest(token, task["token"]):
+        if task is None or not same_secret(token, task["token"]):
             return self.send_html(403, "Link not valid", "<p>This link is for a different or deleted task.</p>")
         action = segments[3]
         if method == "GET":
@@ -2206,6 +2022,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.hook("GET")
         if segments == ["health"]:
             return self.send_json(200, {"ok": True})
+        if segments == ["v1", "identity"]:
+            nonce = (query.get("nonce") or [""])[0]
+            if not IDENTITY_NONCE.fullmatch(nonce):
+                return self.send_json(400, {"error": {"message": "nonce must be 16 to 128 hex characters"}})
+            try:
+                keys = [BRAIN_KEY, APP_KEY, *store.active_device_hashes()]
+            except sqlite3.Error:
+                log.exception("could not read the approved devices")
+                return self.send_json(503, {"error": {"message": "try again in a minute"}})
+            return self.send_json(200, {"proofs": identity_proofs(nonce, keys)})
         if segments[:1] == [media.DOWNLOAD_PREFIX]:
             return self.download(segments)
         if segments[:1] == [web_app.PREFIX]:
@@ -2220,11 +2046,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": {"message": f"bad request: {error}"}})
         except (BrokenPipeError, ConnectionResetError):
             log.info("%s hung up before the answer (%s)", self.address_string(), self.path.split("?")[0])
-        except Exception as error:
+        except Exception:
             log.exception("request failed")
-            self.send_json(500, {"error": {"message": f"brain error: {error}"}})
+            self.send_json(500, {"error": {"message": GENERIC_ERROR}})
 
     def dispatch_get(self, segments, query):
+        if segments == ["v1", "devices"]:
+            return self.send_json(200, {"devices": store.list_devices()})
+        if segments == ["v1", "device", "pending"]:
+            waiting = device_requests.pending((query.get("code") or [""])[0])
+            if waiting is None:
+                raise ApiError(404, "that code has run out or was never made")
+            return self.send_json(200, {"name": waiting.name, "address": waiting.address, "user_code": waiting.user_code,
+                                        "expires_in": device_requests.seconds_left(waiting)})
+        if segments in (["v1", "models"], ["models"]) and (query.get("all") or [""])[0] == "1":
+            try:
+                downloaded = models.downloaded_chat_models()
+            except (urllib.error.URLError, TimeoutError) as error:
+                log.warning("could not list Ollama models: %s", error)
+                raise ApiError(503, OLLAMA_DOWN) from error
+            return self.send_json(200, {"object": "list", "data": [
+                {"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "object": "model", "owned_by": "home", "model": m["name"],
+                 "description": models.summary(m)} for m in downloaded]})
         if segments in (["v1", "models"], ["models"]):
             listed = [{"id": MODEL_ID, "object": "model", "owned_by": "home"}]
             try:
@@ -2248,12 +2091,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"tools": listed})
         if len(segments) == 4 and segments[:3] == ["v1", "chat", "jobs"]:
             job = chat_jobs.get(segments[3])
+            if job is None and chat_jobs.expired(segments[3]):
+                return self.send_json(410, {"error": "expired"})
             if job is None:
-                raise ApiError(404, "no such chat job (it may have expired, or the brain restarted)")
+                raise ApiError(404, "no such chat job (the brain restarted)")
             return self.send_json(200, {"id": segments[3], **job})
         if segments == ["v1", "tasks"]:
             status = (query.get("status") or [""])[0]
-            limit = min(int((query.get("limit") or ["30"])[0]), 200)
+            limit = list_limit(query, 30)
             return self.send_json(200, {"tasks": [public_task(t) for t in store.list_tasks(status, limit)]})
         if len(segments) == 3 and segments[:2] == ["v1", "tasks"] and segments[2].isdigit():
             task = store.get_task(int(segments[2]))
@@ -2285,7 +2130,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"announcements": found, "last": found[-1]["id"] if found else max(after, store.latest_announcement_id())})
         if segments == ["v1", "conversations"]:
             q = (query.get("q") or [""])[0]
-            limit = min(int((query.get("limit") or ["10"])[0]), 100)
+            limit = min(list_limit(query, 10), 100)
             config = load_config()
             records = recall_records(config, q, limit) if q else [r for _, r in zip(range(limit), archive_records(config))]
             return self.send_json(200, {"conversations": records})
@@ -2295,7 +2140,7 @@ class Handler(BaseHTTPRequestHandler):
         segments, query = self.route()
         if segments == ["hooks", "alert"]:
             token = (query.get("token") or [""])[0]
-            if not ALERT_TOKEN or not secrets.compare_digest(token, ALERT_TOKEN):
+            if not ALERT_TOKEN or not same_secret(token, ALERT_TOKEN):
                 return self.send_json(403, {"error": {"message": "bad alert token"}})
             try:
                 return self.send_json(200, {"recorded": record_alert(self.body())})
@@ -2304,7 +2149,7 @@ class Handler(BaseHTTPRequestHandler):
         if segments == ["hooks", "notify"]:
             # The homelab's own watchers (e.g. homelab-security on the host) alerting the user through Arty.
             token = (query.get("token") or [""])[0]
-            if not ALERT_TOKEN or not secrets.compare_digest(token, ALERT_TOKEN):
+            if not ALERT_TOKEN or not same_secret(token, ALERT_TOKEN):
                 return self.send_json(403, {"error": {"message": "bad alert token"}})
             try:
                 body = self.body()
@@ -2315,6 +2160,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(error.status, {"error": {"message": str(error)}})
         if segments[:1] == ["hooks"]:
             return self.hook("POST")
+        if segments[:2] == ["v1", "device"] and segments[2:] in (["start"], ["token"]):
+            return self.unkeyed_device(segments[2])
         if not self.authorised():
             return
         try:
@@ -2326,14 +2173,26 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             # The answer was still archived; the app just wasn't there to receive it.
             log.warning("%s hung up before the answer (%s)", self.address_string(), self.path.split("?")[0])
-        except Exception as error:
+        except Exception:
             log.exception("request failed")
-            self.send_json(500, {"error": {"message": f"brain error: {error}"}})
+            self.send_json(500, {"error": {"message": GENERIC_ERROR}})
 
     def do_DELETE(self):
         segments, _ = self.route()
         if not self.authorised():
             return
+        try:
+            self.dispatch_delete(segments)
+        except (BrokenPipeError, ConnectionResetError):
+            log.info("%s hung up before the answer (%s)", self.address_string(), self.path.split("?")[0])
+        except Exception:
+            log.exception("request failed")
+            self.send_json(500, {"error": {"message": GENERIC_ERROR}})
+
+    def dispatch_delete(self, segments):
+        if len(segments) == 3 and segments[:2] == ["v1", "devices"] and segments[2].isdigit():
+            found = store.revoke_device(int(segments[2]))
+            return self.send_json(200 if found else 404, {"ok": found})
         if len(segments) == 3 and segments[:2] == ["v1", "schedules"] and segments[2].isdigit():
             found = store.update_schedule(int(segments[2]), enabled=0, next_run=None)
             return self.send_json(200 if found else 404, {"ok": found})
@@ -2342,9 +2201,33 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200 if found else 404, {"ok": found})
         self.send_json(404, {"error": {"message": "not found"}})
 
+    def caller_address(self) -> str:
+        peer = self.client_address[0]
+        forwarded = (self.headers.get("Cf-Connecting-Ip") or "").strip()
+        return forwarded if forwarded and peer in TRUSTED_PROXIES else peer
+
+    def unkeyed_device(self, step: str):
+        try:
+            body = self.body()
+            if step == "start":
+                started = device_requests.start(text_field(body, "name"), self.caller_address())
+                return self.send_json(200, device_started(started))
+            status, answer = device_requests.collect(text_field(body, "device_code"), issue_device_key)
+            return self.send_json(status, answer)
+        except ApiError as error:
+            return self.send_json(error.status, {"error": {"message": str(error)}})
+        except devices.DeviceError as error:
+            return self.send_json(error.status, {"error": {"message": str(error)}})
+
     def dispatch_post(self, segments, request):
+        if segments == ["v1", "device", "approve"]:
+            if not isinstance(request.get("approve"), bool):
+                raise ApiError(400, "approve must be true or false")
+            if not device_requests.answer(text_field(request, "user_code"), request["approve"]):
+                raise ApiError(404, "that code has run out or was already answered")
+            return self.send_json(200, {"ok": True})
         if segments in (["v1", "chat", "completions"], ["chat", "completions"]):
-            return self.chat(request)
+            return self.limited_chat(request)
         if segments == ["v1", "tasks"]:
             instructions = str(request.get("instructions", "")).strip()
             if not instructions:
@@ -2360,12 +2243,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, message)
             return self.send_json(201, {**created, "message": message})
         if segments == ["v1", "chat", "jobs"]:
-            messages = request.get("messages")
-            if not isinstance(messages, list) or not messages:
-                raise ApiError(400, "messages are required")
-            # "client": "phone" from the Arty phone app, which can open calls and texts (phone.py).
-            return self.send_json(202, {"id": chat_jobs.start(messages, str(request.get("model") or ""), str(request.get("client") or "")),
-                                        "status": "running"})
+            messages = valid_messages(request.get("messages"))
+            try:
+                # "client": "phone" from the Arty phone app, which can open calls and texts (phone.py).
+                job_id = chat_jobs.start(messages, str(request.get("model") or ""), client_name(request))
+            except ChatJobs.Busy:
+                raise ApiError(503, "Arty is busy with other answers; try again in a moment") from None
+            return self.send_json(202, {"id": job_id, "status": "running"})
         if segments == ["v1", "lectures"]:
             try:
                 return self.send_json(202, lectures.add(request.get("file_id"), request.get("title")))
@@ -2388,34 +2272,46 @@ class Handler(BaseHTTPRequestHandler):
         if name in NATIVE_TOOLS:
             if name not in API_CALLABLE_NATIVE:
                 raise ApiError(400, f"{name} only works inside a conversation")
-            result, _ = run_native(name, arguments, load_config(), False, None)
+            try:
+                result, _ = run_native(name, arguments, load_config(), False, None)
+            except NATIVE_TOOL_ERRORS as error:
+                raise ApiError(400, f"{name} couldn't use those arguments ({type(error).__name__})") from None
             return self.send_json(200, {"result": result})
         hub.refresh()
         if name not in hub.routes:
             raise ApiError(404, f"unknown tool {name}")
-        reason = policy.approval_reason(name, arguments, api_context, load_config().get("approval", {}))
+        if refused := private_upload(name, arguments):
+            raise ApiError(403, refused)
+        context: dict = {}
+        know_the_page(name, context)
+        reason = policy.approval_reason(name, arguments, context, load_config().get("approval", {}))
         if reason and not request.get("approved"):
             return self.send_json(409, {"error": {"message": f"needs approval: {reason}", "type": "needs_approval", "reason": reason}})
-        result = hub.call(name, arguments)
-        policy.remember_tool_result(api_context, name, result)
-        return self.send_json(200, {"result": result})
+        return self.send_json(200, {"result": hub.call(name, arguments)})
 
     def download(self, segments):
         """Serves a stored file to anyone with its link (the token in the path), like the task hooks."""
         meta = media.for_download(segments[1], segments[2]) if len(segments) >= 3 else None
-        if meta is None:
+        try:
+            handle = open(meta["path"], "rb") if meta else None
+        except OSError:
+            handle = None
+        if handle is None:
             return self.send_html(404, "Link expired", "<p>Files are kept for 24 hours. Ask Arty to make it again.</p>")
-        size = os.path.getsize(meta["path"])
+        with handle:
+            self.send_file(handle, meta)
+
+    def send_file(self, handle, meta):
+        size = os.fstat(handle.fileno()).st_size
         self.send_response(200)
-        self.send_header("Content-Type", meta["mime"])
+        self.send_header("Content-Type", media.safe_mime(meta["mime"]))
         self.send_header("Content-Length", str(size))
         self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{urllib.parse.quote(meta['name'])}")
         self.send_header("Cache-Control", "private, no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        with open(meta["path"], "rb") as handle:
-            while chunk := handle.read(1 << 20):
-                self.wfile.write(chunk)
+        while chunk := handle.read(1 << 20):
+            self.wfile.write(chunk)
 
     def web_app_file(self, segments):
         if urllib.parse.urlsplit(self.path).path == f"/{web_app.PREFIX}":
@@ -2446,11 +2342,17 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "Content-Length is required") from None
         except media.MediaError as error:
             raise ApiError(413 if "at most" in str(error) else 400, str(error)) from None
+        except OSError:
+            log.exception("upload could not be stored")
+            raise ApiError(503, "the AI server couldn't store that file just now; try again in a minute") from None
         self.send_json(201, media.public(meta))
 
     def vision(self, request, messages):
         """Messages carrying images (e.g. a desktop screenshot) go straight to a vision model: no persona,
         tools or archive, since the caller asks a precise question about a picture."""
+        max_tokens = optional_int(request.get("max_tokens")) if request.get("max_tokens") else None
+        if request.get("max_tokens") and max_tokens is None:
+            raise ApiError(400, "max_tokens must be a positive whole number")
         config = load_config()
         model = vision_model(str(request.get("model") or "").removeprefix(models.DROPDOWN_PREFIX))
         converted = []
@@ -2464,8 +2366,8 @@ class Handler(BaseHTTPRequestHandler):
                         images.append(url.split(",", 1)[1])
             converted.append({"role": message.get("role", "user"), "content": message_text(message), **({"images": images} if images else {})})
         options = {k: v for k, v in config.get("options", {}).items() if k in ("num_ctx", "num_predict")}
-        if request.get("max_tokens"):
-            options["num_predict"] = int(request["max_tokens"])
+        if max_tokens:
+            options["num_predict"] = max_tokens
         try:
             raw = http_json(f"{OLLAMA_URL}/api/chat", body={"model": model["name"], "messages": converted, "stream": False, "options": options, "keep_alive": 0})
         finally:
@@ -2474,8 +2376,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion", "created": int(time.time()), "model": model["name"],
                              "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}]})
 
+    def limited_chat(self, request):
+        if not direct_chat_slots.acquire(blocking=False):
+            raise ApiError(503, "Arty is busy with other chats; try again in a moment")
+        try:
+            return self.chat(request)
+        finally:
+            direct_chat_slots.release()
+
     def chat(self, request):
-        messages = request.get("messages") or []
+        messages = valid_messages(request.get("messages"))
         # Apps asking a precise question about a picture (e.g. a desktop screenshot) can skip Arty and ask the
         # vision model directly. Everything else, attachments included, goes through Arty with its tools.
         if self.headers.get("X-Arty-Direct-Vision", "") == "1" or request.get("arty_direct_vision") is True:
@@ -2485,11 +2395,16 @@ class Handler(BaseHTTPRequestHandler):
         opted_in = self.headers.get("X-Arty-Client-Tools", "") == "1" or request.get("arty_client_tools") is True
         client_tools = [t for t in request.get("tools") or [] if isinstance(t, dict) and t.get("type") == "function"] if opted_in else []
         skip_groups = [g.strip() for g in self.headers.get("X-Arty-Skip-Groups", "").split(",") if g.strip()] if opted_in else []
+        any_installed = opted_in and self.headers.get("X-Arty-Any-Model", "") == "1"
+        requested_model = str(request.get("model") or "")
+        if any_installed:
+            chosen_model("", requested_model, any_installed)
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
-        turn = (request.get("messages") or [], str(request.get("model") or ""), client_tools, skip_groups)
+        turn = (messages, requested_model, client_tools, skip_groups)
+        client = client_name(request)
         if not request.get("stream"):
-            answer, tools_used, raw, client_calls = run_turn(*turn)
+            answer, tools_used, raw, client_calls = run_turn(*turn, client=client, any_installed=any_installed)
         else:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -2515,12 +2430,12 @@ class Handler(BaseHTTPRequestHandler):
                     connection["open"] = False
                     log.warning("%s hung up during a streamed answer", self.address_string())
             try:
-                answer, tools_used, raw, client_calls = run_turn(*turn, on_text=send_early)
-            except Exception as error:
+                answer, tools_used, raw, client_calls = run_turn(*turn, on_text=send_early, client=client, any_installed=any_installed)
+            except Exception:
                 log.exception("streamed chat failed")
                 if connection["open"]:
                     after_early_text = "\n\n" if sent else ""
-                    send_chunk({"role": "assistant", "content": f"{after_early_text}(Arty's brain hit an error: {error})"}, finish="stop")
+                    send_chunk({"role": "assistant", "content": f"{after_early_text}({GENERIC_ERROR})"}, finish="stop")
                     self.wfile.write(b"data: [DONE]\n\n")
                 return
             if not connection["open"]:
@@ -2553,10 +2468,14 @@ class Handler(BaseHTTPRequestHandler):
         })
 
 
-if __name__ == "__main__":
+def init_storage(config):
     store.init()
-    personal.init()
+    personal.init(config.get("starter_deck"))
     lectures.init()
+
+
+if __name__ == "__main__":
+    init_storage(load_config())
     notify.listeners.append(record_announcement)
     threading.Thread(target=lectures.worker, args=(complete_text, notify.send), name="lectures", daemon=True).start()
     threading.Thread(target=worker_loop, name="worker", daemon=True).start()

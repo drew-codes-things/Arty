@@ -53,6 +53,15 @@ CREATE TABLE IF NOT EXISTS events (
   notes TEXT NOT NULL DEFAULT '',
   created REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS approved_devices (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  created REAL NOT NULL,
+  last_used REAL,
+  revoked REAL
+);
 CREATE TABLE IF NOT EXISTS schedules (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL,
@@ -68,11 +77,24 @@ CREATE TABLE IF NOT EXISTS schedules (
 """
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *details):
+        try:
+            return super().__exit__(*details)
+        finally:
+            self.close()
+
+
+_wal_files: set[str] = set()
+
+
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-    connection = sqlite3.connect(DB_FILE, timeout=30)
+    connection = sqlite3.connect(DB_FILE, timeout=30, factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
+    if DB_FILE not in _wal_files:
+        connection.execute("PRAGMA journal_mode=WAL")
+        _wal_files.add(DB_FILE)
     return connection
 
 
@@ -83,9 +105,8 @@ def init():
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(schedules)")}
         if "message" not in columns:
             connection.execute("ALTER TABLE schedules ADD COLUMN message TEXT")
-        # Added later: which chat apps (Telegram, Discord) a reminder also goes to; empty means only Arty's apps.
-        if "chats" not in [row[1] for row in connection.execute("PRAGMA table_info(schedules)")]:
-            connection.execute("ALTER TABLE schedules ADD COLUMN chats TEXT NOT NULL DEFAULT ''")
+        if "attempts" not in columns:
+            connection.execute("ALTER TABLE schedules ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
         # A task interrupted by a restart goes back in the queue rather than hanging as "running".
         connection.execute("UPDATE tasks SET status = 'queued', updated = ? WHERE status = 'running'", (time.time(),))
 
@@ -163,8 +184,11 @@ def add_announcement(kind: str, title: str, message: str, task_id: int | None = 
 
 def list_announcements(after: int = 0, limit: int = 50) -> list[dict]:
     with connect() as connection:
-        rows = connection.execute("SELECT * FROM announcements WHERE id > ? ORDER BY id DESC LIMIT ?", (after, limit)).fetchall()
-    announcements = [dict(row) for row in reversed(rows)]
+        if after:
+            rows = connection.execute("SELECT * FROM announcements WHERE id > ? ORDER BY id LIMIT ?", (after, limit)).fetchall()
+        else:
+            rows = list(reversed(connection.execute("SELECT * FROM announcements ORDER BY id DESC LIMIT ?", (limit,)).fetchall()))
+    announcements = [dict(row) for row in rows]
     for item in announcements:
         item["actions"] = json.loads(item["actions"]) if item["actions"] else []
     return announcements
@@ -207,12 +231,12 @@ def delete_event(event_id: int) -> bool:
         return connection.execute("DELETE FROM events WHERE id = ?", (event_id,)).rowcount > 0
 
 
-def create_schedule(title: str, instructions: str, cron: str | None, description: str, next_run: float, message: str | None = None,
-                    chats: str = "") -> dict:
+def create_schedule(title: str, instructions: str, cron: str | None, description: str, next_run: float,
+                    message: str | None = None) -> dict:
     with write_lock, connect() as connection:
         cursor = connection.execute(
-            "INSERT INTO schedules (title, instructions, cron, description, next_run, created, message, chats) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (title[:120], instructions, cron, description, next_run, time.time(), message, chats),
+            "INSERT INTO schedules (title, instructions, cron, description, next_run, created, message) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (title[:120], instructions, cron, description, next_run, time.time(), message),
         )
         return dict(connection.execute("SELECT * FROM schedules WHERE id = ?", (cursor.lastrowid,)).fetchone())
 
@@ -232,3 +256,44 @@ def update_schedule(schedule_id: int, **fields) -> bool:
     columns = ", ".join(f"{key} = ?" for key in fields)
     with write_lock, connect() as connection:
         return connection.execute(f"UPDATE schedules SET {columns} WHERE id = ?", (*fields.values(), schedule_id)).rowcount > 0
+
+
+DEVICE_TOUCH_SECONDS = 60
+
+
+def add_device(name: str, address: str, key_hash: str) -> int:
+    with write_lock, connect() as connection:
+        cursor = connection.execute("INSERT INTO approved_devices (name, address, key_hash, created) VALUES (?, ?, ?, ?)",
+                                    (name, address, key_hash, time.time()))
+        return cursor.lastrowid
+
+
+def active_device(key_hash: str) -> dict | None:
+    with connect() as connection:
+        row = connection.execute("SELECT * FROM approved_devices WHERE key_hash = ? AND revoked IS NULL", (key_hash,)).fetchone()
+    if row is None:
+        return None
+    device = dict(row)
+    if not device["last_used"] or time.time() - device["last_used"] > DEVICE_TOUCH_SECONDS:
+        with write_lock, connect() as connection:
+            connection.execute("UPDATE approved_devices SET last_used = ? WHERE id = ?", (time.time(), device["id"]))
+    return device
+
+
+def active_device_hashes() -> list[str]:
+    with connect() as connection:
+        return [row["key_hash"] for row in connection.execute("SELECT key_hash FROM approved_devices WHERE revoked IS NULL")]
+
+
+def list_devices() -> list[dict]:
+    with connect() as connection:
+        rows = connection.execute("SELECT id, name, address, created, last_used FROM approved_devices "
+                                  "WHERE revoked IS NULL ORDER BY created")
+        return [dict(row) for row in rows]
+
+
+def revoke_device(device_id: int) -> bool:
+    with write_lock, connect() as connection:
+        cursor = connection.execute("UPDATE approved_devices SET revoked = ? WHERE id = ? AND revoked IS NULL",
+                                    (time.time(), device_id))
+        return cursor.rowcount > 0

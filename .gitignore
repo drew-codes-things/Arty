@@ -5,3 +5,4 @@ apps/*/release/
 
 
 hosts.env
+desktop_known_hosts

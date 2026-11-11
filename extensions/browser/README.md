@@ -15,8 +15,10 @@
 ## Overview
 
 The companion to [Arty Desktop](../../apps/desktop/README.md). It takes browser commands from the desktop app's
-local service on `127.0.0.1:8765` and runs them in your Chrome. That service only listens on your computer and
-only accepts this extension and the app itself, so nothing else can drive your browser through it. With Arty
+local service on `127.0.0.1:8765` and runs them in your Chrome. That service only listens on your computer, and
+only accepts the app itself and this extension (recognised by its fixed id and a pairing code you paste once, and
+only for its own browser queue), so nothing else can drive your browser or your computer through it. What you have typed into password, card and
+one-time-code fields is never read out to Arty. With Arty
 Desktop closed, the extension does nothing.
 
 ---
@@ -43,9 +45,13 @@ extension enforces, so keep an eye on it.
 
 1. In Google Chrome, go to `chrome://extensions` and turn on **Developer mode** (top right).
 2. Click **Load unpacked** and choose this folder (`extensions/browser`).
-3. Pin it if you like - the icon just shows it's there; there's nothing to set up.
+3. In Arty Desktop, open the tray menu and choose **Chrome sites…**. Click the Arty for Chrome icon in Chrome and
+   paste the pairing code shown there. Until it is paired the icon shows a red **!** and the extension does nothing.
+   The same screen lists the sites Arty may use, each with a **Forget** button.
 
-After pulling a newer version, click the reload icon on its card.
+After pulling a newer version, click the reload icon on its card. Version 1.2 has a fixed extension id that Arty
+Desktop checks, so when updating from 1.1 remove the old card and choose **Load unpacked** again; Arty Desktop
+ignores any other extension. Version 1.3 also needs the pairing code (step 3) once after updating.
 
 ## Usage
 

@@ -16,6 +16,7 @@ from aiohttp.test_utils import TestClient, TestServer
 import headset
 import headset_commands
 import headset_panels
+import music
 
 
 @pytest.mark.parametrize("command, expected", [
@@ -240,3 +241,230 @@ def test_room_volume_phrases():
     assert parse_volume("unmute") == {"change": "unmute"}
     assert parse_volume("what's the volume of a sphere") is None
     assert parse_volume("turn the lights down") is None
+
+
+def test_reminder_times_that_arrive_as_epoch_seconds_become_the_text_the_headset_shows():
+    epoch = 1794394300.0
+    expected = datetime.fromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M")
+    schedules = {"schedules": [
+        {"title": "Epoch", "next_run": epoch, "enabled": True},
+        {"title": "Text", "next_run": "2030-01-01T09:00", "enabled": True},
+    ]}
+    assert headset_panels.reminders_from(schedules) == [
+        {"title": "Epoch", "next_run": expected},
+        {"title": "Text", "next_run": "2030-01-01T09:00"},
+    ]
+
+
+@pytest.mark.parametrize("next_run", [1794394300000, 1e30, -1e30, True])
+def test_a_reminder_time_that_is_not_a_real_timestamp_is_shown_as_it_came_and_keeps_the_rest(next_run):
+    schedules = {"schedules": [
+        {"title": "Odd", "next_run": next_run, "enabled": True},
+        {"title": "Fine", "next_run": "2030-01-01T09:00", "enabled": True},
+    ]}
+    assert [r["title"] for r in headset_panels.reminders_from(schedules)] == ["Fine", "Odd"]
+
+
+def test_reminders_stay_in_time_order_across_epoch_and_text_times():
+    epoch = datetime(2026, 11, 11, 8, 0).timestamp()
+    schedules = {"schedules": [
+        {"title": "Later", "next_run": "2026-11-11T09:00", "enabled": True},
+        {"title": "Middle", "next_run": epoch, "enabled": True},
+        {"title": "First", "next_run": "2026-11-11T07:00", "enabled": True},
+    ]}
+    assert [r["title"] for r in headset_panels.reminders_from(schedules)] == ["First", "Middle", "Later"]
+
+
+def test_a_text_time_outside_the_calendar_does_not_break_the_reminders():
+    schedules = {"schedules": [
+        {"title": "Odd", "next_run": "0001-01-01T00:00", "enabled": True},
+        {"title": "Fine", "next_run": "2030-01-01T09:00", "enabled": True},
+    ]}
+    assert [r["title"] for r in headset_panels.reminders_from(schedules)] == ["Fine", "Odd"]
+
+
+def test_text_times_are_shown_in_the_same_format_as_epoch_times():
+    moment = datetime.fromisoformat("2026-11-11T09:00:30+00:00")
+    schedules = {"schedules": [{"title": "Offset", "next_run": "2026-11-11T09:00:30+00:00", "enabled": True}]}
+    assert headset_panels.reminders_from(schedules)[0]["next_run"] == moment.astimezone().strftime("%Y-%m-%dT%H:%M")
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("play Timber by Pitbull on YouTube", {"action": "play_on", "app": "YouTube", "query": "Timber by Pitbull"}),
+    ("play lofi beats on YouTube Music please", {"action": "play_on", "app": "YouTube Music", "query": "lofi beats"}),
+    ("YouTube, play Timber", {"action": "play_on", "app": "YouTube", "query": "Timber"}),
+    ("put on some jazz on Deezer", {"action": "play_on", "app": "Deezer", "query": "some jazz"}),
+    ("play Timber by Pitbull", {"action": "play_on", "app": "YouTube", "query": "Timber by Pitbull"}),
+    ("can you play my workout playlist", {"action": "play_on", "app": "YouTube", "query": "my workout playlist"}),
+    ("play the song Fireball", {"action": "play_on", "app": "YouTube", "query": "the song Fireball"}),
+    ("play International Love by Pitbull on Spotify", {"action": "spotify_play", "query": "International Love by Pitbull"}),
+    ("play music", {"action": "media_play"}),
+])
+def test_music_requests_pick_an_app_and_a_song(command, expected):
+    assert headset_commands.parse(command) == expected
+
+
+@pytest.mark.parametrize("question", [
+    "play a game with me", "play it", "play something", "play with the settings", "play Timber",
+    "play it on my headset", "what is the best song to play",
+])
+def test_vague_play_requests_are_left_for_the_brain(question):
+    assert headset_commands.parse(question) is None
+
+
+class FakeResponse:
+
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def text(self):
+        return self.body
+
+
+class FakeWeb:
+
+    def __init__(self, status=200, body="", failure=None):
+        self.response = FakeResponse(status, body)
+        self.failure = failure
+        self.asked = []
+
+    def get(self, url, **kwargs):
+        self.asked.append((url, kwargs))
+        if self.failure:
+            raise self.failure
+        return self.response
+
+
+def test_the_first_video_in_the_search_page_is_the_one_to_play():
+    page = 'junk {"videoId":"hHUbLv4ThOo","x":1} more {"videoId":"AAAAAAAAAAA"}'
+    web = FakeWeb(body=page)
+    url = asyncio.run(music.youtube_watch_url(web, "Timber Pitbull"))
+    assert url == "https://www.youtube.com/watch?v=hHUbLv4ThOo"
+    assert web.asked[0][1]["params"] == {"search_query": "Timber Pitbull"}
+
+
+@pytest.mark.parametrize("web", [FakeWeb(status=429), FakeWeb(body="no videos here"), FakeWeb(failure=asyncio.TimeoutError())])
+def test_no_video_found_gives_no_url(web):
+    assert asyncio.run(music.youtube_watch_url(web, "anything")) is None
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("YouTube", True), ("youtube music", True), ("You Tube", True), ("Deezer", False), ("Spotify", False),
+])
+def test_youtube_is_recognised_by_its_spoken_name(name, expected):
+    assert music.is_youtube(name) is expected
+
+
+def run_play(command, link_result):
+    async def scenario(session, ws):
+        async def fake_lookup(_http, _query):
+            return link_result
+
+        music_lookup = headset.music.youtube_watch_url
+        headset.music.youtube_watch_url = fake_lookup
+        try:
+            acting = asyncio.create_task(session.act(command))
+            await asyncio.sleep(0.05)
+            action = next(m for m in ws.sent if m["type"] == "action")
+            await session.handle_text(json.dumps({"type": "action_result", "id": action["id"], "say": "Playing it."}))
+            return await acting, action
+        finally:
+            headset.music.youtube_watch_url = music_lookup
+
+    return run_session(scenario)
+
+
+def test_a_youtube_request_is_sent_with_the_video_it_found():
+    handled, action = run_play("play Timber by Pitbull", "https://www.youtube.com/watch?v=hHUbLv4ThOo")
+    assert handled
+    assert action["action"] == "youtube_play" and action["query"] == "Timber by Pitbull"
+    assert action["url"] == "https://www.youtube.com/watch?v=hHUbLv4ThOo"
+
+
+def test_a_youtube_request_without_a_found_video_still_goes_out_for_a_search():
+    handled, action = run_play("play my workout playlist on youtube", None)
+    assert handled and action["action"] == "youtube_play" and action["url"] == ""
+
+
+def test_another_app_is_sent_by_name():
+    handled, action = run_play("put on some jazz on Deezer", None)
+    assert handled and action["action"] == "app_play" and action["app"] == "Deezer" and action["query"] == "some jazz"
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("play the next song", {"action": "media_next"}),
+    ("play the previous track", {"action": "media_previous"}),
+    ("play the video on the youtube app", {"action": "play_on", "app": "youtube", "query": "the video"}),
+    ("play Timber by Pitbull on the Spotify app", {"action": "spotify_play", "query": "Timber by Pitbull"}),
+    ("play lofi on Deezer", {"action": "play_on", "app": "Deezer", "query": "lofi"}),
+    ("play my mix on the Foobar app", {"action": "play_on", "app": "Foobar", "query": "my mix"}),
+])
+def test_play_phrases_map_to_the_right_action(command, expected):
+    assert headset_commands.parse(command) == expected
+
+
+@pytest.mark.parametrize("question", [
+    "play chess in the garden", "play cards with me in the garden", "play the piano in the morning",
+    "play it on youtube", "play that on spotify please", "play something on youtube",
+])
+def test_everyday_play_phrases_are_left_for_the_brain(question):
+    assert headset_commands.parse(question) is None
+
+
+def test_an_ad_or_shelf_video_before_the_results_is_skipped():
+    page = ('{"adSlotRenderer":{"videoId":"ADADADADADA"}} {"reelItemRenderer":{"videoId":"SHORTSSHORT"}} '
+            '{"videoRenderer":{"videoId":"hHUbLv4ThOo","title":"x"}} {"videoRenderer":{"videoId":"BBBBBBBBBBB"}}')
+    url = asyncio.run(music.youtube_watch_url(FakeWeb(body=page), "Timber"))
+    assert url == "https://www.youtube.com/watch?v=hHUbLv4ThOo"
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("play dancing in the dark on youtube", {"action": "play_on", "app": "youtube", "query": "dancing in the dark"}),
+    ("play hello from adele on youtube", {"action": "play_on", "app": "youtube", "query": "hello from adele"}),
+    ("play music from the 90s on youtube", {"action": "play_on", "app": "youtube", "query": "music from the 90s"}),
+    ("play the next song on spotify", {"action": "media_next"}),
+    ("play the previous song on spotify", {"action": "media_previous"}),
+    ("play the next song on youtube", {"action": "media_next"}),
+])
+def test_play_phrases_split_at_the_last_separator_and_skip_phrases_skip(command, expected):
+    assert headset_commands.parse(command) == expected
+
+
+def test_a_page_that_cannot_be_decoded_gives_no_url():
+    class BrokenResponse(FakeResponse):
+        async def text(self):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    web = FakeWeb()
+    web.response = BrokenResponse(200, "")
+    assert asyncio.run(music.youtube_watch_url(web, "anything")) is None
+
+
+def test_the_youtube_names_are_shared_between_the_parser_and_the_lookup():
+    assert music.YOUTUBE_NAMES <= headset_commands.KNOWN_PLAYERS
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("play the next song on the headset", {"action": "media_next"}),
+    ("play the previous track on apple music", {"action": "media_previous"}),
+    ("play the last song on the playlist", {"action": "media_previous"}),
+])
+def test_skip_phrases_skip_whatever_follows_them(command, expected):
+    assert headset_commands.parse(command) == expected
+
+
+def test_the_command_parser_does_not_need_the_network_library(monkeypatch):
+    import importlib
+
+    monkeypatch.setitem(sys.modules, "aiohttp", None)
+    monkeypatch.delitem(sys.modules, "headset_commands", raising=False)
+    monkeypatch.delitem(sys.modules, "music", raising=False)
+    parser = importlib.import_module("headset_commands")
+    assert parser.parse("pause") == {"action": "media_pause"}

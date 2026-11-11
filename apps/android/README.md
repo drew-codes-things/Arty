@@ -36,8 +36,8 @@ Both can be installed side by side.
 ```
 Open the app
         |
-Shareable build, first time  ->  "Connect to Arty": brain address, API key,
-        |                        and the Cloudflare Access service token if you use one
+Shareable build, first time  ->  "Connect to Arty": Scan QR code (from Arty Desktop's tray menu > Phone setup code),
+        |                        or Enter details manually: brain address, API key and the Cloudflare Access token
         |
 Test request to the brain  ->  only saved once it works
         |
@@ -48,10 +48,15 @@ Live connection  ->  new Updates arrive as notifications straight away
 
 The shareable build keeps the connection details in the app's private storage, encrypted with a key held in
 Android's Keystore that never leaves the phone. Backups are off, so they don't go to the cloud either. Change them
-later from the chat screen's speaker menu > **Brain connection**.
+later from the chat screen's speaker menu > **Brain connection**. Where each detail comes from, and how the QR code
+works: [docs/connecting-a-phone.md](../../docs/connecting-a-phone.md).
 
 Plain `http://` is only accepted for home-network addresses (`192.168.x.x`, `10.x.x.x`, `.local` and the like), so
 the API key never crosses the internet unencrypted. Anything else needs `https://`.
+Before each request to a plain `http://` address, the brain there has to prove it knows the key by answering a random
+challenge at `/v1/identity`; neither the key nor the Cloudflare Access id and secret are sent with that challenge. The
+check assumes `/v1/identity` is only reachable on your home network or behind Cloudflare Access: if it were open to the
+internet, a fake server on another Wi-Fi could pass the challenge on to the real brain.
 
 ---
 
@@ -61,7 +66,9 @@ the API key never crosses the internet unencrypted. Anything else needs `https:/
   drawer, and the paperclip attaches photos and files.
 - **Calls** - a hands-free voice call with Arty, from the app or the home-screen widget.
 - **Updates** - everything Arty sends you: reminders, the morning and evening briefings, task results and homelab
-  alerts, with Approve / Deny on anything waiting for you. New ones also arrive as notifications.
+  alerts, with Approve / Deny on anything waiting for you. New ones also arrive as notifications. On the lock screen
+  an approval notice only says Arty needs your answer; Approve and Deny buttons on the notice itself appear on
+  Android 12 and later, which asks for the unlock first. On older Android, tap the notice and decide in the app.
 - **Tasks**, **Schedules** and **Memory** - what Arty's working on, what's planned, and what it remembers about you.
 - **Calendar** - your events, and adding new ones.
 - **Lectures** - record a lesson (or pick a recording) and read the notes Arty writes from it.
@@ -113,7 +120,7 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
 - `Connection.kt` - where the app finds Arty: built in for the personal build, or the Keystore-encrypted details
   from `SetupActivity` for the shareable one.
 - Chat turns run as brain jobs that the app polls, because Cloudflare ends any request that waits more than 100
-  seconds.
+  seconds. The wait rides out a dropped connection, 429, 500, 502 to 504 and Cloudflare's 520 to 530 (`ChatWait`).
 - `design/` - the Arty logo source and icon previews. Fonts are IBM Plex Sans and Mono (SIL Open Font License).
 - Toolchain: Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21, JDK 21, compileSdk and targetSdk 35, minSdk 28.
 
@@ -125,7 +132,7 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
 
 ## Revoking Access
 
-If a phone with the app is lost: delete its service token in Cloudflare Zero Trust > Access > Service credentials,
+If a phone with the app is lost: delete its service token in Cloudflare Zero Trust > Access controls > Service credentials,
 and/or rotate `ARTY_API_KEY` in `/srv/ai/secrets/brain.env` on the brain. A shareable install then just asks for the
 new details; the personal build needs rebuilding with them.
 

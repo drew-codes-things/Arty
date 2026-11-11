@@ -147,16 +147,24 @@ def _args(arguments):
     return args if isinstance(args, dict) else {}
 
 
+MAX_LABEL_CHARS = computer.MAX_LABEL_CHARS
+
+
+def _capped(label):
+    label = " ".join(str(label).split())
+    return label if len(label) <= MAX_LABEL_CHARS else label[:MAX_LABEL_CHARS - 1] + "…"
+
+
 def describe(name, arguments):
     """(label, where) for a tool call the app should show, else (None, None).
     where is "computer" (theirs)."""
     args = _args(arguments)
     if name in _COMPUTER_TOOLS:
-        return computer.describe(name, args), "computer"
+        return _capped(computer.describe(name, args)), "computer"
     if name in _DESKTOP_TOOLS:
-        return desktop.describe(name, args), "computer"
+        return _capped(desktop.describe(name, args)), "computer"
     if name in _BROWSER_TOOLS:
-        return browser.describe(name, args), "computer"
+        return _capped(browser.describe(name, args)), "computer"
     return None, None
 
 
@@ -171,8 +179,18 @@ def needs_ok(name, arguments, consented):
     return None
 
 
-def consent_key(name):
-    return computer.consent_key(name) if name in _COMPUTER_TOOLS else name
+def consent_given(name, arguments):
+    if name in _BROWSER_TOOLS:
+        browser.remember_consent(name, _args(arguments))
+
+
+def consent_refused(name, arguments):
+    if name in _BROWSER_TOOLS:
+        browser.forget_question(name, _args(arguments))
+
+
+def consent_key(name, question=None):
+    return computer.consent_key_for(name, question) if name in _COMPUTER_TOOLS else name
 
 
 def prompt_addition():

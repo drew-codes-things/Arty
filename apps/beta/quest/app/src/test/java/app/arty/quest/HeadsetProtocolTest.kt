@@ -107,6 +107,14 @@ class HeadsetProtocolTest {
     }
 
     @Test
+    fun reconnectingGivesUpAfterSeveralMinutesOfFailures() {
+        (0 until MAX_FAILED_ATTEMPTS).forEach { assertFalse("$it", shouldStopRetrying(it)) }
+        assertTrue(shouldStopRetrying(MAX_FAILED_ATTEMPTS))
+        val waitedMs = (0 until MAX_FAILED_ATTEMPTS).sumOf { reconnectDelayMs(it) }
+        assertTrue("$waitedMs", waitedMs in 300_000L..900_000L)
+    }
+
+    @Test
     fun theHeadsetNeedsAWebSocketAddressAndAKey() {
         assertTrue(isConfigured("ws://192.168.1.16:8790/ws/headset", "key"))
         assertFalse(isConfigured("ws://192.168.1.16:8790/ws/headset", " "))
@@ -124,5 +132,33 @@ class HeadsetProtocolTest {
     @Test
     fun aThirtyMillisecondMicFrameMatchesTheServer() {
         assertEquals(960, MIC_FRAME_BYTES)
+    }
+
+    @Test
+    fun youtubeAndAppPlayActionsAreRecognised() {
+        assertEquals(
+            ServerMessage.Action(8, HeadsetAction.YoutubePlay("Timber", "https://www.youtube.com/watch?v=hHUbLv4ThOo")),
+            HeadsetProtocol.parse("""{"type":"action","id":8,"action":"youtube_play","query":" Timber ","url":"https://www.youtube.com/watch?v=hHUbLv4ThOo"}"""),
+        )
+        assertEquals(
+            ServerMessage.Action(9, HeadsetAction.YoutubePlay("Timber", "")),
+            HeadsetProtocol.parse("""{"type":"action","id":9,"action":"youtube_play","query":"Timber"}"""),
+        )
+        assertEquals(
+            ServerMessage.Action(10, HeadsetAction.AppPlay("Deezer", "some jazz")),
+            HeadsetProtocol.parse("""{"type":"action","id":10,"action":"app_play","app":" Deezer ","query":"some jazz"}"""),
+        )
+    }
+
+    @Test
+    fun playActionsWithoutWhatToPlayAreUnknown() {
+        assertEquals(
+            ServerMessage.Action(11, HeadsetAction.Unknown("youtube_play")),
+            HeadsetProtocol.parse("""{"type":"action","id":11,"action":"youtube_play","query":"  "}"""),
+        )
+        assertEquals(
+            ServerMessage.Action(12, HeadsetAction.Unknown("app_play")),
+            HeadsetProtocol.parse("""{"type":"action","id":12,"action":"app_play","app":"","query":"x"}"""),
+        )
     }
 }

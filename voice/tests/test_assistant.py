@@ -115,3 +115,14 @@ def test_not_for_me_reply_is_held_back_until_it_differs():
     assert might_be_ignored(" (not for me) ")
     assert not might_be_ignored("(not for me) but")
     assert not might_be_ignored("It's 3 o'clock.")
+
+
+def test_the_name_heard_as_rt_at_the_start_still_wakes_the_headset():
+    assert find_wake("RT turn it up", bare_name=True) == (True, "turn it up")
+    assert find_wake("RT, what's the time?", bare_name=True) == (True, "what's the time?")
+    assert find_wake("R.T. skip this song", bare_name=True) == (True, "skip this song")
+
+
+def test_words_that_only_start_with_rt_do_not_wake_the_headset():
+    assert find_wake("rtx 3080 prices went up", bare_name=True)[0] is False
+    assert find_wake("rt is short for retweet", bare_name=False)[0] is False

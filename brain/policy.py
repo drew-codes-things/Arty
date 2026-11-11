@@ -11,6 +11,7 @@ always-on tools plus only the groups that match the request (or that it asks for
 with use_tools). A bigger model (tool_budget 0) simply gets everything.
 """
 import fnmatch
+import hashlib
 import re
 from urllib.parse import urlparse
 
@@ -22,10 +23,59 @@ ACTION_WORDS = {
     "homelab__restart_guest": "restart",
     "homelab__pufferpanel_power": "{action}",
 }
-CHAT_APPROVAL = re.compile(
-    r"^\s*(yes|yep|yeah|yup|ok|okay|sure|go ahead|go for it|do it|approved?|confirm(ed)?|send it|post it|publish it|please do)\b",
-    re.IGNORECASE,
-)
+APPROVAL_START = (r"yes|yep|yeah|yup|ok|okay|sure|go ahead|go for it|do it|approved?|confirm(?:ed)?|send it|post it|"
+                  r"publish it|please do")
+APPROVAL_MORE = APPROVAL_START + r"|please|thanks|thank you|and|now|fine|sounds good|absolutely|definitely"
+PLAIN_APPROVAL = re.compile(rf"\s*(?:{APPROVAL_START})(?:[\s,]+(?:{APPROVAL_MORE}))*[\s.!]*", re.IGNORECASE)
+COMMAND_TOOLS = {"workspace__run_command": "command", "workspace__open_app": "command", "workspace__type_text": "text"}
+PAGE_ACTIONS = {"workspace__browser_click", "workspace__browser_type", "workspace__browser_press", "workspace__browser_upload",
+                "workspace__browser_download"}
+DESKTOP_INPUT = {"workspace__press_keys", "workspace__click"}
+ACTIVATING_KEYS = re.compile(r"\b(enter|return|space|kp_enter)\b", re.IGNORECASE)
+SHOWN_COMMAND_CHARS = 200
+SHELL_OPERATORS = re.compile(r"&&|\|\||[|;`]|\$\(|>")
+LOWERCASE_START = re.compile(r"^(?:sudo\s+)?[a-z0-9_./~-]")
+
+
+def is_plain_approval(text: str) -> bool:
+    return bool(PLAIN_APPROVAL.fullmatch(text or ""))
+
+
+def shown_command(command: str) -> str:
+    if len(command) <= SHOWN_COMMAND_CHARS:
+        return command
+    fingerprint = hashlib.sha256(command.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    return f"{command[:SHOWN_COMMAND_CHARS]}... (full command {fingerprint})"
+
+
+def looks_like_a_command(line: str) -> bool:
+    line = line.strip()
+    return bool(LOWERCASE_START.match(line) or SHELL_OPERATORS.search(line))
+
+
+def checked_text(name: str, text: str) -> str:
+    if name != "workspace__type_text":
+        return text
+    return "\n".join(line for line in text.splitlines() if looks_like_a_command(line))
+
+
+def is_sensitive_host(context: dict, rules: dict) -> bool:
+    host = (urlparse(context.get("url", "")).hostname or "").lower()
+    return any(host == domain or host.endswith("." + domain) for domain in rules.get("domains", []))
+
+
+def desktop_input_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
+    if not is_sensitive_host(context, rules):
+        return None
+    host = urlparse(context.get("url", "")).hostname
+    if name == "workspace__click":
+        return f"clicking at {arguments.get('x')}, {arguments.get('y')} while {host} is open"
+    keys = str(arguments.get("keys", ""))
+    return f"pressing {keys} while {host} is open" if ACTIVATING_KEYS.search(keys) else None
+
+
+def page_unknown(name: str, context: dict) -> bool:
+    return name in PAGE_ACTIONS and not context.get("url")
 
 
 def remember_tool_result(context: dict, tool_name: str, result: str):
@@ -57,37 +107,45 @@ def approval_reason(name: str, arguments: dict, context: dict, rules: dict) -> s
     """A sentence describing why this call needs approval, or None if it can go ahead."""
     if name in rules.get("always", []):
         return describe_action(name, arguments, context)
-    if name == "workspace__run_command":
-        command = str(arguments.get("command", ""))
+    if name in COMMAND_TOOLS:
+        command = str(arguments.get(COMMAND_TOOLS[name], ""))
+        checked = checked_text(name, command)
         for pattern in rules.get("command_patterns", []):
-            if re.search(pattern, command):
-                return f"running `{command[:200]}`"
+            if re.search(pattern, checked):
+                verb = "typing" if name == "workspace__type_text" else "running"
+                return f"{verb} `{shown_command(command)}`"
         return None
+    if name in DESKTOP_INPUT:
+        return desktop_input_reason(name, arguments, context, rules)
     if not name.startswith("workspace__browser_"):
         return None
 
     host = (urlparse(context.get("url", "")).hostname or "").lower()
-    sensitive = any(host == domain or host.endswith("." + domain) for domain in rules.get("domains", []))
+    sensitive = page_unknown(name, context) or is_sensitive_host(context, rules)
     commit_words = set(rules.get("commit_words", []))
     money_words = set(rules.get("money_words", []))
     target = str(arguments.get("target", ""))
-    label = context.get("elements", {}).get(target, target)
+    elements = context.get("elements", {})
+    label = elements.get(target, target)
+    label_known = target in elements or not target.isdigit()
     label_words = _words(label)
-    where = host or "the current page"
+    where = host or "a page I haven't read this turn"
 
     if name == "workspace__browser_click":
         opens_editor = bool(label_words & set(rules.get("draft_words", [])))
-        if label_words & money_words or (sensitive and label_words & commit_words and not opens_editor):
+        if label_words & money_words or (sensitive and (not label_known or label_words & commit_words and not opens_editor)):
             return f'clicking "{label}" on {where}'
     elif name == "workspace__browser_type":
         if sensitive and arguments.get("submit") and "search" not in label_words:
             return f'typing and submitting "{str(arguments.get("text", ""))[:300]}" into "{label}" on {where}'
     elif name == "workspace__browser_press":
-        if sensitive and "enter" in str(arguments.get("keys", "")).lower():
+        if sensitive and ACTIVATING_KEYS.search(str(arguments.get("keys", ""))):
             return f"pressing {arguments.get('keys')} on {where}"
-    elif name == "workspace__browser_upload":
+    elif name == "workspace__browser_download":
         if sensitive:
-            return f"uploading {arguments.get('path')} on {where}"
+            return f'downloading from "{label}" on {where}'
+    elif name == "workspace__browser_upload":
+        return f"uploading {arguments.get('path')} on {where}"
     return None
 
 
@@ -116,14 +174,18 @@ def approved_reason(messages: list[dict], text_of) -> str | None:
     chat = [m for m in messages if m.get("role") in ("user", "assistant")]
     if len(chat) < 2 or chat[-1].get("role") != "user" or chat[-2].get("role") != "assistant":
         return None
-    if not CHAT_APPROVAL.match(text_of(chat[-1])):
+    if not is_plain_approval(text_of(chat[-1])):
         return None
     asked = APPROVAL_ASKED.match(text_of(chat[-2]).strip())
     return asked.group("reason") if asked else None
 
 
+def same_words(text: str) -> str:
+    return " ".join(text.split())
+
+
 def covers(approved: str | None, reason: str) -> bool:
-    return approved is not None and approved == reason
+    return approved is not None and same_words(approved) == same_words(reason)
 
 
 def matches(name: str, patterns: list[str]) -> bool:

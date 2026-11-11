@@ -14,8 +14,8 @@ import time
 import urllib.error
 import urllib.request
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-CONFIG_FILE = os.environ.get("BRAIN_CONFIG", "/srv/ai/brain/brain.json")
+from settings import CONFIG_FILE, OLLAMA_URL
+
 CACHE_SECONDS = 60
 PULL_TIMEOUT_SECONDS = 6 * 3600
 MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9._/-]*(:[a-z0-9._-]+)?$")
@@ -27,6 +27,7 @@ SOLO_DESCRIPTION = "Talks straight to the model, like starfire. Nothing is saved
 log = logging.getLogger("brain.models")
 _cache = {"at": 0.0, "models": []}
 _cache_lock = threading.Lock()
+_refresh_lock = threading.Lock()
 _pulls: set[str] = set()
 
 
@@ -50,23 +51,34 @@ def installed(refresh: bool = False) -> list[dict]:
     with _cache_lock:
         if not refresh and time.time() - _cache["at"] < CACHE_SECONDS:
             return _cache["models"]
-        models = []
-        for entry in _ollama("/api/tags").get("models", []):
-            try:
-                shown = _ollama("/api/show", {"model": entry["name"]})
-            except (urllib.error.URLError, TimeoutError):
-                continue
-            capabilities = shown.get("capabilities") or []
-            models.append({
-                "name": entry["name"],
-                "billions": _parameter_billions(shown.get("details") or entry.get("details") or {}),
-                "tools": "tools" in capabilities,
-                "vision": "vision" in capabilities,
-                "embedding": "embedding" in capabilities,
-                "thinking": "thinking" in capabilities,
-            })
+        stale = _cache["models"] if _cache["at"] and not refresh else None
+    if not _refresh_lock.acquire(blocking=stale is None):
+        return stale
+    try:
+        return _refresh_installed()
+    finally:
+        _refresh_lock.release()
+
+
+def _refresh_installed() -> list[dict]:
+    models = []
+    for entry in _ollama("/api/tags").get("models", []):
+        try:
+            shown = _ollama("/api/show", {"model": entry["name"]})
+        except (urllib.error.URLError, TimeoutError):
+            continue
+        capabilities = shown.get("capabilities") or []
+        models.append({
+            "name": entry["name"],
+            "billions": _parameter_billions(shown.get("details") or entry.get("details") or {}),
+            "tools": "tools" in capabilities,
+            "vision": "vision" in capabilities,
+            "embedding": "embedding" in capabilities,
+            "thinking": "thinking" in capabilities,
+        })
+    with _cache_lock:
         _cache.update(at=time.time(), models=models)
-        return models
+    return models
 
 
 def toolless_allowed() -> bool:
@@ -104,14 +116,26 @@ def solo_entries() -> list[dict]:
     return entries
 
 
+def _named_in(model: dict, names: list[str]) -> bool:
+    return model["name"] in names or model["name"].removesuffix(":latest") in names
+
+
 def in_arty(model: dict) -> bool:
     allowed = arty_models()
-    return not allowed or model["name"] in allowed or model["name"].removesuffix(":latest") in allowed
+    return not allowed or _named_in(model, allowed)
+
+
+def kept_solo(model: dict) -> bool:
+    return _named_in(model, solo_models()) and not _named_in(model, arty_models())
 
 
 def chat_models() -> list[dict]:
     allowed = toolless_allowed()
     return [model for model in installed() if not model["embedding"] and (model["tools"] or allowed) and in_arty(model)]
+
+
+def downloaded_chat_models() -> list[dict]:
+    return [model for model in installed() if not model["embedding"] and not kept_solo(model)]
 
 
 def usable(model: dict | None) -> bool:

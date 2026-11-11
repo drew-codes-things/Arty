@@ -5,9 +5,6 @@ tools (web, homelab, its own desktop). This app adds the user's computer: the
 computer_* tools in process.tools are offered as client tools (header
 X-Arty-Client-Tools: 1), and when the brain calls one it runs here, after asking
 the user first for anything risky, and the result goes back for the next step.
-
-The local conversation (with tool calls) lives in history_file, so a reply can be
-cut short and the next turn still knows what happened.
 """
 import json
 import re
@@ -26,6 +23,7 @@ _config = load_config()
 _brain = _config.get("brain") or {}
 API_KEY = str(_brain.get("api_key") or "")
 MODEL = str(_brain.get("model") or "assistant-core")
+CLIENT_NAME = "desktop"
 TIMEOUT_SECONDS = float(_brain.get("timeout_seconds", 600))
 # The conversation sent with each message: HISTORY_TURNS to HISTORY_TURNS + HISTORY_STEP_TURNS exchanges.
 HISTORY_TURNS = int(_brain.get("history_turns", 8))
@@ -35,6 +33,9 @@ TOOL_RESULT_CHARS = 6000
 STUCK_REPEATS = 3
 MEDIA_PATH = re.compile(r"/arty-files/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[^/?#]+$")
 MEDIA_TIMEOUT_SECONDS = 120
+TOOLS_USED_NOTE = "Tools you used or tried on their computer for that reply: "
+MAX_SAVED_ACTIONS = 30
+MAX_SAVED_ACTION_CHARS = 80
 
 DESKTOP_NOTE = """
 
@@ -89,12 +90,23 @@ def _save_history(messages):
         tmp.replace(path)
 
 
-def save_turn(user_text, reply):
+def save_turn(user_text, reply, actions=()):
     """Keeps the exchange as the user heard it (a cut-off reply is saved cut off)."""
     if not user_text:
         return
-    history = load_history() + [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply or "(no reply)"}]
+    answer = {"role": "assistant", "content": reply or "(no reply)"}
+    if actions:
+        answer["actions"] = [str(action)[:MAX_SAVED_ACTION_CHARS] for action in list(actions)[:MAX_SAVED_ACTIONS]]
+    history = load_history() + [{"role": "user", "content": user_text}, answer]
     _save_history(trimmed(history))
+
+
+def _as_sent(message):
+    actions = message.get("actions")
+    sent = {"role": message.get("role"), "content": message.get("content")}
+    if actions:
+        sent["content"] = f"{sent['content']}\n\n[{TOOLS_USED_NOTE}{'; '.join(map(str, actions))}]"
+    return sent
 
 
 def trimmed(history):
@@ -123,7 +135,7 @@ def _headers(**extra):
 def _stream(messages, offer_tools, lead=""):
     """Asks the brain, yielding the reply's text as it arrives (the brain sends the first sentences while
     the model is still writing), with `lead` in front of the first piece. Returns the whole message."""
-    body = {"model": MODEL, "messages": messages, "stream": True}
+    body = {"model": MODEL, "messages": messages, "stream": True, "client": CLIENT_NAME}
     if offer_tools:
         body["tools"] = offer_tools
     try:
@@ -132,6 +144,8 @@ def _stream(messages, offer_tools, lead=""):
             # This app drives the user's own browser, screen and windows; the brain's versions act on its VM.
             headers=_headers(**{"X-Arty-Client-Tools": "1", "X-Arty-Skip-Groups": "browser,screen,windows"}),
         )
+    except route.UnprovenBrain as error:
+        raise BrainError(str(error)) from None
     except requests.ConnectionError:
         raise BrainError(f"Can't reach Arty's brain at {route.describe()}. Is the AI container (CT 104) on, and is this PC online?") from None
     except requests.Timeout:
@@ -243,7 +257,10 @@ def calendar_call(method, path="", body=None):
 
 
 def describe_endpoint():
-    return _base()
+    try:
+        return _base()
+    except route.UnprovenBrain:
+        return f"{route.LOCAL_URL} (not proven, nothing sent)"
 
 
 def current_model():
@@ -279,7 +296,7 @@ def llm_stream(user_input, extra_system=None, note=""):
     this message only (small models heed it there far more than in the system prompt)."""
     system = DESKTOP_NOTE + tools.prompt_addition() + context.NOTE_EXPLAINED + (extra_system or "")
     messages = [{"role": "system", "content": system.strip()}]
-    messages += trimmed(load_history())
+    messages += [_as_sent(message) for message in trimmed(load_history())]
     messages.append({"role": "user", "content": user_input + (f"\n\n{note}" if note else "") + context.as_note()})
     offer = tools.definitions(user_input)
     consented = set()  # things they've said yes to during this reply
@@ -305,9 +322,11 @@ def llm_stream(user_input, extra_system=None, note=""):
                 ask = confirm.request(question)
                 yield Activity(question, where, confirm=ask.id)
                 if confirm.wait(ask):
-                    consented.add(tools.consent_key(name))
+                    consented.add(tools.consent_key(name, question))
+                    tools.consent_given(name, arguments)
                     result = tools.run(name, arguments)
                 else:
+                    tools.consent_refused(name, arguments)
                     result = "They didn't allow that, so it wasn't done. Don't try another way round it; say so and ask what they'd like."
             else:
                 result = tools.run(name, arguments)

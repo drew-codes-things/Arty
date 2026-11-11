@@ -42,9 +42,11 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
 - **Voice** - speech recognition (Faster-Whisper) and Arty's voice (Kokoro), both on this PC. Click the orb or press
   **Ctrl+Shift+Space** to talk; tap the orb or press Esc to stop it talking. **WAKE** listens for "Arty, ..."
   hands-free.
-- **Hands** - with **HANDS** on, Arty can look at the screen, open apps, click, type, press keys, scroll, run
-  commands and read or write files. Anything risky - deleting, sending, installing, touching secrets - shows an
-  Allow / Not now card first.
+- **Hands** - off until you turn **HANDS** on. Then Arty can look at the screen, open apps, click, type, press keys,
+  scroll, run commands and read or write files. The first click or key press in each reply, programs that aren't
+  installed apps, changes to startup files (`~/.bashrc`, autostart, `~/.local/bin`) and anything risky - deleting,
+  sending, installing, overwriting - show an Allow / Not now card first. Passwords, keys, browser profiles, `.env`
+  files and Arty's own settings are off limits.
   Before clicking, typing, pressing keys or scrolling, Arty checks that a password manager isn't the window in
   front. That check needs to know which window is in front: Windows and X11 always say, KDE on Wayland only with
   `kdotool` installed, and other Wayland desktops (GNOME and the rest) don't say at all. Without it, input goes to
@@ -64,6 +66,8 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
   where the desktop won't give that (KDE on Wayland), how long the screen has been locked. Spotting long stretches
   in one app needs the app in front, which KDE on Wayland only gives with `kdotool` installed. Nothing is stored.
 - **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) and it can use your own tabs too.
+  Pair it once with the code under **Chrome sites…** in the tray menu; the same screen lists the sites Arty may
+  use, each with a **Forget** button.
 
 ---
 
@@ -79,8 +83,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.2.0-x86_64.AppImage
-./Arty-1.2.0-x86_64.AppImage
+chmod +x Arty-1.3.0-x86_64.AppImage
+./Arty-1.3.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -91,7 +95,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.2.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.3.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.
@@ -106,7 +110,9 @@ possible on Windows (it needs a packaged-app listener), so that one tool is Linu
 The first run opens a **Connect to Arty** screen: enter your brain's address (`http://<brain address>:8081/v1`) and
 the Arty API key, and, for use away from home, the Cloudflare address and Access token. Arty checks them against your
 brain before saving them to `~/.config/Arty/arty_config.yaml` on Linux or `%APPDATA%\Arty\arty_config.yaml` on Windows (readable by you only), then restarts its local service
-to use them. **Connect to another Arty…** in the tray menu changes them later.
+to use them. **Connect to another Arty…** in the tray menu changes them later. **Phone setup code…** in the tray menu
+shows them as a QR code for the Android and iPhone apps to scan, for two minutes
+([docs/connecting-a-phone.md](../../docs/connecting-a-phone.md)).
 
 ## Setup From Source
 

@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+secrets=${ARTY_VOICE_SECRETS:-/etc/arty-voice/secrets.env}
+set -a
+. "$secrets"
+set +a
+: "${HEADSET_TOKEN:?HEADSET_TOKEN is not set in $secrets}"
+escaped_token=${HEADSET_TOKEN//\\/\\\\}
+escaped_token=${escaped_token//\"/\\\"}
+printf 'header = "Authorization: Bearer %s"\n' "$escaped_token" | curl -fsS --config - "http://127.0.0.1:${HEADSET_PORT:-8790}/pair/new?format=text"

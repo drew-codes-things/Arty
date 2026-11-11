@@ -55,7 +55,7 @@ covering how to install it, how to use it, and what it's been run and tested on.
 ```
  Arty Desktop (your PC) ───────LAN─────────┐
  Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ Ollama (models, GPU)
- Arty for iPhone (beta) ─LAN or Cloudflare─┤                       │
+ Arty for iPhone ────LAN or Cloudflare─────┤                       │
  Arty for Quest (beta) ─▶ voice server ────┼─▶ Brain (:8081) ──────┼─▶ Tool hub (mcpo): memory, web search, homelab, ...
  Voice assistant ("Hey Arty") ─────────────┤                       │
  Telegram / Discord bots ──────────────────┘                       └─▶ Arty's PC (VM): browser, Gmail window, terminal
@@ -76,15 +76,18 @@ alerts - only ever go to **Updates** in the phone and desktop apps.
 | [`arty-pc/`](arty-pc/) | Scripts for Arty's own computer - its browser agent, terminal, document reader and desktop look |
 | [`apps/desktop/`](apps/desktop/) | Arty Desktop - voice, a small window and hands on your Linux PC, with the AppImage in `release/` |
 | [`apps/android/`](apps/android/) | Arty for Android - chat, Updates, tasks, schedules and memory, with the APKs in `release/` |
-| [`apps/beta/ios/`](apps/beta/ios/) | **Beta.** Arty for iPhone - a Home Screen web app, served by the brain at `/ios/` |
+| [`apps/ios/`](apps/ios/) | Arty for iPhone - a Home Screen web app, served by the brain at `/ios/` |
 | [`apps/beta/quest/`](apps/beta/quest/) | **Beta.** Arty for Quest 3 and 3S, your own virtual reality AI - an orb and panels in passthrough, talking through the voice server |
+| [**Arty CLI**](https://github.com/drew-codes-things/ArtyCode) | Arty in your terminal on Linux and Windows, its own repository (ArtyCode): reads, edits and runs code in your project, asking first. Runs on your Arty, or on Claude or Gemini with your own key; `arty` starts it |
+| [`apps/beta/code/`](apps/beta/code/) | **Beta, being replaced by Arty CLI.** Arty Code - the first terminal app |
 | [`voice/`](voice/) | The room mic and speakers hub, and the "Hey Arty" voice assistant |
 | [`extensions/gmail/`](extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
 | [`extensions/browser/`](extensions/browser/) | Chrome extension that lets Arty Desktop use your own browser |
 | [`chat-bots/telegram/`](chat-bots/telegram/), [`chat-bots/discord/`](chat-bots/discord/) | Arty on Telegram and Discord, owner-only |
-| [`docs/`](docs/) | [The Arty API](docs/API.md) and [linking everything through Cloudflare](docs/cloudflare.md) |
+| [`docs/`](docs/) | [The Arty API](docs/API.md), [linking everything through Cloudflare](docs/cloudflare.md), [connecting a phone](docs/connecting-a-phone.md) and [connecting a Quest headset](docs/connecting-a-headset.md) |
 
-The beta apps are built and unit-tested but haven't been tried on a real iPhone or headset yet.
+The beta apps are built and unit-tested. Arty for Quest has run on a real headset (it connects and shows its panels) but not every feature has been tried.
+Arty CLI's Windows installer has been run on Windows 10 (PowerShell 5.1).
 
 ---
 
@@ -104,6 +107,10 @@ The beta apps are built and unit-tested but haven't been tried on a real iPhone 
 - **Everywhere** - desktop app, Android, iPhone and Quest (beta: your own virtual reality AI), voice, Telegram and Discord, all sharing one memory.
 - **Works with [starfire.ai](https://github.com/drew-codes-things/starfire.ai)** - add Arty to starfire as an
   OpenAI-compatible provider and chat with it in the browser, next to your plain Ollama models.
+  starfire.ai is getting its own update too: a cleaner look with every control styled in both themes, and
+  the layout and features of the big chat apps (chat history in a sidebar, a Stop button, copy, edit and
+  regenerate on messages, code blocks with a Copy button, renaming and searching chats, tabbed settings and
+  keyboard shortcuts).
 
 ---
 
@@ -113,14 +120,16 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.2.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.2.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.3.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.3.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
 | `Arty-1.1.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (below).
+
+What changed lately: [release notes for 11 November 2026](docs/release-notes-2026-11-11.md).
 
 ---
 
@@ -249,11 +258,15 @@ Follow [arty-pc/README.md](arty-pc/README.md) to sign Arty's browser in to the s
 |---|---|
 | [Arty Desktop](apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
 | [Arty for Android](apps/android/README.md) | Install `Arty-1.1.0.apk`; it asks for the same details and keeps them encrypted on the phone |
-| [Arty for iPhone](apps/beta/ios/README.md) (beta) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key |
+| [Arty for iPhone](apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
+| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, approving the computer in Arty for iPhone, or a Claude or Gemini key |
+| [Arty Code](apps/beta/code/README.md) (beta, being replaced) | `pipx install ./apps/beta/code`, then `arty-code setup` asks for the same details as Arty Desktop |
 | [Arty for Chrome](extensions/browser/README.md) | Lets Arty Desktop use your own browser |
 
-Away from home, the phone apps need [the Cloudflare link](docs/cloudflare.md).
+Away from home, the phone apps need [the Cloudflare link](docs/cloudflare.md). To set a phone up, scan the QR code
+from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
+([docs/connecting-a-phone.md](docs/connecting-a-phone.md)).
 
 ### 8. Optional
 
@@ -280,6 +293,7 @@ is not set (Proxmox, Uptime Kuma, Nextcloud, PufferPanel, Arty's PC) simply says
 | `NEXTCLOUD_URL` | `/srv/ai/secrets/homelab.env` | Nextcloud |
 | `PUFFERPANEL_URL`, `PUFFERPANEL_CLIENT_ID`, `PUFFERPANEL_CLIENT_SECRET` | `/srv/ai/secrets/homelab.env` | Game servers |
 | `CALENDAR_TIMEZONE` | `/srv/ai/secrets/brain.env` | Your calendar's time zone |
+| `BRAIN_TRUSTED_PROXIES` | `/srv/ai/secrets/brain.env` | Comma-separated addresses of the proxy in front of the brain (the Cloudflare tunnel's machine), the only ones whose `Cf-Connecting-Ip` is believed |
 | `BRAIN_URL`, `HUB_URL` | the voice assistant's environment | The brain and the voice hub ([voice/](voice/README.md)) |
 | `BRAIN_URL` | each chat bot's environment | The brain ([chat-bots/](chat-bots/)) |
 
@@ -396,8 +410,9 @@ A full run of 17 test questions passed 16; everything left over passed when re-t
 
 ```bash
 cd brain && python3 -m unittest discover -s tests
-python3 -m pytest -q mcp voice/tests          # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
-cd apps/beta/ios && node --test tests/
+python3 -m pytest -q mcp voice/tests tests arty-pc chat-bots   # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
+(cd downloads && python3 -m unittest discover -p 'test_*.py')
+cd apps/ios && node --test tests/
 ```
 
 Each app's README has its own.

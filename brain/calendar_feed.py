@@ -7,6 +7,7 @@ haven't been reminded about yet. Google links live in /srv/ai/secrets/calendar.e
 """
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -28,6 +29,9 @@ REMINDED_KEPT = 500
 DEFAULT_MINUTES = 60
 MAX_OCCURRENCES = 200
 MAX_DAYS = 366
+MAX_EVENT_MINUTES = MAX_DAYS * 24 * 60
+SUB_DAILY_REPEAT = ("calendar events repeat daily, weekly, monthly or yearly; for every few minutes or hours, "
+                    "set a reminder instead")
 
 MONTHS = {name: number for number, names in enumerate(
     [("jan", "january"), ("feb", "february"), ("mar", "march"), ("apr", "april"), ("may",), ("jun", "june"),
@@ -37,10 +41,12 @@ WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", 
 MONTH = "|".join(sorted(MONTHS, key=len, reverse=True))
 DAY_MONTH = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({MONTH})\b(?:\s+(\d{{4}}))?", re.I)
 MONTH_DAY = re.compile(rf"\b({MONTH})\s+(\d{{1,2}})(?:st|nd|rd|th)?\b(?:,?\s+(\d{{4}}))?", re.I)
-SLASH_DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")  # UK order: day/month
+DAY_MONTH_SLASH_DATE = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?(?![\d/])")
+ROUND_THE_CLOCK = "24/7"
+LEAP_YEAR_SEARCH = 8
 DAY_OF_MONTH = re.compile(r"\bthe (\d{1,2})(?:st|nd|rd|th)\b", re.I)  # "the 25th": the next one
 ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
-REPEATING = re.compile(r"\b(every|daily|weekdays|weekends|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b", re.I)
+REPEATING = re.compile(r"\b(every|daily|weekdays|weekends|yearly|annually|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b", re.I)
 
 log = logging.getLogger("brain.calendar")
 _last_google_check = {"time": 0.0}
@@ -48,19 +54,55 @@ _last_google_check = {"time": 0.0}
 
 # ---------- when ----------
 
+def _slash_date(text: str):
+    return next((match for match in DAY_MONTH_SLASH_DATE.finditer(text) if match.group(0) != ROUND_THE_CLOCK), None)
+
+
+def _real_date(text: str, year: int, month: int, day: int) -> date:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        raise ValueError(f"'{text}' isn't a real date") from None
+
+
+def _upcoming(text: str, month: int, day: int, today: date) -> date:
+    for year in range(today.year, today.year + LEAP_YEAR_SEARCH + 1):
+        try:
+            found = date(year, month, day)
+        except ValueError:
+            continue
+        if found >= today:
+            return found
+    raise ValueError(f"'{text}' isn't a real date")
+
+
+def day_and_month(text: str) -> tuple[int, int] | None:
+    for pattern, day_group, month_group in ((DAY_MONTH, 1, 2), (MONTH_DAY, 2, 1)):
+        if match := pattern.search(text):
+            found = (int(match[day_group]), MONTHS[match[month_group].lower()])
+            break
+    else:
+        match = _slash_date(text)
+        if not match:
+            return None
+        found = (int(match[1]), int(match[2]))
+    _upcoming(text, found[1], found[0], date(2000, 1, 1))
+    return found
+
+
 def written_date(text: str, today: date) -> date | None:
     """A date written out in the text (25 Oct, Oct 25, 25/10, 2026-10-25, the 25th); not today/tomorrow/Friday."""
     if match := ISO_DATE.search(text):
-        return date(int(match[1]), int(match[2]), int(match[3]))
+        return _real_date(text, int(match[1]), int(match[2]), int(match[3]))
     for pattern, day_group, month_group in ((DAY_MONTH, 1, 2), (MONTH_DAY, 2, 1)):
         if match := pattern.search(text):
-            year = int(match[3]) if match[3] else today.year
-            found = date(year, MONTHS[match[month_group].lower()], int(match[day_group]))
-            return found if match[3] or found >= today else found.replace(year=year + 1)
-    if match := SLASH_DATE.search(text):
-        year = (int(match[3]) + (2000 if len(match[3]) == 2 else 0)) if match[3] else today.year
-        found = date(year, int(match[2]), int(match[1]))
-        return found if match[3] or found >= today else found.replace(year=year + 1)
+            month, day = MONTHS[match[month_group].lower()], int(match[day_group])
+            return _real_date(text, int(match[3]), month, day) if match[3] else _upcoming(text, month, day, today)
+    if match := _slash_date(text):
+        month, day = int(match[2]), int(match[1])
+        if match[3]:
+            return _real_date(text, int(match[3]) + (2000 if len(match[3]) == 2 else 0), month, day)
+        return _upcoming(text, month, day, today)
     if match := DAY_OF_MONTH.search(text):
         day, month, year = int(match[1]), today.month, today.year
         for _ in range(12):  # the next month that has that day, from this month on
@@ -99,6 +141,11 @@ def parse_when(text: str, now: datetime | None = None) -> tuple[datetime, bool, 
     clock = timing._clock(text)  # (hour, minute) when a time of day is given
     if REPEATING.search(text):
         cron, first, _ = timing.parse_when(text, now)
+        if timing.repeats_within_a_day(cron):
+            raise ValueError(SUB_DAILY_REPEAT)
+        if clock is None and cron.count(" ") == 4:
+            cron = "0 0 " + cron.split(" ", 2)[2]
+            first = timing.next_run(cron, datetime.combine(now.date(), datetime.min.time()) - timedelta(minutes=1))
         return first, clock is None, cron
     try:
         day = _date_in(text, now.date())
@@ -112,10 +159,12 @@ def parse_when(text: str, now: datetime | None = None) -> tuple[datetime, bool, 
             start += timedelta(days=7)  # "Friday 3pm" said on a Friday evening means next week
         return start, False, None
     try:
-        _, first, _ = timing.parse_when(text, now)  # "in 2 hours", "tomorrow 18:00", ...
+        cron, first, _ = timing.parse_when(text, now)
     except ValueError:
         raise ValueError(f"I couldn't tell when '{text}' is. Use a day and time, e.g. 'Tuesday 3pm', "
                          "'25 Dec 14:00', '24/12', 'tomorrow 18:00', 'in 2 hours' or 'every Monday 6pm'.") from None
+    if cron and timing.repeats_within_a_day(cron):
+        raise ValueError(SUB_DAILY_REPEAT)
     return first, False, None
 
 
@@ -128,7 +177,11 @@ def _occurrences(event: dict, start: float, end: float) -> list[tuple[float, flo
         return [(event["starts"], event["ends"])] if event["starts"] < end and event["ends"] > start else []
     found, moment = [], datetime.fromtimestamp(max(event["starts"], start - length) - 1)
     for _ in range(MAX_OCCURRENCES):
-        moment = timing.next_run(event["repeat"], moment)
+        try:
+            moment = timing.next_run(event["repeat"], moment)
+        except ValueError as error:
+            log.warning("calendar event %s can't repeat (%s)", event.get("id"), error)
+            break
         if moment.timestamp() >= end:
             break
         if moment.timestamp() + length > start:
@@ -156,6 +209,14 @@ def _next(event: dict) -> str:
     return _describe(_as_item(event, *upcoming[0])) if upcoming else event["title"]
 
 
+def checked_minutes(minutes: int) -> int:
+    if minutes <= 0:
+        raise ValueError("the length must be more than 0 minutes")
+    if minutes > MAX_EVENT_MINUTES:
+        raise ValueError(f"an event can last at most {MAX_DAYS} days")
+    return minutes
+
+
 def add(title, when, duration_minutes=None, location="", notes="") -> str:
     """The calendar_add tool."""
     title = str(title or "").strip()
@@ -163,7 +224,7 @@ def add(title, when, duration_minutes=None, location="", notes="") -> str:
         return "Give the event a title."
     try:
         start, all_day, repeat = parse_when(str(when or ""))
-        minutes = int(duration_minutes or 0) or (24 * 60 if all_day else DEFAULT_MINUTES)
+        minutes = checked_minutes(int(duration_minutes or 0) or (24 * 60 if all_day else DEFAULT_MINUTES))
     except ValueError as error:
         return f"Couldn't add it: {error}"
     event = store.add_event(title, start.timestamp(), start.timestamp() + minutes * 60, all_day, repeat,
@@ -186,11 +247,13 @@ def change(event_id, title=None, when=None, duration_minutes=None, location=None
         fields["location"] = str(location)[:200]
     length = event["ends"] - event["starts"]
     try:
-        if duration_minutes:
-            length = int(duration_minutes) * 60
         if when:
             start, all_day, repeat = parse_when(str(when))
             fields.update(starts=start.timestamp(), all_day=int(all_day), repeat=repeat)
+            if all_day != bool(event["all_day"]):
+                length = 24 * 3600 if all_day else DEFAULT_MINUTES * 60
+        if duration_minutes:
+            length = checked_minutes(int(duration_minutes)) * 60
     except ValueError as error:
         return f"Couldn't change it: {error}"
     fields["ends"] = fields.get("starts", event["starts"]) + length
@@ -270,7 +333,10 @@ def events(days=1) -> str:
 
 def event_list(days=30) -> dict:
     """Arty's own and Google's events as data, for the apps' calendar views: {"events": [...], "problems": [...]}."""
-    days = max(1, min(float(days or 30), MAX_DAYS))
+    days = float(days or 30)
+    if not math.isfinite(days):
+        raise ValueError("days must be a number")
+    days = max(1, min(days, MAX_DAYS))
     found, problems = own_events(days), []
     try:
         google = google_events(days)

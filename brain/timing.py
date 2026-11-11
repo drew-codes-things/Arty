@@ -4,20 +4,31 @@ Repeating schedules are stored as 5-field cron expressions (minute hour day mont
 weekday, weekday 0 = Sunday). One-off times ("in 2 hours", "tomorrow 08:00") have
 no cron and run once. All times are the server's local time (Europe/London).
 """
+import calendar
 import re
 from datetime import datetime, timedelta
 
 WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 CRON_RANGES = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
-SEARCH_LIMIT = timedelta(days=366 * 2)
+SEARCH_LIMIT = timedelta(days=366 * 8 + 2)
 HELP = (
     "Use e.g. 'daily 08:00', 'weekdays 07:30', 'mondays 09:00', 'every 2 hours', 'hourly', "
     "'in 30 minutes', 'tomorrow 18:00', '2026-12-24 09:00', or a cron expression like '0 8 * * 1-5'."
 )
 
 
-SPOKEN_AMOUNTS = [(r"\bhalf an hour\b", "30 minutes"), (r"\b(a|an|one) (minute|hour|day)\b", r"1 \2"),
-                  (r"\ba couple of (minutes|hours|days)\b", r"2 \1"), (r"\ba few (minutes|hours|days)\b", r"3 \1")]
+SPOKEN_AMOUNTS = [(r"\bhalf an hour\b", "30 minutes"), (r"\b(a|an|one) (second|minute|hour|day|week|month)\b", r"1 \2"),
+                  (r"\ba couple of (seconds|minutes|hours|days|weeks|months)\b", r"2 \1"),
+                  (r"\ba few (seconds|minutes|hours|days|weeks|months)\b", r"3 \1")]
+RELATIVE = re.compile(r"in (\d+) (seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)")
+UNIT_SECONDS = {"sec": 1, "min": 60, "hou": 3600, "hrs": 3600, "hr": 3600, "day": 86400, "wee": 7 * 86400}
+MAX_AHEAD = timedelta(days=366 * 10)
+TOO_FAR = "That's too far ahead: I can set things up to 10 years away."
+INTERVAL = re.compile(r"every (\d+)([mh])")
+MINUTES_IN_HOUR = 60
+HOURS_IN_DAY = 24
+YEARLY = re.compile(r"\b(every|each|yearly|annually)\b")
+WEEKDAY_NAMED = re.compile(r"\b(mon|tue|wed|thu|fri|sat|sun)")
 PARTS_OF_DAY = [("morning", (9, 0)), ("afternoon", (14, 0)), ("evening", (18, 0)), ("tonight", (20, 0)), ("night", (20, 0))]
 
 
@@ -53,9 +64,41 @@ def _clock(text: str) -> tuple[int, int] | None:
     return hour, minute
 
 
+def _months_later(moment: datetime, months: int) -> datetime:
+    month_index = moment.month - 1 + months
+    year, month = moment.year + month_index // 12, month_index % 12 + 1
+    return moment.replace(year=year, month=month, day=min(moment.day, calendar.monthrange(year, month)[1]))
+
+
+def _relative(amount: int, unit: str, exact_now: datetime) -> datetime:
+    try:
+        if unit.startswith("month"):
+            if amount > MAX_AHEAD.days // 28:
+                raise ValueError(TOO_FAR)
+            at = _months_later(exact_now, amount)
+        else:
+            at = exact_now + timedelta(seconds=amount * UNIT_SECONDS[unit[:3]])
+    except (OverflowError, OSError):
+        raise ValueError(TOO_FAR) from None
+    if at - exact_now > MAX_AHEAD:
+        raise ValueError(TOO_FAR)
+    return at
+
+
+def _repeat_every(amount: int, unit: str) -> str:
+    if unit == "minutes":
+        if not 5 <= amount <= 59:
+            raise ValueError("Repeat every 5 to 59 minutes, or use hours.")
+        return f"*/{amount} * * * *" if MINUTES_IN_HOUR % amount == 0 else f"every {amount}m"
+    if not 1 <= amount <= 23:
+        raise ValueError("Repeat every 1 to 23 hours, or use daily.")
+    return f"0 */{amount} * * *" if HOURS_IN_DAY % amount == 0 else f"every {amount}h"
+
+
 def parse_when(when: str, now: datetime | None = None) -> tuple[str | None, datetime, str]:
     """Return (cron or None for one-off, first run time, human description). Raises ValueError."""
-    now = (now or datetime.now()).replace(second=0, microsecond=0)
+    exact_now = (now or datetime.now()).replace(microsecond=0)
+    now = exact_now.replace(second=0)
     phrase = " ".join(when.lower().replace(",", " ").split())
     if not phrase:
         raise ValueError(HELP)
@@ -63,6 +106,7 @@ def parse_when(when: str, now: datetime | None = None) -> tuple[str | None, date
         phrase = re.sub(spoken, plain, phrase)
     phrase = re.sub(r"^(on|at) (?=(mon|tue|wed|thu|fri|sat|sun|today|tonight|tomorrow))", "", phrase)
     phrase = re.sub(r"\bthis (morning|afternoon|evening)\b", r"today \1", phrase)
+    said_next = bool(re.match(r"next (mon|tue|wed|thu|fri|sat|sun)", phrase))
     phrase = re.sub(r"^next (?=(mon|tue|wed|thu|fri|sat|sun))", "", phrase)
     if re.fullmatch(r"\d{1,2}(:\d{2})?\s*(am|pm)?|noon|midday|midnight", phrase):
         phrase = f"at {phrase}"  # just a time: the next time it comes round
@@ -71,24 +115,14 @@ def parse_when(when: str, now: datetime | None = None) -> tuple[str | None, date
         _parse_cron(phrase)
         return phrase, next_run(phrase, now), f"cron {phrase}"
 
-    relative = re.fullmatch(r"in (\d+) (minute|minutes|min|mins|hour|hours|day|days)", phrase)
+    relative = RELATIVE.fullmatch(phrase)
     if relative:
-        amount, unit = int(relative.group(1)), relative.group(2)
-        delta = timedelta(minutes=amount) if unit.startswith("min") else timedelta(hours=amount) if unit.startswith("hour") else timedelta(days=amount)
-        at = now + delta
+        at = _relative(int(relative.group(1)), relative.group(2), exact_now)
         return None, at, f"once at {at:%a %d %b %H:%M}"
 
-    every = re.fullmatch(r"every (\d+) (minutes|hours)", phrase)
+    every = re.fullmatch(r"every (\d+) (minute|hour)s?", phrase)
     if every:
-        amount = int(every.group(1))
-        if every.group(2) == "minutes":
-            if not 5 <= amount <= 59:
-                raise ValueError("Repeat every 5 to 59 minutes, or use hours.")
-            cron = f"*/{amount} * * * *"
-        else:
-            if not 1 <= amount <= 23:
-                raise ValueError("Repeat every 1 to 23 hours, or use daily.")
-            cron = f"0 */{amount} * * *"
+        cron = _repeat_every(int(every.group(1)), every.group(2) + "s")
         return cron, next_run(cron, now), phrase
     if phrase in ("hourly", "every hour"):
         return "0 * * * *", next_run("0 * * * *", now), "every hour"
@@ -103,8 +137,13 @@ def parse_when(when: str, now: datetime | None = None) -> tuple[str | None, date
         if at <= now:
             raise ValueError("That time has already passed.")
         return None, at, f"once at {at:%a %d %b %Y %H:%M}"
+    import calendar_feed  # imported here because calendar_feed imports this module
+    if YEARLY.search(phrase) and not WEEKDAY_NAMED.search(phrase) and (day_month := calendar_feed.day_and_month(phrase)):
+        hour, minute = clock or (9, 0)
+        cron = f"{minute} {hour} {day_month[0]} {day_month[1]} *"
+        first = next_run(cron, now)
+        return cron, first, f"every year on {first:%d %b} at {hour:02d}:{minute:02d}"
     if not re.search(r"\b(every|each|daily|weekdays|weekends)\b", phrase):
-        import calendar_feed  # imported here because calendar_feed imports this module
         day = calendar_feed.written_date(phrase, now.date())  # "25 December", "24/12", "the 25th"
         if day is not None:
             hour, minute = clock or (9, 0)
@@ -142,7 +181,7 @@ def parse_when(when: str, now: datetime | None = None) -> tuple[str | None, date
         repeats = re.search(r"\b(every|each)\b", phrase) or any(re.search(rf"\b{WEEKDAYS[i]}s\b", phrase) for i in named)
         if not repeats and len(named) == 1:
             # "Friday 3pm" means the coming Friday, once; "every Friday" or "Fridays" repeats.
-            ahead = (named[0] - int(now.strftime("%w"))) % 7
+            ahead = (named[0] - int(now.strftime("%w"))) % 7 or (7 if said_next else 0)
             at = (now + timedelta(days=ahead)).replace(hour=hour, minute=minute)
             if at <= now:
                 at += timedelta(days=7)
@@ -183,8 +222,24 @@ def _parse_cron(cron: str) -> list[set[int]]:
         raise ValueError(f"bad cron expression: {error}") from None
 
 
+def following_run(cron: str, due: datetime, now: datetime) -> datetime:
+    upcoming = next_run(cron, due)
+    return upcoming if upcoming > now else next_run(cron, now)
+
+
+def repeats_within_a_day(cron: str) -> bool:
+    if INTERVAL.fullmatch(cron):
+        return True
+    minute, hour = cron.split()[:2]
+    return not (minute.isdigit() and hour.isdigit())
+
+
 def next_run(cron: str, after: datetime) -> datetime:
     """The first time strictly after `after` that matches the cron expression."""
+    if interval := INTERVAL.fullmatch(cron):
+        amount = int(interval.group(1))
+        step = timedelta(minutes=amount) if interval.group(2) == "m" else timedelta(hours=amount)
+        return after.replace(second=0, microsecond=0) + step
     minutes, hours, days, months, weekdays = _parse_cron(cron)
     any_day, any_weekday = cron.split()[2] == "*", cron.split()[4] == "*"
     candidate = after.replace(second=0, microsecond=0) + timedelta(minutes=1)

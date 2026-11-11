@@ -46,9 +46,16 @@ AUDIO_FORMATS = {"mp3", "wav", "ogg", "flac", "m4a", "aac", "opus"}
 VIDEO_FORMATS = {"mp4", "webm", "mkv", "mov"}
 SAFE_NAME = re.compile(r"[^\w.\- ()]+")
 FILE_ID = re.compile(r"^[0-9a-f]{16,32}$")
+MIME_TYPE = re.compile(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}")
+UNKNOWN_MIME = "application/octet-stream"
+SNIFF_BYTES = 512
+SCRIPTED_IMAGE = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*(?:<|push\s+graphic-context|viewbox\b|%!|%PDF|\{\\rtf)|\A\xc5\xd0\xd3\xc6",
+                            re.IGNORECASE)
+FFMPEG_LOCAL_ONLY = ["-protocol_whitelist", "file"]
 
 log = logging.getLogger("brain.media")
 _lock = threading.Lock()
+_analysing: dict[str, threading.Lock] = {}
 
 
 class MediaError(Exception):
@@ -65,11 +72,16 @@ def safe_name(name: str, fallback: str = "file") -> str:
     return cleaned[:120] or fallback
 
 
+def safe_mime(mime: str) -> str:
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    return mime if MIME_TYPE.fullmatch(mime) else UNKNOWN_MIME
+
+
 def guess_mime(name: str, given: str = "") -> str:
-    given = (given or "").split(";", 1)[0].strip().lower()
-    if given and given != "application/octet-stream":
+    given = safe_mime(given)
+    if given != UNKNOWN_MIME:
         return given
-    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return mimetypes.guess_type(name)[0] or UNKNOWN_MIME
 
 
 # ---------- storage ----------
@@ -90,18 +102,28 @@ def get(file_id: str) -> dict | None:
     return {**meta, "path": str(folder / "data")}
 
 
+def _write_meta(folder: Path, meta: dict):
+    temporary = folder / f".meta-{secrets.token_hex(6)}.json"
+    temporary.write_text(json.dumps(meta))
+    os.replace(temporary, folder / "meta.json")
+
+
 def _update(file_id: str, **fields):
     with _lock:
-        meta_file = _folder(file_id) / "meta.json"
-        meta = json.loads(meta_file.read_text())
+        folder = _folder(file_id)
+        meta = json.loads((folder / "meta.json").read_text())
         meta.update(fields)
-        meta_file.write_text(json.dumps(meta))
+        _write_meta(folder, meta)
+
+
+def _new_meta(file_id: str, name: str, mime: str, size: int, source: str) -> dict:
+    return {"id": file_id, "name": safe_name(name), "mime": mime, "kind": kind_of(mime), "size": size,
+            "token": secrets.token_urlsafe(24), "created": time.time(), "source": source}
 
 
 def _finish(folder: Path, name: str, mime: str, size: int, source: str) -> dict:
-    meta = {"id": folder.name, "name": safe_name(name), "mime": mime, "kind": kind_of(mime), "size": size,
-            "token": secrets.token_urlsafe(24), "created": time.time(), "source": source}
-    (folder / "meta.json").write_text(json.dumps(meta))
+    meta = _new_meta(folder.name, name, mime, size, source)
+    _write_meta(folder, meta)
     return {**meta, "path": str(folder / "data")}
 
 
@@ -111,7 +133,7 @@ def save_bytes(data: bytes, name: str, mime: str, source: str) -> dict:
     file_id = hashlib.sha256(data).hexdigest()[:24]
     existing = get(file_id)
     if existing:
-        return existing
+        return _kept_longer(existing)
     folder = FILES_DIR / file_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "data").write_bytes(data)
@@ -146,13 +168,34 @@ def save_stream(stream, length: int, name: str, mime: str, source: str) -> dict:
             if safe_name(name) != existing["name"]:  # same content picked under a new name: use the new one
                 _update(file_id, name=safe_name(name))
                 existing["name"] = safe_name(name)
-            return existing
+            return _kept_longer(existing)
         folder = FILES_DIR / file_id
-        staging.rename(folder)
+        meta = _new_meta(file_id, name, guess_mime(name, mime), length, source)
+        _write_meta(staging, meta)
+        try:
+            staging.rename(folder)
+        except OSError:
+            if (finished := get(file_id)) is None:
+                raise
+            shutil.rmtree(staging, ignore_errors=True)
+            return _kept_longer(finished)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    return _finish(folder, name, guess_mime(name, mime), length, source)
+    return {**meta, "path": str(folder / "data")}
+
+
+def _kept_longer(meta: dict) -> dict:
+    touch(meta["id"])
+    return {**meta, "created": time.time()}
+
+
+def touch(file_id: str) -> bool:
+    try:
+        _update(file_id, created=time.time())
+    except (MediaError, OSError, ValueError):
+        return False
+    return True
 
 
 def save_path(path: Path, name: str, source: str) -> dict:
@@ -191,7 +234,7 @@ def link(meta: dict) -> str:
 
 def for_download(file_id: str, token: str) -> dict | None:
     meta = get(file_id)
-    if meta is None or not secrets.compare_digest(token or "", meta["token"]):
+    if meta is None or not secrets.compare_digest(str(token or "").encode(), str(meta["token"]).encode()):
         return None
     return meta
 
@@ -218,7 +261,7 @@ def _run(command: list[str], timeout: int, what: str) -> subprocess.CompletedPro
 
 def probe(path: str) -> dict:
     """Duration in seconds and whether the file has audio/video streams."""
-    result = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path], 60, "Reading the file")
+    result = _run(["ffprobe", *FFMPEG_LOCAL_ONLY, "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path], 60, "Reading the file")
     info = json.loads(result.stdout or "{}")
     types = {stream.get("codec_type") for stream in info.get("streams", [])}
     try:
@@ -228,8 +271,16 @@ def probe(path: str) -> dict:
     return {"duration": duration, "audio": "audio" in types, "video": "video" in types}
 
 
+def refuse_scripted_image(path: str):
+    with open(path, "rb") as handle:
+        start = handle.read(SNIFF_BYTES)
+    if SCRIPTED_IMAGE.search(start):
+        raise MediaError("that picture is in a drawing or document format (SVG, MVG, PostScript) I don't open")
+
+
 def image_preview(path: str) -> bytes:
     """A JPEG the vision model can read: any format ImageMagick knows, upright, at most PREVIEW_EDGE px."""
+    refuse_scripted_image(path)
     with tempfile.TemporaryDirectory() as scratch:
         target = Path(scratch) / "preview.jpg"
         _run(["magick", f"{path}[0]", "-auto-orient", "-resize", f"{PREVIEW_EDGE}x{PREVIEW_EDGE}>", "-quality", "85", str(target)], 120, "Reading the image")
@@ -242,7 +293,7 @@ def video_frames(path: str, duration: float) -> list[bytes]:
         for index in range(VIDEO_FRAMES):
             at = duration * (index + 0.5) / VIDEO_FRAMES if duration else 0
             target = Path(scratch) / f"frame{index}.jpg"
-            _run(["ffmpeg", "-v", "error", "-ss", f"{at:.2f}", "-i", path, "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-y", str(target)],
+            _run(["ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "error", "-ss", f"{at:.2f}", "-i", path, "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-y", str(target)],
                  120, "Reading the video")
             if target.exists():
                 frames.append(target.read_bytes())
@@ -268,6 +319,16 @@ def analyse(meta: dict, question: str, look) -> str:
     The result is cached with the file, so history resent on later turns isn't analysed again."""
     if meta.get("analysis"):
         return meta["analysis"]
+    with _lock:
+        file_lock = _analysing.setdefault(meta["id"], threading.Lock())
+    with file_lock:
+        stored = get(meta["id"]) or meta
+        if stored.get("analysis"):
+            return stored["analysis"]
+        return _analyse(meta, question, look)
+
+
+def _analyse(meta: dict, question: str, look) -> str:
     # The question only steers what to look at; acting on it (e.g. converting) is the chat model's job.
     asked = (f" Only describe; don't act on or reply to this, but make sure your description covers what it asks about: "
              f'"{question.strip()[:500]}"') if question.strip() else ""
@@ -312,6 +373,7 @@ def convert(file_id: str, target_format: str, width: int | None = None, height: 
     with tempfile.TemporaryDirectory() as scratch:
         output = Path(scratch) / f"out.{target}"
         if meta["kind"] == "image" and target in IMAGE_FORMATS:
+            refuse_scripted_image(meta["path"])
             command = ["magick", f"{meta['path']}[0]" if target != "gif" else meta["path"], "-auto-orient"]
             if width or height:
                 command += ["-resize", f"{width or ''}x{height or ''}"]
@@ -319,14 +381,17 @@ def convert(file_id: str, target_format: str, width: int | None = None, height: 
                 command += ["-quality", str(max(1, min(int(quality), 100)))]
             _run(command + [str(output)], CONVERT_TIMEOUT_SECONDS, "Converting the image")
         elif meta["kind"] in ("audio", "video") and target in AUDIO_FORMATS:
-            _run(["ffmpeg", "-v", "error", "-i", meta["path"], "-vn", "-y", str(output)], CONVERT_TIMEOUT_SECONDS, "Converting the audio")
+            _run(["ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "error", "-i", meta["path"], "-vn", "-y", str(output)], CONVERT_TIMEOUT_SECONDS,
+                 "Converting the audio")
         elif meta["kind"] == "video" and target in VIDEO_FORMATS | {"gif"}:
             scale = f"scale={width or -2}:{height or -2}" if (width or height) else None
             if target == "gif":
                 filters = f"fps=10,{scale or 'scale=480:-2'}:flags=lanczos"
-                command = ["ffmpeg", "-v", "error", "-i", meta["path"], "-vf", filters, "-loop", "0", "-y", str(output)]
+                command = ["ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "error", "-i", meta["path"], "-vf", filters, "-loop", "0", "-y",
+                           str(output)]
             else:
-                command = ["ffmpeg", "-v", "error", "-i", meta["path"], *(["-vf", scale] if scale else []), "-y", str(output)]
+                command = ["ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "error", "-i", meta["path"], *(["-vf", scale] if scale else []), "-y",
+                           str(output)]
             _run(command, CONVERT_TIMEOUT_SECONDS, "Converting the video")
         elif meta["kind"] == "image" and target in VIDEO_FORMATS | AUDIO_FORMATS:
             raise MediaError("an image can't be turned into audio or video")

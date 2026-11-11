@@ -280,6 +280,21 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 
 .panel.connecting > :not(.bar):not(.connect) { display: none; }
 .panel.connecting .bar-actions, .panel.connecting .model-picker { visibility: hidden; }
+.panel.showing-code > :not(.bar):not(.phone-code) { display: none; }
+.phone-code { flex: 1; overflow-y: auto; padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.phone-code[hidden] { display: none; }
+.phone-code h2 { margin: 4px 0 0; font-size: 16px; font-weight: 500; }
+.phone-code-image { width: 100%; max-width: 320px; align-self: center; image-rendering: pixelated; border-radius: 6px; }
+.phone-code-image:not([src]) { display: none; }
+.panel.showing-sites > :not(.bar):not(.chrome-sites) { display: none; }
+.chrome-sites { flex: 1; overflow-y: auto; padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.chrome-sites[hidden] { display: none; }
+.chrome-sites h2 { margin: 4px 0 0; font-size: 16px; font-weight: 500; }
+.site-list { display: flex; flex-direction: column; gap: 6px; }
+.site { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; background: var(--surface); }
+.site-name { flex: 1; font-size: 13px; overflow-wrap: anywhere; }
+.site .cancel { border: 0; border-radius: 8px; padding: 4px 10px; font-size: 12px; background: var(--surface-hover); color: var(--text); }
+.pairing-code { font-size: 13px; padding: 8px 10px; border-radius: 10px; background: var(--surface); user-select: all; overflow-wrap: anywhere; }
 .connect { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 .connect-form { display: flex; flex-direction: column; gap: 10px; }
 .connect-form h2 { margin: 4px 0 0; font-size: 16px; font-weight: 500; }

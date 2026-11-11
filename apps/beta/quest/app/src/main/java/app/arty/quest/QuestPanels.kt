@@ -119,30 +119,44 @@ private fun SetupField(label: String, value: String, onChange: (String) -> Unit,
 }
 
 @Composable
-fun SetupForm(state: QuestState, onSave: (String, String) -> Unit, onCancel: () -> Unit) {
+fun SetupForm(state: QuestState, onSave: (String, String) -> Unit, onSaveWithCode: (String, String) -> Unit, onCancel: () -> Unit) {
     var address by rememberSaveable { mutableStateOf("") }
+    var code by rememberSaveable { mutableStateOf("") }
     var key by rememberSaveable { mutableStateOf("") }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Heading("Connect to Arty")
         Line(SETUP_HELP, DimText)
-        SetupField("Headset address, e.g. ws://arty-server:8790/ws/headset", address, { address = it }, secret = false)
-        SetupField("Headset key", key, { key = it }, secret = true)
+        SetupField("Server address, e.g. arty-server.local", address, { address = it }, secret = false)
+        SetupField("Setup code, e.g. K7Q9-XM3P", code, { code = it }, secret = false)
+        if (code.isNotBlank()) pairingWarning(address)?.let { Line(it, DimText) }
+        if (BuildConfig.MANUAL_KEY_ALLOWED) SetupField("Or the long headset key", key, { key = it }, secret = true)
         if (state.setupProblem.isNotBlank()) Text(state.setupProblem, color = ArtyRed, fontSize = 15.sp, maxLines = 3)
         Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            if (state.canCancelSetup) TextButton(onClick = onCancel) { Text("Cancel", color = DimText) }
-            Button(onClick = { onSave(address, key) }, colors = ButtonDefaults.buttonColors(containerColor = ArtyRed)) {
-                Text("Connect")
+            if (state.canCancelSetup) TextButton(onClick = onCancel, enabled = !state.setupBusy) { Text("Cancel", color = DimText) }
+            Button(
+                enabled = !state.setupBusy,
+                onClick = { if (code.isNotBlank()) onSaveWithCode(address, code) else onSave(address, key) },
+                colors = ButtonDefaults.buttonColors(containerColor = ArtyRed),
+            ) {
+                Text(if (state.setupBusy) "Connecting..." else "Connect")
             }
         }
     }
 }
 
 @Composable
-fun OrbPanel(state: QuestState, onWakeChange: (Boolean) -> Unit, onSetup: (String, String) -> Unit, onOpenSetup: () -> Unit, onCancelSetup: () -> Unit) {
+fun OrbPanel(
+    state: QuestState,
+    onWakeChange: (Boolean) -> Unit,
+    onSetup: (String, String) -> Unit,
+    onSetupWithCode: (String, String) -> Unit,
+    onOpenSetup: () -> Unit,
+    onCancelSetup: () -> Unit,
+) {
     PanelFrame {
         if (state.setupOpen) {
-            SetupForm(state, onSetup, onCancelSetup)
+            SetupForm(state, onSetup, onSetupWithCode, onCancelSetup)
             return@PanelFrame
         }
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
