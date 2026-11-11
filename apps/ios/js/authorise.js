@@ -1,8 +1,11 @@
 import { h } from "./dom.js";
+import { qrImage } from "./qr.js";
 
 const CODE_SHAPE = /^[A-Z2-9]{4}-?[A-Z2-9]{4}$/;
 export const AUTHORISE_PARAM = "authorise";
 const ANSWER_FAILED = "Check the connection and try again.";
+const WEB_PROTOCOLS = new Set(["http:", "https:"]);
+const STARFIRE_CODE_PARAM = "code";
 
 export function readAuthoriseCode(search) {
   const raw = new URLSearchParams(search ?? "").get(AUTHORISE_PARAM);
@@ -23,6 +26,39 @@ export function setupHint(search) {
   if (!code) return null;
   return `A computer is waiting for you to approve it (code ${code}). Connect Arty here first and the approval opens `
     + "straight after. Arty on your home screen keeps its own settings, so this page needs connecting too.";
+}
+
+export function approveElsewhereLink(approvePage, code) {
+  if (!CODE_SHAPE.test(String(code ?? ""))) return null;
+  let page;
+  try {
+    page = new URL(String(approvePage ?? ""));
+  } catch {
+    return null;
+  }
+  if (!WEB_PROTOCOLS.has(page.protocol)) return null;
+  page.searchParams.set(STARFIRE_CODE_PARAM, code);
+  return page.toString();
+}
+
+export async function renderApproveElsewhere(container, { code, link, onPasteKey }) {
+  const qrSlot = h("div", { class: "qr-slot" });
+  container.replaceChildren(
+    h("img", { src: "icons/icon-180.png", alt: "" }),
+    h("h1", {}, "Approve this computer"),
+    h("p", { class: "code" }, code),
+    h("p", {}, "This browser has no Arty key, so approve it in starfire: open the link, or scan the code with your phone, "
+      + "sign in as an admin and approve the computer showing this code."),
+    qrSlot,
+    h("a", { class: "button primary", href: link, target: "_blank", rel: "noopener noreferrer" }, "Approve in starfire"),
+    h("button", { type: "button", class: "link-button", onclick: onPasteKey }, "Paste an API key instead"),
+  );
+  container.hidden = false;
+  try {
+    qrSlot.replaceChildren(await qrImage(link, `QR code that opens starfire's approve page for code ${code}`));
+  } catch (error) {
+    qrSlot.replaceChildren(h("p", { class: "notice error-text" }, error.message));
+  }
 }
 
 export function deviceSummary(pending) {

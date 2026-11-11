@@ -51,7 +51,6 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import app.arty.Connection
 import app.arty.SetupActivity
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -249,12 +248,10 @@ private fun ChatTopBar(vm: ArtyViewModel, onMenu: () -> Unit) {
                     trailingIcon = { Switch(checked = vm.instantNotifications, onCheckedChange = { vm.toggleInstantNotifications() }) },
                     onClick = { vm.toggleInstantNotifications() },
                 )
-                if (Connection.setUpOnPhone) {
-                    DropdownMenuItem(
-                        text = { Text("Brain connection", style = MaterialTheme.typography.bodyMedium) },
-                        onClick = { moreMenu = false; SetupActivity.open(context) },
-                    )
-                }
+                DropdownMenuItem(
+                    text = { Text("Brain connection", style = MaterialTheme.typography.bodyMedium) },
+                    onClick = { moreMenu = false; SetupActivity.open(context) },
+                )
             }
         }
     }

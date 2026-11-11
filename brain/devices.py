@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_HALF = 4
@@ -17,6 +18,9 @@ START_WINDOW_SECONDS = 60
 DEVICE_KEY_PREFIX = "arty_dev_"
 MAX_NAME_CHARS = 80
 UNNAMED = "A device"
+MAX_ACTIVE_DEVICES = 100
+APPROVE_PAGE_PATH = "/arty-devices.html"
+WEB_SCHEMES = ("http", "https")
 PENDING, APPROVED, DENIED = "pending", "approved", "denied"
 NOT_PRINTABLE = re.compile(r"[\x00-\x1f\x7f]+")
 
@@ -44,6 +48,13 @@ def normalised_code(code: str) -> str:
 
 def cleaned_name(name: str) -> str:
     return " ".join(NOT_PRINTABLE.sub(" ", str(name or "")).split())[:MAX_NAME_CHARS] or UNNAMED
+
+
+def approve_page(starfire_url: str) -> str:
+    parts = urlsplit(str(starfire_url or "").strip())
+    if parts.scheme not in WEB_SCHEMES or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}{APPROVE_PAGE_PATH}"
 
 
 def new_device_key() -> str:

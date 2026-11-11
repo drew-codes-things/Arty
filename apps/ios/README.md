@@ -26,7 +26,7 @@ Store.
 | Tasks | Background tasks: start one, approve, deny, mark done or cancel |
 | Calendar | The next 30 days from Arty and Google; add events in plain words, remove Arty's own |
 | More | Schedules, lectures (record or add a recording; read the notes), memory search, read-aloud, the keys, and **Approved devices** (every computer you approved, with a two-tap **Turn off**) |
-| Approve a computer | Opened by the link a computer shows when it asks to join (`/ios/?authorise=CODE`): type the code it shows, then Approve or Deny. A failed approve has **Try again** |
+| Approve a computer | Opened by the link a computer shows when it asks to join (`/ios/?authorise=CODE`): type the code it shows, then Approve or Deny. A failed approve has **Try again**. In a browser with no Arty key it shows the code with a link and a QR code to starfire's Arty devices page (when the brain has `BRAIN_STARFIRE_URL`), or **Paste an API key instead** |
 
 It talks to the brain with the same API as the Android app ([docs/API.md](../../docs/API.md)), as client `ios`.
 
@@ -63,7 +63,8 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
 | `js/api.js` | The brain API: keys on every request, chat jobs with polling, uploads, downloads, announcements |
 | `js/chat.js`, `js/conversations.js` | Chat screen and the chats saved on the phone (same history window as Android) |
 | `js/manage.js`, `js/updates.js`, `js/tasks.js` | Tasks, calendar, schedules, lectures, memory, approved devices and Updates |
-| `js/authorise.js` | The "approve this computer" sheet |
+| `js/authorise.js` | The "approve this computer" sheet, and the starfire link and QR code when this browser has no key |
+| `js/qr.js`, `js/vendor/qrcode-generator.js` | Draws QR codes as SVG (qrcode-generator 2.0.4, MIT, see `js/vendor/LICENSE-qrcode-generator.txt`) |
 | `js/setup.js`, `js/setupcode.js`, `js/scanner.js` | First start: scan the setup QR code or type the keys |
 | `js/markdown.js`, `js/links.js` | Safe markdown (everything escaped first) and Arty file links |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Home Screen install and opening without a connection |

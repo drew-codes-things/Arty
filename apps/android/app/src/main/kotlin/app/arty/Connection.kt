@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import app.arty.core.ArtyConfig
+import app.arty.core.ConnectionChoice
 import app.arty.core.ServerAddress
 import app.arty.core.StoredConnection
 import java.net.InetAddress
@@ -34,12 +35,11 @@ object Connection {
     private const val TAG_BITS = 128
     private const val IV_BYTES = 12
 
-    /** True when this build asks for the brain's details on the phone instead of having them built in. */
-    val setUpOnPhone: Boolean get() = BuildConfig.SETUP_ON_PHONE
+    fun current(context: Context): ArtyConfig? = ConnectionChoice.pick(stored(context), builtIn())
 
-    fun current(context: Context): ArtyConfig? =
-        if (setUpOnPhone) stored(context)
-        else ArtyConfig(BuildConfig.ARTY_BASE_URL, BuildConfig.ARTY_API_KEY, BuildConfig.CF_ACCESS_CLIENT_ID, BuildConfig.CF_ACCESS_CLIENT_SECRET)
+    private fun builtIn(): ArtyConfig? = ConnectionChoice.builtIn(
+        BuildConfig.ARTY_BASE_URL, BuildConfig.ARTY_API_KEY, BuildConfig.CF_ACCESS_CLIENT_ID, BuildConfig.CF_ACCESS_CLIENT_SECRET,
+    )
 
     fun isSet(context: Context): Boolean = current(context) != null
 

@@ -65,6 +65,20 @@ function realSleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+export async function approvePage({ base = "", fetchImpl = (...args) => globalThis.fetch(...args) } = {}) {
+  try {
+    const response = await fetchImpl(`${base.replace(/\/+$/, "")}/v1/device/approver`, {
+      method: "GET", headers: { Accept: "application/json" }, redirect: "manual", cache: "no-store",
+    });
+    if (response.status !== 200) return "";
+    const answer = await response.json();
+    return typeof answer?.approve_page === "string" ? answer.approve_page : "";
+  } catch (error) {
+    console.warn("Arty couldn't say where to approve this computer:", error?.message);
+    return "";
+  }
+}
+
 export class ArtyApi {
   constructor(settings, { base = "", fetchImpl = (...args) => globalThis.fetch(...args) } = {}) {
     this.settings = settings;

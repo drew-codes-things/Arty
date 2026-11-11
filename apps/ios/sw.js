@@ -2,7 +2,7 @@ const CACHE = "arty-ios-v4";
 const SHELL = [
   "./", "index.html", "app.css", "manifest.webmanifest",
   "js/app.js", "js/api.js", "js/authorise.js", "js/chat.js", "js/conversations.js", "js/dom.js", "js/links.js", "js/manage.js",
-  "js/markdown.js", "js/phone.js", "js/scanner.js", "js/settings.js", "js/setup.js", "js/setupcode.js", "js/tasks.js", "js/updates.js",
+  "js/markdown.js", "js/phone.js", "js/qr.js", "js/scanner.js", "js/settings.js", "js/setup.js", "js/setupcode.js", "js/tasks.js", "js/updates.js",
   "fonts/plex_sans_regular.ttf", "fonts/plex_sans_medium.ttf", "fonts/plex_sans_semibold.ttf", "fonts/plex_mono_regular.ttf",
   "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png",
 ];

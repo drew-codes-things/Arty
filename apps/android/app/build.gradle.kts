@@ -22,8 +22,8 @@ android {
         applicationId = "app.arty"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.2.1"
     }
 
     // personal: the owner's own build, with the brain's address and keys built in (keep that APK private).
@@ -32,7 +32,6 @@ android {
     productFlavors {
         create("personal") {
             dimension = "connection"
-            buildConfigField("boolean", "SETUP_ON_PHONE", "false")
             buildConfigField("String", "ARTY_BASE_URL", secret("arty.baseUrl"))
             buildConfigField("String", "ARTY_API_KEY", secret("arty.apiKey"))
             buildConfigField("String", "CF_ACCESS_CLIENT_ID", secret("cf.accessClientId"))
@@ -41,7 +40,6 @@ android {
         create("shareable") {
             dimension = "connection"
             applicationIdSuffix = ".shareable"
-            buildConfigField("boolean", "SETUP_ON_PHONE", "true")
             for (field in listOf("ARTY_BASE_URL", "ARTY_API_KEY", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET")) {
                 buildConfigField("String", field, "\"\"")
             }

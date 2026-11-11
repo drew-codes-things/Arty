@@ -113,6 +113,8 @@ Held for approval: clicking post/send/connect/apply/delete-style buttons, submit
 - `GET /v1/device/pending?code=` and `POST /v1/device/approve` with `{"user_code", "approve": true | false}` are for the signed-in app.
 - `GET /v1/devices` lists the approved computers (`id`, `name`, `address`, `created`, `last_used`; never the key). `DELETE /v1/devices/{id}` turns one key off at once.
 - A device key works everywhere the shared key does. Its `/v1/identity` proof is the HMAC keyed with the SHA-256 hex of the key.
+- `POST /v1/devices` with `{"name"}` makes a named device key straight away and returns `{"id", "name", "api_key"}`; the key is shown only in this answer. Only the brain's own keys (`BRAIN_API_KEY` or `ARTY_API_KEY`) may call it: a device key gets 403. At most 100 device keys can be live at once (429 after that).
+- `GET /v1/device/approver` (no key) returns `{"approve_page"}`: starfire's approve page when `BRAIN_STARFIRE_URL` is set, otherwise an empty string. The approve sheet uses it to send a browser with no Arty key to starfire.
 
 ## Health
 

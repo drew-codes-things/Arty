@@ -48,7 +48,8 @@ Live connection  ->  new Updates arrive as notifications straight away
 
 The shareable build keeps the connection details in the app's private storage, encrypted with a key held in
 Android's Keystore that never leaves the phone. Backups are off, so they don't go to the cloud either. Change them
-later from the chat screen's speaker menu > **Brain connection**. Where each detail comes from, and how the QR code
+later from the chat screen's speaker menu > **Brain connection**. The personal build starts with its built-in details
+and has the same menu: a connection saved there replaces the built-in one. Where each detail comes from, and how the QR code
 works: [docs/connecting-a-phone.md](../../docs/connecting-a-phone.md).
 
 Plain `http://` is only accepted for home-network addresses (`192.168.x.x`, `10.x.x.x`, `.local` and the like), so
@@ -117,8 +118,8 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
 - `core/` - `ArtyClient`, a plain-Kotlin client for the brain API (no Android dependencies), with its tests.
 - `app/` - the Jetpack Compose UI. `ArtyViewModel` holds state and actions; chats are JSON files in the app's
   private storage (`ConversationStore`), and a reply still being written survives the app closing.
-- `Connection.kt` - where the app finds Arty: built in for the personal build, or the Keystore-encrypted details
-  from `SetupActivity` for the shareable one.
+- `Connection.kt` - where the app finds Arty: the Keystore-encrypted details saved by `SetupActivity` when there are
+  any, otherwise the personal build's built-in ones.
 - Chat turns run as brain jobs that the app polls, because Cloudflare ends any request that waits more than 100
   seconds. The wait rides out a dropped connection, 429, 500, 502 to 504 and Cloudflare's 520 to 530 (`ChatWait`).
 - `design/` - the Arty logo source and icon previews. Fonts are IBM Plex Sans and Mono (SIL Open Font License).
@@ -134,7 +135,7 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
 
 If a phone with the app is lost: delete its service token in Cloudflare Zero Trust > Access controls > Service credentials,
 and/or rotate `ARTY_API_KEY` in `/srv/ai/secrets/brain.env` on the brain. A shareable install then just asks for the
-new details; the personal build needs rebuilding with them.
+new details; the personal build needs rebuilding with them, or a new code scanned under **Brain connection**.
 
 ## License
 

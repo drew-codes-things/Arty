@@ -81,7 +81,7 @@ Check it: `/ios/` loads without the token, and `/v1/models` still gets Cloudflar
 
 If a phone with the app is lost, delete its service token (Access controls > Service credentials): it stops working
 immediately. Rotate `ARTY_API_KEY` in `/srv/ai/secrets/brain.env` on the brain too; the shareable app then asks
-for the new key, and the personal build needs rebuilding with it.
+for the new key, and the personal build needs rebuilding with it, or a new code scanned under **Brain connection**.
 
 ---
 

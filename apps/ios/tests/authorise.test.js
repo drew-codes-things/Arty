@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ArtyApi } from "../js/api.js";
-import { codesMatch, deviceSummary, readAuthoriseCode, setupHint, withoutAuthoriseCode } from "../js/authorise.js";
+import { ArtyApi, approvePage } from "../js/api.js";
+import { approveElsewhereLink, codesMatch, deviceSummary, readAuthoriseCode, setupHint, withoutAuthoriseCode } from "../js/authorise.js";
 
 function reply(status, body) {
   const text = JSON.stringify(body);
@@ -67,4 +67,26 @@ test("a link opened before Arty is set up here says an approval is waiting", () 
   assert.match(setupHint("?authorise=abcd-efgh"), /home screen keeps its own settings/);
   assert.equal(setupHint(""), null);
   assert.equal(setupHint("?authorise=<b>"), null);
+});
+
+test("with no key here the computer is sent to starfire's approve page with its code", () => {
+  assert.equal(approveElsewhereLink("https://starfire.example/arty-devices.html", "ABCD-EFGH"),
+    "https://starfire.example/arty-devices.html?code=ABCD-EFGH");
+  assert.equal(approveElsewhereLink("", "ABCD-EFGH"), null);
+  assert.equal(approveElsewhereLink("javascript:alert(1)", "ABCD-EFGH"), null);
+  assert.equal(approveElsewhereLink("https://starfire.example/arty-devices.html", "not a code"), null);
+});
+
+test("the approve page is asked of the brain this page came from, without a key", async () => {
+  const { calls, fetchImpl } = fakeFetch(reply(200, { approve_page: "https://starfire.example/arty-devices.html" }));
+  assert.equal(await approvePage({ base: "https://arty.example", fetchImpl }), "https://starfire.example/arty-devices.html");
+  assert.equal(calls[0].url, "https://arty.example/v1/device/approver");
+  assert.equal(calls[0].headers?.Authorization, undefined);
+});
+
+test("no approve page is offered when the brain can't say or has none", async () => {
+  assert.equal(await approvePage({ fetchImpl: fakeFetch(reply(200, { approve_page: "" })).fetchImpl }), "");
+  assert.equal(await approvePage({ fetchImpl: fakeFetch(reply(404, {})).fetchImpl }), "");
+  assert.equal(await approvePage({ fetchImpl: async () => { throw new Error("offline"); } }), "");
+  assert.equal(await approvePage({ fetchImpl: fakeFetch(reply(200, { approve_page: 5 })).fetchImpl }), "");
 });

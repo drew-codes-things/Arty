@@ -12,9 +12,11 @@
 
 1. On the computer, open **Arty Desktop**, then its tray menu (the Arty icon by the clock) and choose **Phone setup
    code…**. Arty's window shows a QR code made from the connection this computer already uses.
+   Or, with starfire set up (`BRAIN_STARFIRE_URL`), open **Settings > Accounts > Open Arty devices** in starfire as an
+   admin, type a name under **Make a key** and press Make: a new key for that phone and its QR code are shown once.
 2. On the phone, open Arty and tap **Scan QR code**:
-   - **Android** (shareable app): on the **Connect to Arty** screen. Later, from the chat menu's **Brain
-     connection**. The scanner is Google's, so the app needs no camera permission.
+   - **Android**: the shareable app shows it on the **Connect to Arty** screen. Either build has it later in the chat
+     menu's **Brain connection**. The scanner is Google's, so the app needs no camera permission.
    - **iPhone**: on the first screen. If Arty is already set up, use **More > Forget the keys on this iPhone**
      first. Allow the camera when asked.
 3. **Android** fills in the fields and names the address the details will be sent to. Check it's your Arty, then tap

@@ -60,7 +60,7 @@ from api_support import (
     client_name)
 from archive import is_overheard, message_text, archive_records, recent_exchanges, recall_records, recall
 from environment import BRAIN_KEY, APP_KEY, HUB_KEY
-from settings import LISTEN_HOST, LISTEN_PORT, HUB_URL, OLLAMA_URL, CONFIG_FILE, TRUSTED_PROXIES
+from settings import LISTEN_HOST, LISTEN_PORT, HUB_URL, OLLAMA_URL, CONFIG_FILE, TRUSTED_PROXIES, STARFIRE_URL
 from native_tools import NATIVE_TOOLS, BACKGROUND_ONLY_EXCLUDED, API_CALLABLE_NATIVE
 from reply_rules import (
     OFFER_SENTENCE, trim_offers, URL_TAGS, PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING,
@@ -1918,6 +1918,19 @@ def issue_device_key(request: devices.Request) -> str:
     return key
 
 
+def make_device_key(name: str, address: str) -> dict:
+    if len(store.list_devices()) >= devices.MAX_ACTIVE_DEVICES:
+        raise ApiError(429, "too many device keys are live; turn some off in Approved devices first")
+    named = devices.cleaned_name(name)
+    key = devices.new_device_key()
+    made = store.add_device(named, address, devices.key_hash(key))
+    return {"id": made, "name": named, "api_key": key}
+
+
+def is_main_key(supplied: str) -> bool:
+    return any(same_secret(supplied, f"Bearer {key}") for key in (BRAIN_KEY, APP_KEY) if key)
+
+
 def is_device_key(supplied: str) -> bool:
     token = supplied.removeprefix("Bearer ")
     if not token.startswith(devices.DEVICE_KEY_PREFIX):
@@ -1958,8 +1971,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def authorised(self):
         supplied = self.headers.get("Authorization", "")
-        keys = [key for key in (BRAIN_KEY, APP_KEY) if key]
-        if any(same_secret(supplied, f"Bearer {key}") for key in keys) or is_device_key(supplied):
+        if is_main_key(supplied) or is_device_key(supplied):
             return True
         self.send_json(401, {"error": {"message": "invalid API key"}})
         return False
@@ -2022,6 +2034,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.hook("GET")
         if segments == ["health"]:
             return self.send_json(200, {"ok": True})
+        if segments == ["v1", "device", "approver"]:
+            return self.send_json(200, {"approve_page": devices.approve_page(STARFIRE_URL)})
         if segments == ["v1", "identity"]:
             nonce = (query.get("nonce") or [""])[0]
             if not IDENTITY_NONCE.fullmatch(nonce):
@@ -2220,6 +2234,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(error.status, {"error": {"message": str(error)}})
 
     def dispatch_post(self, segments, request):
+        if segments == ["v1", "devices"]:
+            if not is_main_key(self.headers.get("Authorization", "")):
+                raise ApiError(403, "only Arty's own key can make device keys")
+            return self.send_json(201, make_device_key(text_field(request, "name"), self.caller_address()))
         if segments == ["v1", "device", "approve"]:
             if not isinstance(request.get("approve"), bool):
                 raise ApiError(400, "approve must be true or false")

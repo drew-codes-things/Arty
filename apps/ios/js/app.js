@@ -2,8 +2,8 @@ import { ChatView } from "./chat.js";
 import { formatMoment, h, sectionHead, twoStepButton } from "./dom.js";
 import { renderCalendar, renderDevices, renderLectures, renderMemory, renderSchedules, renderTasks } from "./manage.js";
 import { renderSetup } from "./setup.js";
-import { readAuthoriseCode, renderAuthorise, setupHint, withoutAuthoriseCode } from "./authorise.js";
-import { ArtyApi } from "./api.js";
+import { approveElsewhereLink, readAuthoriseCode, renderApproveElsewhere, renderAuthorise, setupHint, withoutAuthoriseCode } from "./authorise.js";
+import { ArtyApi, approvePage } from "./api.js";
 import { forgetEverything, forgetSettings, loadPreferences, loadSettings, savePreferences } from "./settings.js";
 import { UpdatesFeed } from "./updates.js";
 
@@ -131,9 +131,21 @@ function boot() {
   registerOfflineSupport();
   const settings = loadSettings(storage);
   if (settings) return startApp(new ArtyApi(settings));
+  const code = readAuthoriseCode(window.location.search);
+  if (code) return offerApproveElsewhere(code);
+  return showSetup();
+}
+
+function showSetup() {
   renderSetup(byId("setup"), storage, (api) => startApp(api));
   const hint = setupHint(window.location.search);
   if (hint) byId("setup").prepend(h("p", { class: "notice", role: "status" }, hint));
+}
+
+async function offerApproveElsewhere(code) {
+  const link = approveElsewhereLink(await approvePage(), code);
+  if (!link) return showSetup();
+  return renderApproveElsewhere(byId("setup"), { code, link, onPasteKey: showSetup });
 }
 
 boot();
