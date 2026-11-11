@@ -238,7 +238,7 @@ class ScriptedPictures(unittest.TestCase):
         run.assert_not_called()
 
     def test_raw_attributes_are_off_in_pandoc(self):
-        self.assertIn("-raw_attribute", sharing.PANDOC_SAFELY)
+        self.assertIn("-raw_attribute", sharing.PANDOC_READER)
 
     def test_browser_profiles_are_private(self):
         for path in ("/home/ai/.gmail-chrome/Default/Cookies", "/home/ai/.browser-profile/Default/Login Data",

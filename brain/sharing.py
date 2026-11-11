@@ -55,7 +55,8 @@ FORMAT_ALIASES = {"word": "docx", "doc": "docx", "powerpoint": "pptx", "ppt": "p
                   "xls": "xlsx", "spreadsheet": "xlsx", "markdown": "md", "text": "txt", "web": "html", "htm": "html"}
 TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 NUMBER = re.compile(r"^-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
-PDF_STYLE = ("<style>body{font-family:sans-serif;max-width:46em;margin:2em auto;line-height:1.5}"
+PDF_STYLE = ("<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\">"
+             "<style>body{font-family:sans-serif;max-width:46em;margin:2em auto;line-height:1.5}"
              "table{border-collapse:collapse}td,th{border:1px solid #999;padding:.3em .6em}</style>")
 XLSX_SCRIPT = (
     "import json,os,sys\nfrom openpyxl import Workbook\nfrom openpyxl.styles import Font\n"
@@ -396,8 +397,10 @@ def _desktop(command: str, stdin: bytes | None = None) -> None:
 
 SHEET_TITLE_CHARS = 31
 NOT_IN_SHEET_TITLES = re.compile(r"[\\/?*\[\]:]")
-PANDOC_SAFELY = "--sandbox -f markdown-raw_html-raw_attribute"
-CHROME_WITHOUT_SCRIPTS = "--blink-settings=scriptEnabled=false"
+PANDOC_READER = "-f markdown-raw_html-raw_attribute"
+WEB_IMAGES_ONLY = 'function Image(image) if image.src:match("^https?://") then return image end return {} end'
+WRITE_IMAGE_FILTER = f"images=$(mktemp --suffix=.lua) && printf %s {shlex.quote(WEB_IMAGES_ONLY)} > \"$images\""
+PANDOC_SAFELY = f"{PANDOC_READER} --lua-filter=\"$images\""
 
 
 def sheet_title(title: str) -> str:
@@ -429,15 +432,17 @@ def _build_document(content: str, title: str, extension: str, target: str) -> No
     try:
         if extension == "pdf":
             html = remote.quoted(target.rsplit(".", 1)[0] + ".print.html")
-            _desktop(f"style=$(mktemp) && printf %s {shlex.quote(PDF_STYLE)} > \"$style\" && "
+            _desktop(f"style=$(mktemp) && printf %s {shlex.quote(PDF_STYLE)} > \"$style\" && {WRITE_IMAGE_FILTER} && "
                      f"pandoc {PANDOC_SAFELY} {source_path} -s {metadata} -H \"$style\" -o {html} && profile=$(mktemp -d) && "
-                     f"google-chrome --headless=new --disable-gpu {CHROME_WITHOUT_SCRIPTS} --user-data-dir=\"$profile\" "
+                     f"google-chrome --headless=new --disable-gpu --user-data-dir=\"$profile\" "
                      f"--no-pdf-header-footer "
                      f"--print-to-pdf={path} \"file://$(realpath {html})\" >/dev/null 2>&1; "
-                     f"rm -rf \"$profile\" \"$style\" {html}; [ -s {path} ] || {{ echo 'Chrome made no PDF'; exit 1; }}")
+                     f"rm -rf \"$profile\" \"$style\" \"$images\" {html}; "
+                     f"[ -s {path} ] || {{ echo 'Chrome made no PDF'; exit 1; }}")
         else:
             standalone = "-s" if extension in ("html", "rtf") else ""
-            _desktop(f"pandoc {PANDOC_SAFELY} {source_path} {standalone} {metadata} -o {path}")
+            _desktop(f"{WRITE_IMAGE_FILTER} && pandoc {PANDOC_SAFELY} {source_path} {standalone} {metadata} -o {path}; "
+                     f"made=$?; rm -f \"$images\"; exit $made")
     finally:
         remote.text(f"rm -f {source_path}")
 

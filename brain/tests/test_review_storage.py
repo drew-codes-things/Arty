@@ -229,7 +229,30 @@ class Sharing(unittest.TestCase):
             sharing._build_document("# Hi\n<script>x</script>", "Hi", "pdf", "~/x.pdf")
             sharing._build_document("# Hi", "Hi", "docx", "~/x.docx")
         pandoc = [command for command in commands if "pandoc" in command]
-        self.assertTrue(all("--sandbox" in command and "markdown-raw_html" in command for command in pandoc))
+        self.assertEqual(len(pandoc), 2)
+        self.assertTrue(all("markdown-raw_html-raw_attribute" in command and "--lua-filter=" in command
+                            for command in pandoc))
+
+    def test_debian_pandoc_can_still_read_its_templates(self):
+        commands = []
+        with mock.patch.object(sharing, "_desktop", lambda command, stdin=None: commands.append(command)), \
+                mock.patch.object(sharing.remote, "text", return_value=(0, "")):
+            for extension in ("docx", "pptx", "epub", "pdf"):
+                sharing._build_document("# Hi", "Hi", extension, f"~/x.{extension}")
+        self.assertFalse([command for command in commands if "--sandbox" in command])
+
+    def test_chrome_prints_with_scripts_blocked_by_the_page_not_a_flag(self):
+        commands = []
+        with mock.patch.object(sharing, "_desktop", lambda command, stdin=None: commands.append(command)), \
+                mock.patch.object(sharing.remote, "text", return_value=(0, "")):
+            sharing._build_document("# Hi", "Hi", "pdf", "~/x.pdf")
+        printing = next(command for command in commands if "google-chrome" in command)
+        self.assertNotIn("scriptEnabled", printing)
+        self.assertIn("script-src 'none'", sharing.PDF_STYLE)
+
+    def test_only_web_images_are_kept_in_documents(self):
+        self.assertIn('image.src:match("^https?://")', sharing.WEB_IMAGES_ONLY)
+        self.assertIn("return {}", sharing.WEB_IMAGES_ONLY)
 
     def test_the_address_checked_is_the_address_connected_to(self):
         lookups = iter([[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))],

@@ -56,7 +56,7 @@ class MakeDocumentTest(unittest.TestCase):
         self.assertTrue(result.startswith("Sent ~/Documents/Arty/Cotton-"))
         self.assertTrue(any(command.startswith("cat > ") and stdin == b"# Cotton\n\nIt comes from seed pods."
                             for command, stdin in self.commands))
-        pandoc = next(command for command, _ in self.commands if command.startswith("pandoc"))
+        pandoc = next(command for command, _ in self.commands if " pandoc " in command)
         self.assertIn(".docx", pandoc)
         self.assertNotIn("--metadata", pandoc)
 
