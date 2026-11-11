@@ -11,8 +11,8 @@
 </div>
 
 > **Arty Code is being replaced by Arty CLI**, its own project at
-> [github.com/drew-codes-things/ArtyCode](https://github.com/drew-codes-things/ArtyCode). Arty CLI logs in to Arty,
-> Claude or Gemini, and adds `/model`, hooks, MCP servers, skills and installers for Debian and Windows. Use Arty CLI
+> [github.com/drew-codes-things/ArtyCode](https://github.com/drew-codes-things/ArtyCode). Arty CLI talks to your Arty
+> only, and adds `/model`, hooks, MCP servers, skills and installers for Debian and Windows. Use Arty CLI
 > for anything new; this folder stays only until the move is finished.
 
 ---

@@ -205,15 +205,14 @@ Arty CLI is now its own project: [ArtyCode](https://github.com/drew-codes-things
 
 ### New
 - `arty` opens it; installers for Debian (`install.sh`) and Windows (`install.ps1`, PowerShell 5.1).
-- Log in to Arty by key or by approving the device in the iPhone app, or with a Claude or Gemini key.
-- `/model` lists every downloaded brain model plus Claude and Gemini models; `/effort` is remembered.
+- Talks to your Arty only. `arty login` takes an Arty API key or opens the approve page in your browser.
+- `/model` lists every downloaded brain model.
 - Hooks (with JSON decisions), MCP servers over stdio, skills, notebooks, parallel explore helpers, saved allow and deny rules, `/undo`, and headless `-p --output-format json`.
-- Retry with back-off that honours Retry-After, and Claude's thinking shown dim as it arrives.
+- Retry with back-off that honours Retry-After.
 - An Arty red look; `NO_COLOR` is respected.
 
 ### Fixed
 - Tools and the system prompt stay the same for a whole turn; summarising starts at 75% of the model's window. (N-X2, N-X18)
-- Gemini: the free-tier minute limit is retried, a busy model says so, and search is dropped once when the key has no quota.
 - Device keys are proved with the SHA-256 hex of the key.
 
 ### Security
