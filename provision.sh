@@ -1,7 +1,5 @@
 #!/bin/bash
 # One-off (and safe to re-run) setup for Arty's extra capabilities. Run from the laptop.
-# Secrets are generated on the server and written straight into root-only files in
-# /srv/ai/secrets on CT 104; none are printed.
 set -euo pipefail
 cd "$(dirname "$0")"
 HOSTS_FILE=${ARTY_HOSTS_FILE:-./hosts.env}
@@ -16,13 +14,25 @@ DESKTOP_ADDRESS=${DESKTOP_ADDRESS:?set DESKTOP_ADDRESS, see hosts.env.example}
 HOST_ADDRESS=${HOST_ADDRESS:?set HOST_ADDRESS, see hosts.env.example}
 NETWORK=${NETWORK:?set NETWORK, see hosts.env.example}
 DESKTOP=${DESKTOP:-ai@$DESKTOP_ADDRESS}
-HEAL_GUESTS=${HEAL_GUESTS-100 101 102 103 $DESKTOP_VMID}
-NEXTCLOUD_CT=${NEXTCLOUD_CT-100}
+HEAL_GUESTS=${HEAL_GUESTS:-}
+NEXTCLOUD_CT=${NEXTCLOUD_CT:-}
+HOST_FACTS_FILE=${HOST_FACTS_FILE:-}
 TIMEZONE=${TIMEZONE:-Europe/London}
 SET_BACKUP_JOBS=${SET_BACKUP_JOBS:-yes}
+BACKUP_JOB=${BACKUP_JOB:-}
 YT_DLP_VERSION=${YT_DLP_VERSION:-}
 case "$YT_DLP_VERSION" in
   *[!0-9.]*) echo "YT_DLP_VERSION may only hold digits and dots" >&2; exit 1 ;;
+esac
+case "$HOST_FACTS_FILE" in
+  "" | /*) ;;
+  *) echo "HOST_FACTS_FILE must be an absolute path" >&2; exit 1 ;;
+esac
+case "$HOST_FACTS_FILE" in
+  *[!A-Za-z0-9/._-]*) echo "HOST_FACTS_FILE may only hold letters, digits and / . _ -" >&2; exit 1 ;;
+esac
+case "$BACKUP_JOB" in
+  *[!A-Za-z0-9_-]*) echo "BACKUP_JOB may only hold letters, digits, _ and -" >&2; exit 1 ;;
 esac
 
 echo "== desktop VM: document, OCR and clipboard tools"
@@ -36,7 +46,7 @@ scp -q bin/arty-gpu-select "$PROXMOX:/usr/local/sbin/arty-gpu-select"
 scp -q services/arty-gpu-select.service "$PROXMOX:/etc/systemd/system/arty-gpu-select.service"
 scp -q bin/ollama-gpu-env services/ollama-gpu.conf "$PROXMOX:/tmp/"
 ssh "$PROXMOX" bash -s -- "$CT" "$DESKTOP_VMID" "$AI_ADDRESS" "$DESKTOP_ADDRESS" "$HOST_ADDRESS" "$NETWORK" \
-  "$HEAL_GUESTS" "$NEXTCLOUD_CT" "$TIMEZONE" "$SET_BACKUP_JOBS" <<'REMOTE'
+  "$HEAL_GUESTS" "$NEXTCLOUD_CT" "$TIMEZONE" "$SET_BACKUP_JOBS" "$HOST_FACTS_FILE" "$BACKUP_JOB" <<'REMOTE'
 set -euo pipefail
 CT=$1
 DESKTOP_VMID=$2
@@ -48,8 +58,9 @@ HEAL_GUESTS=$7
 NEXTCLOUD_CT=$8
 TIMEZONE=$9
 SET_BACKUP_JOBS=${10}
+HOST_FACTS_FILE=${11}
+BACKUP_JOB=${12}
 
-# Write KEY=<value from stdin> into a root-only secrets file on CT 104, replacing any old value.
 set_secret() {
   pct exec $CT -- bash -c 'f=/srv/ai/secrets/$1; k=$2; v=$(cat); umask 077; touch "$f"; grep -v "^$k=" "$f" > "$f.tmp" || true; printf "%s=%s\n" "$k" "$v" >> "$f.tmp"; mv "$f.tmp" "$f"; chmod 600 "$f"' _ "$1" "$2"
 }
@@ -60,7 +71,6 @@ has_secret() {
 echo "== Proxmox: ai@pve can read status everywhere and snapshot VM $DESKTOP_VMID only"
 pveum role add ArtyDesktop -privs "VM.Audit VM.Snapshot" 2>/dev/null || pveum role modify ArtyDesktop -privs "VM.Audit VM.Snapshot"
 pveum user add ai@pve --comment "Arty AI: read-only, plus snapshots of its own desktop" 2>/dev/null || true
-# Self-healing: Arty may start/restart these guests, only after the user taps Fix (never its own CT 104).
 pveum role add ArtyHeal -privs "VM.Audit VM.PowerMgmt" 2>/dev/null || pveum role modify ArtyHeal -privs "VM.Audit VM.PowerMgmt"  # Audit too: a role on a guest replaces the one inherited from /
 for vmid in $HEAL_GUESTS; do
   pveum acl modify /vms/$vmid -user ai@pve -role ArtyHeal
@@ -155,13 +165,17 @@ echo "   https://$AI_ADDRESS:8443 is up"
 INNER
 
 echo "== Proxmox: daily host facts (updates waiting, last backups) for Arty's weekly report"
+if [ -z "$HOST_FACTS_FILE" ]; then
+  echo "   skipped (HOST_FACTS_FILE is empty)"
+else
 chmod 755 /usr/local/sbin/homelab-facts  # copied over before this block
-cat > /etc/systemd/system/homelab-facts.service <<'EOF'
+cat > /etc/systemd/system/homelab-facts.service <<EOF
 [Unit]
 Description=Write host facts (updates, backups) for Arty's weekly report
 
 [Service]
 Type=oneshot
+Environment=HOST_FACTS_FILE=$HOST_FACTS_FILE
 ExecStart=/usr/local/sbin/homelab-facts
 EOF
 cat > /etc/systemd/system/homelab-facts.timer <<'EOF'
@@ -177,7 +191,27 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable --now homelab-facts.timer >/dev/null
-/usr/local/sbin/homelab-facts
+HOST_FACTS_FILE=$HOST_FACTS_FILE /usr/local/sbin/homelab-facts
+fi
+
+echo "== Arty API key and alert token"
+if ! has_secret brain.env ARTY_API_KEY; then
+  printf 'sk-arty-%s' "$(openssl rand -hex 24)" | set_secret brain.env ARTY_API_KEY
+fi
+# Uptime Kuma's webhook to /hooks/alert carries this token in its URL.
+if ! has_secret brain.env ALERT_TOKEN; then
+  openssl rand -hex 24 | tr -d "\n" | set_secret brain.env ALERT_TOKEN
+fi
+pct exec $CT -- bash -c 'umask 077; . /srv/ai/secrets/brain.env
+cat > /srv/ai/secrets/arty-api.txt <<EOF
+Arty API (home network only). Docs: docs/API.md in the Arty project.
+base_url: http://$1:8081/v1
+api_key: $ARTY_API_KEY
+model: Arty   (or arty/<model> to pick a model per request)
+
+Notifications: Updates in the Arty phone and desktop apps.
+EOF' _ "$AI_ADDRESS"
+echo "   saved in /srv/ai/secrets/arty-api.txt on CT $CT"
 
 echo "== Proxmox: security watch (new SSH logins, failed-login bursts, new devices, new open ports)"
 chmod 755 /usr/local/sbin/homelab-security  # copied over before this block
@@ -209,7 +243,7 @@ systemctl enable --now homelab-security.timer >/dev/null
 echo "== CT $CT: one context size for every Ollama caller"
 # A model loaded with one context size is reloaded (and its prompt cache lost) when a caller asks
 # for another, so callers that don't say (Open WebUI's titles) get the brain's size too.
-pct exec $CT -- bash -c 'mkdir -p /etc/systemd/system/ollama.service.d && printf "[Service]\nEnvironment=\"OLLAMA_CONTEXT_LENGTH=12288\"\nEnvironment=\"OLLAMA_MAX_LOADED_MODELS=2\"\n" > /etc/systemd/system/ollama.service.d/context.conf && systemctl daemon-reload && systemctl restart ollama'
+pct exec $CT -- bash -c 'mkdir -p /etc/systemd/system/ollama.service.d && printf "[Service]\nEnvironment=\"OLLAMA_CONTEXT_LENGTH=12288\"\nEnvironment=\"OLLAMA_MAX_LOADED_MODELS=2\"\nEnvironment=\"OLLAMA_KV_CACHE_TYPE=q8_0\"\n" > /etc/systemd/system/ollama.service.d/context.conf && systemctl daemon-reload && systemctl restart ollama'
 
 echo "== GPU: CT $CT gets whichever card is fitted (NVIDIA: CUDA, AMD: Vulkan), checked at every boot"
 chmod 755 /usr/local/sbin/arty-gpu-select  # copied over before this block
@@ -234,47 +268,42 @@ mkdir -p /srv/ai/media/models /srv/ai/brain/files
 echo "   ffmpeg $(ffmpeg -version | head -1 | cut -d' ' -f3), $(magick -version | head -1 | cut -d' ' -f2-3), whisper small ready"
 INNER
 
-echo "== Arty API key and alert token"
-if ! has_secret brain.env ARTY_API_KEY; then
-  printf 'sk-arty-%s' "$(openssl rand -hex 24)" | set_secret brain.env ARTY_API_KEY
-fi
-# Uptime Kuma's webhook to /hooks/alert carries this token in its URL.
-if ! has_secret brain.env ALERT_TOKEN; then
-  openssl rand -hex 24 | tr -d "\n" | set_secret brain.env ALERT_TOKEN
-fi
-pct exec $CT -- bash -c 'umask 077; . /srv/ai/secrets/brain.env
-cat > /srv/ai/secrets/arty-api.txt <<EOF
-Arty API (home network only). Docs: docs/API.md in the Arty project.
-base_url: http://$1:8081/v1
-api_key: $ARTY_API_KEY
-model: assistant-core   (or arty/<model> to pick a model per request)
-
-Notifications: Updates in the Arty phone and desktop apps.
-EOF' _ "$AI_ADDRESS"
-echo "   saved in /srv/ai/secrets/arty-api.txt on CT $CT"
-
-echo "== backups: core-sys, ai and ai-desktop nightly (keep 3); osint-tools weekly"
+echo "== backups: add the brain and Arty's PC to the vzdump job named in BACKUP_JOB"
 if [ "$SET_BACKUP_JOBS" != yes ]; then
   echo "   skipped (SET_BACKUP_JOBS=$SET_BACKUP_JOBS)"
+elif [ -z "$BACKUP_JOB" ]; then
+  echo "   skipped (BACKUP_JOB is empty)"
 else
-python3 - <<'PY'
+JOBS_CFG=/etc/pve/jobs.cfg CT=$CT DESKTOP_VMID=$DESKTOP_VMID BACKUP_JOB=$BACKUP_JOB python3 - <<'PY'
+import os
 import re
-path = "/etc/pve/jobs.cfg"
+import sys
+path = os.environ["JOBS_CFG"]
+job = os.environ["BACKUP_JOB"]
+wanted = [os.environ["CT"], os.environ["DESKTOP_VMID"]]
+if not os.path.exists(path):
+    print(f"   no {path}, nothing to change")
+    sys.exit(0)
 text = open(path).read()
-blocks = re.split(r"\n(?=vzdump: )", text.strip())
-out = []
-for block in blocks:
-    if re.search(r"^\tvmid 100$", block, re.M):
-        block = re.sub(r"^\tvmid .*$", "\tvmid 100,104,105", block, flags=re.M)
-        block = re.sub(r"^\tcomment .*$", "\tcomment daily%3A core-sys, ai, ai-desktop", block, flags=re.M)
-        block = re.sub(r"^\tprune-backups .*$", "\tprune-backups keep-last=3", block, flags=re.M)
-    elif re.search(r"^\tvmid 101,104,105$", block, re.M):
-        block = re.sub(r"^\tvmid .*$", "\tvmid 101", block, flags=re.M)
-        block = re.sub(r"^\tcomment .*$", "\tcomment weekly%3A osint-tools", block, flags=re.M)
-    out.append(block)
-open(path, "w").write("\n\n".join(out) + "\n")
+found = re.search(rf"^vzdump: {re.escape(job)}\n((?:\t.*\n?)*)", text, re.M)
+if not found:
+    sys.exit(f"no vzdump job {job} in {path}: set BACKUP_JOB to one of its jobs, or SET_BACKUP_JOBS=no")
+vmid = re.search(r"^\tvmid (.+)$", found.group(1), re.M)
+if not vmid:
+    print(f"   {job} chooses its guests another way (all guests or a pool), left as it is")
+    sys.exit(0)
+guests = vmid.group(1).split(",")
+missing = [guest for guest in wanted if guest not in guests]
+if not missing:
+    print(f"   {job} already backs up {', '.join(wanted)}")
+    sys.exit(0)
+start, end = found.start(1) + vmid.start(), found.start(1) + vmid.end()
+open(path, "w").write(text[:start] + "\tvmid " + ",".join(guests + missing) + text[end:])
+print(f"   added {', '.join(missing)} to {job}")
 PY
-grep -E "^\s(vmid|comment|schedule|prune)" /etc/pve/jobs.cfg | sed 's/^/   /'
+if [ -f /etc/pve/jobs.cfg ]; then
+  grep -E "^\s(vmid|comment|schedule|prune)" /etc/pve/jobs.cfg | sed 's/^/   /'
+fi
 fi
 REMOTE
 echo "== provisioned. Now run ./deploy.sh"

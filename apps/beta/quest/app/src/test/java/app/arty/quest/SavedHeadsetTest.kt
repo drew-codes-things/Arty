@@ -12,7 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SavedHeadsetTest {
-    private val goodUrl = "ws://192.168.1.16:8790/ws/headset"
+    private val goodUrl = "ws://192.168.1.60:8790/ws/headset"
     private val key: SecretKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
     private val otherKey: SecretKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
 

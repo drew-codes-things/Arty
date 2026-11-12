@@ -1,5 +1,4 @@
 #!/bin/bash
-# Copies the source to CT 104 and the desktop VM and restarts the services.
 # The live main model and the ai-toolless setting in brain.json are kept, so changes made on the server survive a deploy.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -10,7 +9,7 @@ fi
 PROXMOX=${PROXMOX:-proxmox}
 CT=${CT:-104}
 DESKTOP=${DESKTOP:-ai@${DESKTOP_ADDRESS:?set DESKTOP_ADDRESS, see hosts.env.example}}
-PUFFER_DIR=/DataStarServ/pufferpanel/servers/servers
+PUFFER_DIR=${PUFFER_DIR:-}
 PUFFER_CT=${PUFFER_CT:-100}
 PUFFER_UID=${PUFFER_UID:-100000}
 YT_DLP_VERSION=${YT_DLP_VERSION:-}
@@ -19,12 +18,22 @@ case "$PUFFER_CT$PUFFER_UID$YT_DLP_VERSION" in
 esac
 PINNED_DESKTOP_KEY=desktop_known_hosts
 [ -s "$PINNED_DESKTOP_KEY" ] || { echo "no pinned desktop host key: run bin/pin-desktop-host-key first" >&2; exit 1; }
-ARTY_DISCORD_ID=${ARTY_DISCORD_ID-d124cac6}
-ARTY_TELEGRAM_ID=${ARTY_TELEGRAM_ID-7a7e8c6c}
+ARTY_DISCORD_ID=${ARTY_DISCORD_ID:-}
+ARTY_TELEGRAM_ID=${ARTY_TELEGRAM_ID:-}
+if [ -n "$ARTY_DISCORD_ID$ARTY_TELEGRAM_ID" ]; then
+  [ -n "$PUFFER_DIR" ] || { echo "set PUFFER_DIR (PufferPanel's servers folder on the Proxmox host) to deploy the chat bots, see hosts.env.example" >&2; exit 1; }
+  case "$PUFFER_DIR" in
+    /*) ;;
+    *) echo "PUFFER_DIR must be an absolute path" >&2; exit 1 ;;
+  esac
+  case "$PUFFER_DIR" in
+    *[!A-Za-z0-9/._-]*) echo "PUFFER_DIR may only hold letters, digits and / . _ -" >&2; exit 1 ;;
+  esac
+fi
 bundle=$(mktemp --suffix=.tgz)
 trap 'rm -f "$bundle"' EXIT
 tar czf "$bundle" --exclude=services/arty-desktop-egress.service --exclude='mcp/test_*.py' brain/*.py brain/persona.md brain/system-prompt.md brain/brain.json \
-  mcp/*.py mcp/mcpo.json "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless bin/mcpo-start services/*.service \
+  mcp/*.py mcp/tool-hub.json hub/tool_hub.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless services/*.service \
   apps/ios/index.html apps/ios/app.css apps/ios/sw.js apps/ios/manifest.webmanifest apps/ios/js/*.js apps/ios/js/vendor/*.js \
   apps/ios/fonts/*.ttf apps/ios/icons/*.png
 remote_bundle=$(ssh "$PROXMOX" mktemp --suffix=.tgz)
@@ -35,6 +44,7 @@ set -euo pipefail
 pct push "$1" "$2" /root/ai-deploy.tgz
 rm -f "$2"
 pct exec "$1" -- bash -c 'set -e
+[ -x /opt/ai-hub/bin/python ] || { echo "the tool hub needs its venv first: python3 -m venv /opt/ai-hub && /opt/ai-hub/bin/pip install mcp==2.3.0" >&2; exit 1; }
 cd /root && rm -rf deploy && mkdir deploy && tar xzf ai-deploy.tgz -C deploy && rm ai-deploy.tgz
 live_model=$(jq -r .model /srv/ai/brain/brain.json 2>/dev/null || true)
 live_toolless=$(jq -r ".allow_toolless_models // false" /srv/ai/brain/brain.json 2>/dev/null || echo false)
@@ -44,6 +54,8 @@ if [ -n "$live_model" ] && [ "$live_model" != null ]; then
 fi
 mkdir -p /srv/ai/brain/state
 install -m 644 deploy/mcp/* /srv/ai/mcp/
+install -d /srv/ai/hub
+install -m 644 deploy/hub/tool_hub.py /srv/ai/hub/
 install -m 644 deploy/desktop_known_hosts /srv/ai/mcp/workspace_known_hosts
 install -m 755 deploy/bin/* /usr/local/bin/
 install -m 644 deploy/services/*.service /etc/systemd/system/
@@ -56,9 +68,11 @@ rm -rf /srv/ai/apps/ios.old
 mv /srv/ai/apps/ios.new /srv/ai/apps/ios || { [ ! -d /srv/ai/apps/ios.old ] || mv /srv/ai/apps/ios.old /srv/ai/apps/ios; exit 1; }
 rm -rf deploy
 systemctl daemon-reload
-systemctl restart mcpo brain
+if systemctl is-enabled --quiet mcpo 2>/dev/null; then systemctl disable --now mcpo; fi
+systemctl enable tool-hub
+systemctl restart tool-hub brain
 sleep 10
-systemctl is-active mcpo brain
+systemctl is-active tool-hub brain
 rm -rf /srv/ai/apps/ios.old
 [ ! -d /srv/ai/apps/beta/ios ] || echo "the old copy at /srv/ai/apps/beta/ios was left in place: delete it once the new one is checked"'
 REMOTE
@@ -86,9 +100,6 @@ ssh "$DESKTOP" 'chmod +x ~/.local/browser-agent/run.sh ~/.local/bin/sign-in-brow
 
 # The agent's run.sh loop restarts it within seconds; [b] keeps pgrep from matching this command.
 ssh "$DESKTOP" "sudo install -m 755 '$doc2text_upload' /usr/local/bin/doc2text && rm -f '$doc2text_upload'"'; pid=$(pgrep -f "[b]rowser_agent.py" || true); [ -z "$pid" ] || kill $pid'
-# The Discord and Telegram bots run on PufferPanel (core-sys); restart them there to pick up changes.
-# Each bot is a PufferPanel Docker container (named by its server id) in CT 100; the bot is PID 1 there and
-# ignores SIGTERM, so restart the container itself.
 for bot in "discord/arty_discord.py:$ARTY_DISCORD_ID" "telegram/arty_telegram.py:$ARTY_TELEGRAM_ID"; do
   source_file=chat-bots/${bot%%:*}
   server_id=${bot##*:}

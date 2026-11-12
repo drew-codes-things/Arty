@@ -5,6 +5,7 @@ from datetime import datetime
 import calendar_feed
 import notify
 import personal
+import safety
 import store
 import timing
 from archive import message_text
@@ -23,11 +24,14 @@ def reminder_wording(text: str) -> str:
     return (text[:1].upper() + text[1:]) if text else "Your reminder."
 
 
-def create_schedule(arguments) -> tuple[dict | None, str]:
+def create_schedule(arguments, crisis_help: str | None = None) -> tuple[dict | None, str]:
     reminder = str(arguments.get("reminder_text", "") or arguments.get("message", "")).strip() or None
     instructions = str(arguments.get("instructions", "")).strip() or (f"Remind the user: {reminder}" if reminder else "")
     if not instructions:
         return None, "Give reminder_text (for a reminder) or instructions (for a job)."
+    if declined := safety.check_each((str(arguments.get("title") or ""), reminder or "", instructions), crisis_help):
+        log.info("declined a %s request in a schedule", declined[0])
+        return None, declined[1]
     try:
         cron, first, description = timing.parse_when(str(arguments.get("when", "")))
     except ValueError as error:

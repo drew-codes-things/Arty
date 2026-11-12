@@ -16,7 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NamedPairingTest {
-    private val url = "ws://192.168.1.16:8790/ws/headset"
+    private val url = "ws://192.168.1.60:8790/ws/headset"
     private val token = "a-long-headset-key"
     private val nonce = "00112233445566778899aabbccddeeff"
 
@@ -44,8 +44,8 @@ class NamedPairingTest {
 
     @Test
     fun theIdentityQuestionNamesTheHeadsetWhenItHasAnId() {
-        assertEquals("http://192.168.1.16:8790/identity?nonce=ab&device=0a1b2c3d4e5f", identityUrlFrom(url, "ab", "0a1b2c3d4e5f"))
-        assertEquals("http://192.168.1.16:8790/identity?nonce=ab", identityUrlFrom(url, "ab", ""))
+        assertEquals("http://192.168.1.60:8790/identity?nonce=ab&device=0a1b2c3d4e5f", identityUrlFrom(url, "ab", "0a1b2c3d4e5f"))
+        assertEquals("http://192.168.1.60:8790/identity?nonce=ab", identityUrlFrom(url, "ab", ""))
     }
 
     @Test

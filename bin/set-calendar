@@ -3,7 +3,7 @@
 #   ~/Projects/arty/bin/set-calendar
 # For each calendar: Google Calendar (web) > Settings > the calendar under "Settings for my calendars" >
 # "Integrate calendar" > copy "Secret address in iCal format". That link lets anyone holding it read the
-# calendar, so this script never prints it and stores it root-only on CT 104 (/srv/ai/secrets/calendar.env).
+# calendar, so this script never prints it and stores it root-only (/srv/ai/secrets/calendar.env).
 set -euo pipefail
 PROXMOX=${PROXMOX:-proxmox}
 CT=${CT:-104}

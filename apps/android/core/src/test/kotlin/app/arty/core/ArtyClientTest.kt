@@ -67,9 +67,9 @@ class ArtyClientTest {
 
     @Test
     fun `sends the API key and Cloudflare Access headers`() {
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"assistant-core"},{"id":"arty/qwen2.5:3b","name":"Arty (qwen2.5:3b)"}]}"""
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty"},{"id":"arty/qwen2.5:3b","name":"Arty (qwen2.5:3b)"}]}"""
         val models = client.models()
-        assertEquals(listOf("assistant-core", "Arty (qwen2.5:3b)"), models.map { it.name })
+        assertEquals(listOf("Arty", "Arty (qwen2.5:3b)"), models.map { it.name })
         val headers = seen.single().headers
         assertEquals("Bearer test-key", headers["authorization"])
         assertEquals("access-id", headers["cf-access-client-id"])
@@ -86,10 +86,20 @@ class ArtyClientTest {
     }
 
     @Test
+    fun `a device key is proven by the brain keying its proof with the key's SHA-256`() {
+        identityKeys = listOf("other-key", sha256Hex("test-key"))
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty"}]}"""
+        assertEquals(listOf("Arty"), client.models().map { it.name })
+    }
+
+    private fun sha256Hex(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    @Test
     fun `reads each model's name and description`() {
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"assistant-core","model":"qwen3:14b","description":"14.8B · all tools"},{"id":"arty/qwen2.5:7b"}]}"""
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty","model":"qwen3:14b","description":"14.8B · all tools"},{"id":"arty/qwen2.5:7b"}]}"""
         val models = client.models()
-        assertEquals(ModelOption("assistant-core", "assistant-core", "qwen3:14b", "14.8B · all tools"), models[0])
+        assertEquals(ModelOption("Arty", "Arty", "qwen3:14b", "14.8B · all tools"), models[0])
         assertEquals(ModelOption("arty/qwen2.5:7b", "arty/qwen2.5:7b"), models[1])
     }
 
@@ -97,10 +107,10 @@ class ArtyClientTest {
     fun `starts a chat job with the history and model, then reads the answer`() {
         routes["POST /v1/chat/jobs"] = 202 to """{"id":"job1","status":"running"}"""
         routes["GET /v1/chat/jobs/job1"] = 200 to """{"id":"job1","status":"done","answer":"Hi","tools_used":["research__web_search"]}"""
-        val id = client.startChat(listOf(ChatMessage("user", "hello"), ChatMessage("assistant", "hey"), ChatMessage("user", "again")), "assistant-core")
+        val id = client.startChat(listOf(ChatMessage("user", "hello"), ChatMessage("assistant", "hey"), ChatMessage("user", "again")), "Arty")
         assertEquals("job1", id)
         val sent = JSONObject(seen.first().body)
-        assertEquals("assistant-core", sent.getString("model"))
+        assertEquals("Arty", sent.getString("model"))
         assertEquals(3, sent.getJSONArray("messages").length())
         assertEquals("again", sent.getJSONArray("messages").getJSONObject(2).getString("content"))
         val job = client.chatJob(id)
@@ -146,9 +156,9 @@ class ArtyClientTest {
 
     @Test
     fun `reads memory entities`() {
-        routes["GET /v1/memory"] = 200 to """{"entities":[{"name":"Drew","entityType":"person","observations":["likes Linux"]}],"relations":[]}"""
+        routes["GET /v1/memory"] = 200 to """{"entities":[{"name":"Alex","entityType":"person","observations":["likes Linux"]}],"relations":[]}"""
         val entity = client.memory().single()
-        assertEquals("Drew", entity.name)
+        assertEquals("Alex", entity.name)
         assertEquals(listOf("likes Linux"), entity.observations)
     }
 
@@ -202,7 +212,7 @@ class ArtyClientTest {
     fun `sends attachments as file content parts`() {
         routes["POST /v1/chat/jobs"] = 202 to """{"id":"job2","status":"running"}"""
         val photo = Attachment("f9", "cat.jpg", "image/jpeg", "image", 10)
-        client.startChat(listOf(ChatMessage("user", "what is this?", listOf(photo))), "assistant-core")
+        client.startChat(listOf(ChatMessage("user", "what is this?", listOf(photo))), "Arty")
         val parts = JSONObject(seen.single().body).getJSONArray("messages").getJSONObject(0).getJSONArray("content")
         assertEquals("what is this?", parts.getJSONObject(0).getString("text"))
         assertEquals("file", parts.getJSONObject(1).getString("type"))
@@ -213,9 +223,31 @@ class ArtyClientTest {
     fun `downloads through the app's own server whatever host the link names`() {
         routes["GET /arty-files/f1/tok/cat.png"] = 200 to "PNGDATA"
         val out = java.io.ByteArrayOutputStream()
-        client.download("https://192.168.1.13:8443/arty-files/f1/tok/cat.png", out)
+        client.download("https://192.0.2.13:8443/arty-files/f1/tok/cat.png", out)
         assertEquals("PNGDATA", out.toString())
         assertEquals("access-id", seen.single().headers["cf-access-client-id"])
+    }
+
+    @Test
+    fun `a file name written raw in a reply is encoded instead of crashing`() {
+        mapOf(
+            "My Report.pdf" to "My%20Report.pdf",
+            "chart[1].png" to "chart%5B1%5D.png",
+            "50%.png" to "50%25.png",
+            "My%20Report.pdf" to "My%20Report.pdf",
+        ).forEach { (written, sent) ->
+            routes["GET /arty-files/f1/tok/$sent"] = 200 to "DATA"
+            val out = java.io.ByteArrayOutputStream()
+            client.download("https://x/arty-files/f1/tok/$written", out)
+            assertEquals("DATA", out.toString(), written)
+        }
+    }
+
+    @Test
+    fun `the saved name of a download is decoded, and a stray percent sign is kept as written`() {
+        assertEquals("My Report.pdf", ArtyClient.downloadName("https://x/arty-files/a/b/My%20Report.pdf?x=1"))
+        assertEquals("50%.png", ArtyClient.downloadName("https://x/arty-files/a/b/50%.png"))
+        assertEquals("arty-file", ArtyClient.downloadName("https://x/arty-files/a/b/"))
     }
 
     @Test
@@ -283,6 +315,42 @@ class ArtyClientTest {
     }
 
     @Test
+    fun `one client proves a plain http server once and then reuses the proof`() {
+        routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
+        val sameClient = client
+        repeat(3) { sameClient.memory() }
+        assertEquals(1, identityNonces.size)
+        assertEquals(3, seen.size)
+    }
+
+    @Test
+    fun `an auth failure forgets the proof so the next request proves the server again`() {
+        routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
+        val sameClient = client
+        sameClient.memory()
+        routes["GET /v1/memory"] = 401 to """{"error":{"message":"bad key"}}"""
+        assertEquals(401, assertFailsWith<ArtyException> { sameClient.memory() }.status)
+        routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
+        sameClient.memory()
+        sameClient.memory()
+        assertEquals(2, identityNonces.size)
+    }
+
+    @Test
+    fun `a proof is only reused for its lifetime`() {
+        routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
+        var nowMs = 1_000L
+        val timedClient = ArtyClient(ArtyConfig("http://127.0.0.1:${server.address.port}/", "test-key"), clockMs = { nowMs })
+        timedClient.memory()
+        nowMs += ArtyClient.IDENTITY_PROOF_LIFETIME_MS - 1
+        timedClient.memory()
+        assertEquals(1, identityNonces.size)
+        nowMs += 1
+        timedClient.memory()
+        assertEquals(2, identityNonces.size)
+    }
+
+    @Test
     fun `a server that can't prove it knows the key never gets it`() {
         identityKeys = listOf("someone-elses-key")
         routes["GET /v1/memory"] = 200 to """{"entities":[]}"""
@@ -322,5 +390,34 @@ class ArtyClientTest {
     private fun proofFor(key: String, nonce: String): String {
         val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(key.toByteArray(), "HmacSHA256")) }
         return mac.doFinal("arty-identity:$nonce".toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    @Test
+    fun `follows and steers an Arty CLI session through the brain`() {
+        val session = "0123456789abcdef"
+        routes["GET /v1/remote/sessions"] = 200 to """{"sessions":[{"id":"$session","name":"Laptop","folder":"repo","model":"m","mode":"default","waiting_for":[{"request_id":"r1","tool":"bash","text":"pytest"}]}]}"""
+        routes["GET /v1/remote/sessions/$session/events?after=2&wait=20"] = 200 to """{"events":[{"seq":3,"type":"assistant","text":"Done."},{"seq":4,"type":"permission_answered","request_id":"r1","allow":true,"by":"Phone"}],"next":4,"ended":false,"missed":false}"""
+        routes["POST /v1/remote/sessions/$session/messages"] = 200 to """{"ok":true}"""
+        routes["POST /v1/remote/sessions/$session/answers"] = 200 to """{"ok":true}"""
+        routes["POST /v1/remote/sessions/$session/interrupt"] = 200 to """{"ok":true}"""
+        val listed = client.remoteSessions().single()
+        assertEquals("Laptop", listed.name)
+        assertEquals(listOf(PermissionRequest("r1", "bash", "pytest")), listed.waitingFor)
+        val read = client.remoteEvents(session, after = 2, waitSeconds = 99)
+        assertEquals(4L, read.next)
+        assertEquals(listOf("assistant", "permission_answered"), read.events.map { it.type })
+        assertEquals(true, read.events[1].allow)
+        client.remoteMessage(session, "run the tests")
+        client.remoteAnswer(session, "r1", allow = false)
+        client.remoteInterrupt(session)
+        assertEquals("""{"text":"run the tests"}""", seen[2].body)
+        assertEquals(JSONObject("""{"request_id":"r1","allow":false}""").toString(), JSONObject(seen[3].body).toString())
+        assertEquals("POST /v1/remote/sessions/$session/interrupt", "${seen[4].method} ${seen[4].path}")
+    }
+
+    @Test
+    fun `a bad session id never reaches the brain`() {
+        assertFailsWith<ArtyException> { client.remoteEvents("../devices", 0, 0) }
+        assertTrue(seen.isEmpty())
     }
 }

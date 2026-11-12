@@ -2,7 +2,7 @@
 
 A small model can't reliably drive a browser through a dozen steps, so the steps are fixed here and the
 model only reads and writes: search the web, open the best few results in the browser on Arty's desktop
-(the user can watch it in VM 105), note what each page says about the question (one page at a time, so a
+(the user can watch it), note what each page says about the question (one page at a time, so a
 long page fits the model's context), then write one answer from all the notes, citing them. The source
 list is added by this code, so the links are always the real ones. Pages showing a bot check are skipped,
 never got round.
@@ -269,11 +269,12 @@ def gather(query: str, call_tool, complete, pages: int, browser: bool) -> tuple[
     return search, sources, notes
 
 
-def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = True) -> tuple[str, list[str]]:
+def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = True, classify=None) -> tuple[str, list[str]]:
     """The researched answer and the tools used. call_tool(name, arguments) runs one of Arty's tools;
     complete(prompt) asks the model. browser=False reads pages with a plain fetch (quick questions).
     Before answering, the notes are checked against the question: a false premise is corrected first, and
     when nothing found answers it (even after searching for its subject alone) Arty says so rather than guess."""
+    classify = classify or complete
     query = query_from(question)
     used = ["research__web_search"]
     search, sources, notes = gather(query, call_tool, complete, pages, browser)
@@ -281,7 +282,7 @@ def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = 
         if search.startswith(("search is unavailable", "No results")):
             return f"I couldn't research that: {search}", used
         notes = [f"[1] (search results)\n{search}"]
-    verdict, correction = check_premise(query, "\n\n".join(notes), complete)
+    verdict, correction = check_premise(query, "\n\n".join(notes), classify)
     if verdict == "missing" and (subject := subject_of(query, complete)):
         log.info("nothing answered %r; searching for its subject: %s", query[:80], subject)
         _, more_sources, more_notes = gather(subject, call_tool, complete, pages, browser)

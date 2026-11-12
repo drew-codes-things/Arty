@@ -107,6 +107,9 @@ def init():
             connection.execute("ALTER TABLE schedules ADD COLUMN message TEXT")
         if "attempts" not in columns:
             connection.execute("ALTER TABLE schedules ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        device_columns = {row["name"] for row in connection.execute("PRAGMA table_info(approved_devices)")}
+        if "remote_control" not in device_columns:
+            connection.execute("ALTER TABLE approved_devices ADD COLUMN remote_control INTEGER NOT NULL DEFAULT 0")
         # A task interrupted by a restart goes back in the queue rather than hanging as "running".
         connection.execute("UPDATE tasks SET status = 'queued', updated = ? WHERE status = 'running'", (time.time(),))
 
@@ -287,9 +290,16 @@ def active_device_hashes() -> list[str]:
 
 def list_devices() -> list[dict]:
     with connect() as connection:
-        rows = connection.execute("SELECT id, name, address, created, last_used FROM approved_devices "
+        rows = connection.execute("SELECT id, name, address, created, last_used, remote_control FROM approved_devices "
                                   "WHERE revoked IS NULL ORDER BY created")
-        return [dict(row) for row in rows]
+        return [dict(row, remote_control=bool(row["remote_control"])) for row in rows]
+
+
+def set_device_remote_control(device_id: int, allowed: bool) -> bool:
+    with write_lock, connect() as connection:
+        cursor = connection.execute("UPDATE approved_devices SET remote_control = ? WHERE id = ? AND revoked IS NULL",
+                                    (int(allowed), device_id))
+        return cursor.rowcount > 0
 
 
 def revoke_device(device_id: int) -> bool:

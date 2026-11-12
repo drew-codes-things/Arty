@@ -1,5 +1,8 @@
+import hashlib
+import hmac
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
@@ -16,10 +19,10 @@ STARTER = """brain:
   access_client_id: ""
   access_client_secret: ""
   api_key: ""                 # the Arty API key
-  model: "assistant-core"
+  model: "Arty"
 """
 KEY = "sk-arty-test"
-ARTY_MODELS = {"object": "list", "data": [{"id": "assistant-core"}]}
+ARTY_MODELS = {"object": "list", "data": [{"id": "Arty"}]}
 
 
 class Answer:
@@ -33,17 +36,28 @@ class Answer:
         return self.body
 
 
+def proof(key, nonce):
+    return hmac.new(key.encode(), f"arty-identity:{nonce}".encode(), hashlib.sha256).hexdigest()
+
+
 class FakeBrain:
-    def __init__(self, answers):
+    def __init__(self, answers, knows=(KEY,)):
         self.answers = answers
+        self.knows = knows
         self.asked = []
+        self.identity_checks = []
 
     def __call__(self, url, headers, timeout):
-        self.asked.append((url, headers))
-        answer = self.answers.get(url.removesuffix("/models"))
-        if answer is None:
+        parts = urlsplit(url)
+        address = f"{parts.scheme}://{parts.netloc}{parts.path}".removesuffix("/models").removesuffix("/identity")
+        if address not in self.answers:
             raise requests.ConnectionError(url)
-        return answer
+        if parts.path.endswith("/identity"):
+            self.identity_checks.append((url, headers))
+            nonce = parse_qs(parts.query)["nonce"][0]
+            return Answer(200, {"proofs": [proof(key, nonce) for key in self.knows]})
+        self.asked.append((url, headers))
+        return self.answers[address]
 
 
 @pytest.fixture
@@ -117,7 +131,7 @@ def test_away_from_home_the_remote_address_is_tried_with_the_access_token():
     brain = FakeBrain({"https://arty.example.com/v1": Answer(200, ARTY_MODELS)})
     entered = connection.Connection("http://arty.lan:8081/v1", KEY, "https://arty.example.com/v1", "abc.access", "shh")
     assert connection.check(entered, get=brain) == "https://arty.example.com/v1"
-    assert brain.asked[1] == ("https://arty.example.com/v1/models", {
+    assert brain.asked[-1] == ("https://arty.example.com/v1/models", {
         "Authorization": f"Bearer {KEY}", "CF-Access-Client-Id": "abc.access", "CF-Access-Client-Secret": "shh"})
 
 
@@ -138,13 +152,42 @@ def test_something_that_is_not_arty_is_refused():
         connection.check(connection.Connection("http://router.lan/v1", KEY), get=brain)
 
 
+@pytest.mark.parametrize("address", ["http://1.1.1.1:8081/v1", "http://arty.example.com/v1",
+                                     "http://[2001:4860:4860::8888]:8081/v1", "http://[2606:4700::1111]/v1"])
+def test_plain_http_is_only_for_home_network_addresses(address):
+    with pytest.raises(connection.ConnectionProblem, match="https"):
+        connection.cleaned(connection.Connection(address, KEY))
+
+
+@pytest.mark.parametrize("address", ["http://192.168.1.50:8081/v1", "http://arty-server:8081/v1", "http://arty.lan/v1",
+                                     "http://127.0.0.1:8081/v1", "https://arty.example.com/v1", "http://[fd12:3456::8]:8081/v1",
+                                     "http://[::1]:8081/v1", "http://100.101.102.103:8081/v1", "http://arty.tail1234.ts.net/v1",
+                                     "http://arty.internal/v1", "http://arty.home/v1"])
+def test_home_and_https_addresses_are_accepted(address):
+    assert connection.cleaned(connection.Connection(address, KEY)).base_url == address
+
+
+def test_a_plain_http_server_that_cannot_prove_it_knows_the_key_never_gets_it():
+    brain = FakeBrain({"http://192.168.1.66:8081/v1": Answer(200, ARTY_MODELS)}, knows=("someone-elses-key",))
+    with pytest.raises(connection.ConnectionProblem, match="prove"):
+        connection.check(connection.Connection("http://192.168.1.66:8081/v1", KEY), get=brain)
+    assert brain.asked == []
+    assert all("Authorization" not in headers for _url, headers in brain.identity_checks)
+
+
+def test_a_device_key_is_proven_through_its_sha256():
+    hashed = hashlib.sha256(KEY.encode()).hexdigest()
+    brain = FakeBrain({"http://192.168.1.66:8081/v1": Answer(200, ARTY_MODELS)}, knows=(hashed,))
+    assert connection.check(connection.Connection("http://192.168.1.66:8081/v1", KEY), get=brain) == "http://192.168.1.66:8081/v1"
+
+
 def test_save_writes_every_field_and_keeps_the_rest(config_file):
     connection.save(connection.Connection("http://arty.lan:8081/v1", KEY, "https://arty.example.com/v1", "abc.access", "shh"))
     text = config_file.read_text()
     saved = yaml.safe_load(text)["brain"]
     assert saved == {"base_url": "http://arty.lan:8081/v1", "remote_url": "https://arty.example.com/v1",
                      "access_client_id": "abc.access", "access_client_secret": "shh", "api_key": KEY,
-                     "model": "assistant-core"}
+                     "model": "Arty"}
     assert "# the Arty API key" in text
 
 

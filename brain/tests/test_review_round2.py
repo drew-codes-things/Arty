@@ -297,7 +297,7 @@ class BusyChats(Server):
             taken += 1
         try:
             status, _ = self.request("POST", "/v1/chat/completions",
-                                     body={"model": "assistant-core", "messages": [{"role": "user", "content": "hi"}]})
+                                     body={"model": "Arty", "messages": [{"role": "user", "content": "hi"}]})
         finally:
             for _ in range(taken):
                 brain.direct_chat_slots.release()

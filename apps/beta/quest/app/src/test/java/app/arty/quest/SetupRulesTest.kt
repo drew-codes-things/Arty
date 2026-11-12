@@ -17,7 +17,7 @@ class SetupRulesTest {
     @Test
     fun plainAddressesAreAcceptedOnTheHomeNetworkOnly() {
         listOf(
-            "ws://192.168.1.16:8790/ws/headset",
+            "ws://192.168.1.60:8790/ws/headset",
             "ws://10.0.0.5:8790/ws/headset",
             "ws://172.20.1.2:8790/ws/headset",
             "ws://arty.local:8790/ws/headset",
@@ -37,7 +37,7 @@ class SetupRulesTest {
     @Test
     fun otherSchemesAndBrokenAddressesAreRefused() {
         assertEquals(ADDRESS_SCHEME_PROBLEM, headsetAddressProblem("https://arty.example.com/ws/headset"))
-        assertEquals(ADDRESS_SCHEME_PROBLEM, headsetAddressProblem("192.168.1.16:8790"))
+        assertEquals(ADDRESS_SCHEME_PROBLEM, headsetAddressProblem("192.168.1.60:8790"))
         assertEquals(ADDRESS_SCHEME_PROBLEM, headsetAddressProblem(""))
         assertEquals(ADDRESS_HOST_PROBLEM, headsetAddressProblem("ws:///ws/headset"))
         assertEquals(ADDRESS_HOST_PROBLEM, headsetAddressProblem("ws://bad host/ws"))
@@ -54,7 +54,7 @@ class SetupRulesTest {
 
     @Test
     fun aBuiltInSetupCountsOnlyWhenItWouldBeAccepted() {
-        assertTrue(isConfigured("ws://192.168.1.16:8790/ws/headset", "key"))
+        assertTrue(isConfigured("ws://192.168.1.60:8790/ws/headset", "key"))
         assertFalse(isConfigured("ws://arty.example.com/ws/headset", "key"))
         assertFalse(isConfigured("wss://arty.example.com/ws/headset", ""))
     }
@@ -84,7 +84,7 @@ class SetupRulesTest {
     @Test
     fun pairingByCodeOverPlainWebSocketsWarnsToStayOnTheHomeNetwork() {
         assertEquals(PAIRING_HOME_ONLY, pairingWarning("arty-server.local"))
-        assertEquals(PAIRING_HOME_ONLY, pairingWarning("ws://192.168.1.16:8790"))
+        assertEquals(PAIRING_HOME_ONLY, pairingWarning("ws://192.168.1.60:8790"))
         assertNull(pairingWarning("wss://arty.example.com/ws/headset"))
         assertNull(pairingWarning(""))
     }

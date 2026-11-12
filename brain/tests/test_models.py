@@ -22,11 +22,11 @@ class Summary(unittest.TestCase):
 
 class AskOtherModel(unittest.TestCase):
     def test_a_model_outside_arty_is_refused_without_calling_it(self):
-        standalone = {"name": "roleplay-model:12b", "embedding": False, "tools": True}
+        standalone = {"name": "side-model:12b", "embedding": False, "tools": True}
         with mock.patch.object(models, "find", return_value=standalone), \
                 mock.patch.object(models, "arty_models", return_value=["qwen3:14b"]), \
                 mock.patch.object(models, "_ollama") as ollama:
-            reply = models.ask("roleplay-model:12b", "write a poem", {"model": "qwen3:14b"})
+            reply = models.ask("side-model:12b", "write a poem", {"model": "qwen3:14b"})
         ollama.assert_not_called()
         self.assertIn("isn't one of my models", reply)
 
@@ -34,6 +34,7 @@ class AskOtherModel(unittest.TestCase):
         allowed = {"name": "qwen3:14b", "embedding": False, "tools": True}
         with mock.patch.object(models, "find", return_value=allowed), \
                 mock.patch.object(models, "arty_models", return_value=["qwen3:14b"]), \
+                mock.patch.object(models, "make_room", return_value=[]), \
                 mock.patch.object(models, "_ollama", return_value={"message": {"content": "done"}}) as ollama:
             reply = models.ask("qwen3:14b", "write a poem", {"model": "qwen3:14b"})
         ollama.assert_called_once()

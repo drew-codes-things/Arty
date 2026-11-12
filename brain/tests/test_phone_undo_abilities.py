@@ -28,7 +28,7 @@ class Phone(unittest.TestCase):
         self.assertEqual(phone.from_request("text my mum that I'm on my way"), {"kind": "text", "who": "Mum", "body": "I'm on my way"})
 
     def test_other_requests_are_not_calls(self):
-        for text in ["call me Drew", "remind me to call mum at 5", "what's a phone call in French", "who called it the Big Apple",
+        for text in ["call me Sam", "remind me to call mum at 5", "what's a phone call in French", "who called it the Big Apple",
                      "any messages from college?"]:
             self.assertIsNone(phone.from_request(text), text)
 

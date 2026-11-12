@@ -64,7 +64,7 @@ def test_web_pages_cannot_use_whoami_to_spot_arty():
 
 @pytest.fixture
 def home_only(monkeypatch):
-    monkeypatch.setattr(route, "LOCAL_URL", "http://192.168.1.13:8081/v1")
+    monkeypatch.setattr(route, "LOCAL_URL", "http://192.0.2.13:8081/v1")
     monkeypatch.setattr(route, "REMOTE_URL", "")
     monkeypatch.setattr(route, "_route", {"checked": float("-inf"), "base": route.LOCAL_URL})
 
@@ -79,7 +79,7 @@ def test_a_home_address_that_cannot_prove_itself_gets_nothing_without_a_remote(h
 
 def test_a_home_address_that_proves_itself_is_used(home_only, monkeypatch):
     monkeypatch.setattr(route, "_home_brain_proves_itself", lambda: True)
-    assert route.base() == "http://192.168.1.13:8081/v1"
+    assert route.base() == "http://192.0.2.13:8081/v1"
 
 
 @pytest.mark.parametrize("address", ["http://127.0.0.1:8081/v1", "http://localhost:8081/v1", "https://arty.home.example/v1"])
@@ -96,4 +96,4 @@ def test_the_reply_says_why_nothing_was_sent(home_only, monkeypatch):
     with pytest.raises(brain.BrainError) as raised:
         list(brain._stream([{"role": "user", "content": "hi"}], None))
     assert "prove" in str(raised.value)
-    assert "192.168.1.13" in brain.describe_endpoint()
+    assert "192.0.2.13" in brain.describe_endpoint()

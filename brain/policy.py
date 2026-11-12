@@ -1,15 +1,3 @@
-"""Which tool calls need Drew's OK first, and which tools a small model gets to see.
-
-Approval: anything that acts *as Drew* on the outside world (posting, sending,
-connecting, buying, submitting forms on social or mail sites, pushing code) is
-held until he approves. Reading and browsing never are. In chat he approves by
-saying yes; in a background task the task pauses and his phone gets
-Approve/Deny buttons.
-
-Tool selection: a 3B model picks tools badly from a list of 50, so it gets the
-always-on tools plus only the groups that match the request (or that it asks for
-with use_tools). A bigger model (tool_budget 0) simply gets everything.
-"""
 import fnmatch
 import hashlib
 import re
@@ -35,6 +23,14 @@ ACTIVATING_KEYS = re.compile(r"\b(enter|return|space|kp_enter)\b", re.IGNORECASE
 SHOWN_COMMAND_CHARS = 200
 SHELL_OPERATORS = re.compile(r"&&|\|\||[|;`]|\$\(|>")
 LOWERCASE_START = re.compile(r"^(?:sudo\s+)?[a-z0-9_./~-]")
+UNTRUSTED_READS = ["fetch__*", "research__web_search", "research__read_document", "research__search_library", "workspace__browser_*",
+                   "workspace__gmail_*", "workspace__read_file", "workspace__read_screen_text", "workspace__get_clipboard",
+                   "homelab__nextcloud_get", "homelab__nextcloud_search"]
+AFTER_UNTRUSTED = ["memory__create_*", "memory__add_*", "memory__delete_*", "workspace__run_command", "workspace__type_text",
+                   "workspace__open_app", "workspace__press_keys", "workspace__click", "workspace__write_file", "workspace__edit_file",
+                   "workspace__set_clipboard", "workspace__email_draft_link", "homelab__nextcloud_upload",
+                   "start_background_task", "schedule_task"]
+UNTRUSTED_NOTE = "asked for after reading outside content (a web page, email or file)"
 
 
 def is_plain_approval(text: str) -> bool:
@@ -78,8 +74,10 @@ def page_unknown(name: str, context: dict) -> bool:
     return name in PAGE_ACTIONS and not context.get("url")
 
 
-def remember_tool_result(context: dict, tool_name: str, result: str):
+def remember_tool_result(context: dict, tool_name: str, result: str, rules: dict | None = None):
     """Track guest names from Proxmox status, and the browser's current page and numbered items."""
+    if matches(tool_name, (rules or {}).get("untrusted_reads", UNTRUSTED_READS)):
+        context["untrusted"] = True
     if tool_name == "homelab__proxmox_status":
         context["guests"] = {match["vmid"]: f'{match["kind"]} {match["vmid"]} ({match["name"]})' if match["name"]
                              else f'{match["kind"]} {match["vmid"]}' for match in GUEST_LINE.finditer(result)}
@@ -103,8 +101,23 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z]+", (text or "").lower()))
 
 
+def untrusted_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
+    if not context.get("untrusted") or not matches(name, rules.get("after_untrusted", AFTER_UNTRUSTED)):
+        return None
+    if name in COMMAND_TOOLS:
+        verb = "typing" if name == "workspace__type_text" else "running"
+        action = f"{verb} `{shown_command(str(arguments.get(COMMAND_TOOLS[name], '')))}`"
+    else:
+        action = shown_command(describe_action(name, arguments, context))
+    return f"{action}, {UNTRUSTED_NOTE}"
+
+
 def approval_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
     """A sentence describing why this call needs approval, or None if it can go ahead."""
+    return own_approval_reason(name, arguments, context, rules) or untrusted_reason(name, arguments, context, rules)
+
+
+def own_approval_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
     if name in rules.get("always", []):
         return describe_action(name, arguments, context)
     if name in COMMAND_TOOLS:

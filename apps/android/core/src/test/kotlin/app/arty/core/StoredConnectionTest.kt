@@ -13,7 +13,7 @@ class StoredConnectionTest {
 
     @Test
     fun `older saves without the access fields read as empty`() {
-        assertEquals(ArtyConfig("http://192.168.1.13:8081", "key"), StoredConnection.parse("""{"baseUrl":"http://192.168.1.13:8081","apiKey":"key"}"""))
+        assertEquals(ArtyConfig("http://192.0.2.13:8081", "key"), StoredConnection.parse("""{"baseUrl":"http://192.0.2.13:8081","apiKey":"key"}"""))
     }
 
     @Test

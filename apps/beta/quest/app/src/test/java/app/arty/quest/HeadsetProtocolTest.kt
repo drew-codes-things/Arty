@@ -67,12 +67,12 @@ class HeadsetProtocolTest {
     fun panelsAreReadInFull() {
         val panels = HeadsetProtocol.parse(
             """{"type":"panels","weather":"Cardiff: 12C, light rain",
-                "servers":[{"name":"core-sys","state":"running","ok":true,"detail":"CPU 4%"},{"name":"ai","state":"stopped","ok":false}],
+                "servers":[{"name":"web","state":"running","ok":true,"detail":"CPU 4%"},{"name":"ai","state":"stopped","ok":false}],
                 "events":[{"title":"Dentist","start":"2026-11-05T15:00","all_day":false}],
                 "reminders":[{"title":"Bins","next_run":"2026-11-05T19:00"}]}""",
         ) as ServerMessage.PanelUpdate
         assertEquals("Cardiff: 12C, light rain", panels.panels.weather)
-        assertEquals(listOf(ServerStatus("core-sys", "running", true, "CPU 4%"), ServerStatus("ai", "stopped", false, "")), panels.panels.servers)
+        assertEquals(listOf(ServerStatus("web", "running", true, "CPU 4%"), ServerStatus("ai", "stopped", false, "")), panels.panels.servers)
         assertEquals(listOf(CalendarItem("Dentist", "2026-11-05T15:00", false)), panels.panels.events)
         assertEquals(listOf(ReminderItem("Bins", "2026-11-05T19:00")), panels.panels.reminders)
     }
@@ -116,9 +116,9 @@ class HeadsetProtocolTest {
 
     @Test
     fun theHeadsetNeedsAWebSocketAddressAndAKey() {
-        assertTrue(isConfigured("ws://192.168.1.16:8790/ws/headset", "key"))
-        assertFalse(isConfigured("ws://192.168.1.16:8790/ws/headset", " "))
-        assertFalse(isConfigured("http://192.168.1.16:8790/ws/headset", "key"))
+        assertTrue(isConfigured("ws://192.168.1.60:8790/ws/headset", "key"))
+        assertFalse(isConfigured("ws://192.168.1.60:8790/ws/headset", " "))
+        assertFalse(isConfigured("http://192.168.1.60:8790/ws/headset", "key"))
         assertFalse(isConfigured("", "key"))
     }
 

@@ -83,7 +83,7 @@ def trimmed(history: list) -> list:
 
 
 def ask_brain(messages: list[dict]) -> str:
-    body = json.dumps({"model": "assistant-core", "messages": messages, "client": CLIENT_NAME}).encode()
+    body = json.dumps({"model": "Arty", "messages": messages, "client": CLIENT_NAME}).encode()
     request = urllib.request.Request(BRAIN_URL, data=body, headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     with urllib.request.urlopen(request, timeout=BRAIN_TIMEOUT_SECONDS) as response:
         return json.loads(response.read())["choices"][0]["message"]["content"].strip() or "(no reply)"

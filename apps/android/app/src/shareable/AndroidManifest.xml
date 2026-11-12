@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- A brain on the home network is usually plain http. SetupActivity only accepts http:// for home-network
-     addresses (Connection.addressProblem), so the API key never crosses the internet unencrypted. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:usesCleartextTraffic="true" />
-</manifest>

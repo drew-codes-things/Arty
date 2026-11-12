@@ -18,7 +18,7 @@ def never_risky(_text):
 
 def make_draft():
     sent = []
-    draft = Draft(sent.append, lambda text: text.replace(", Drew!", "!"), OFFER)
+    draft = Draft(sent.append, lambda text: text.replace(", Alex!", "!"), OFFER)
     return draft, sent
 
 
@@ -53,7 +53,7 @@ class SendingEarly(unittest.TestCase):
     def test_sent_text_gets_the_same_clean_up_as_the_answer(self):
         draft, sent = make_draft()
         draft.start_round(allowed=True)
-        write(draft, "Night, Drew! Sleep well. ")
+        write(draft, "Night, Alex! Sleep well. ")
         self.assertEqual("".join(sent), "Night! Sleep well.")
 
     def test_a_held_round_sends_nothing(self):

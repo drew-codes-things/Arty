@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
@@ -94,7 +93,7 @@ private fun videoFrame(file: File): ImageBitmap? {
 
 @Composable
 fun MediaBlock(name: String, link: String, kind: MediaKind) {
-    val media = LocalArtyMedia.current ?: return Text(name, color = ArtyColors.Signal)
+    val media = LocalArtyMedia.current ?: return Text(name, color = ArtyColors.SignalText)
     var loaded by remember(link) { mutableStateOf<Loaded>(Loaded.Waiting) }
     LaunchedEffect(link) {
         loaded = try {
@@ -112,18 +111,18 @@ fun MediaBlock(name: String, link: String, kind: MediaKind) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when (val state = loaded) {
             Loaded.Waiting -> Box(
-                Modifier.fillMaxWidth().height(180.dp).background(ArtyColors.Panel, RoundedCornerShape(8.dp)),
+                Modifier.fillMaxWidth().height(180.dp).background(ArtyColors.FillHover, MaterialTheme.shapes.small),
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator(Modifier.size(28.dp), color = ArtyColors.Signal, strokeWidth = 2.dp) }
             is Loaded.Failed -> Text("Couldn't load $name: ${state.reason}", style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Caution)
             is Loaded.Ready -> if (kind == MediaKind.Picture) Picture(name, state.preview) else Video(state.file, state.preview)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(name, style = MaterialTheme.typography.labelMedium, color = ArtyColors.Muted, maxLines = 1,
+            Text(name, style = MaterialTheme.typography.labelMedium, color = ArtyColors.TextDim, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             TextButton(onClick = { media.save(link) }) {
-                Icon(ArtyIcons.Save, contentDescription = null, modifier = Modifier.size(16.dp), tint = ArtyColors.Signal)
-                Text(" Save", color = ArtyColors.Signal)
+                Icon(ArtyIcons.Save, contentDescription = null, modifier = Modifier.size(16.dp), tint = ArtyColors.SignalText)
+                Text(" Save", color = ArtyColors.SignalText)
             }
         }
     }
@@ -132,13 +131,13 @@ fun MediaBlock(name: String, link: String, kind: MediaKind) {
 @Composable
 private fun Picture(name: String, preview: ImageBitmap?) {
     if (preview == null) {
-        Text("$name can't be shown here; save it to open it.", style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Muted)
+        Text("$name can't be shown here; save it to open it.", style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextDim)
         return
     }
     var fullScreen by remember { mutableStateOf(false) }
     Image(
         preview, contentDescription = name, contentScale = ContentScale.Fit,
-        modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).clip(RoundedCornerShape(8.dp)).clickable { fullScreen = true },
+        modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).clip(MaterialTheme.shapes.small).clickable { fullScreen = true },
     )
     if (fullScreen) {
         Dialog(onDismissRequest = { fullScreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -153,7 +152,7 @@ private fun Picture(name: String, preview: ImageBitmap?) {
 private fun Video(file: File, preview: ImageBitmap?) {
     var playing by remember(file) { mutableStateOf(false) }
     val aspect = preview?.let { it.width.toFloat() / it.height } ?: DEFAULT_ASPECT
-    val frame = Modifier.fillMaxWidth().aspectRatio(aspect).clip(RoundedCornerShape(8.dp)).background(Color.Black)
+    val frame = Modifier.fillMaxWidth().aspectRatio(aspect).clip(MaterialTheme.shapes.small).background(Color.Black)
     if (playing) {
         AndroidView(
             factory = { context ->

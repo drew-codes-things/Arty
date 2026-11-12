@@ -113,6 +113,76 @@ VISIBLE_CHALLENGE_JS = """
 """
 
 
+CARD_FIELD_JS = """
+(pattern) => Array.from(document.querySelectorAll('input, iframe')).some(el => {
+  const box = el.getBoundingClientRect();
+  if (box.width <= 2 || box.height <= 2 || getComputedStyle(el).visibility === 'hidden') return false;
+  const described = [el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('src'), el.getAttribute('title')].filter(Boolean).join(' ');
+  return new RegExp(pattern, 'i').test(described);
+})
+"""
+
+
+STABLE_SELECTOR_JS = """
+(el, pattern) => {
+  const kindOf = (e) => e.isContentEditable ? 'textbox' : (e.getAttribute('role') || e.tagName.toLowerCase() + (e.type ? ':' + e.type : ''));
+  const described = [el.type, el.getAttribute('autocomplete'), el.getAttribute('name'), el.id].filter(Boolean).join(' ');
+  if (new RegExp(pattern, 'i').test(described)) return null;
+  const generated = /\\d{4,}|^[:_]|:|^[a-f0-9]{8,}$|^(ember|react|ng-|mui-|css-)/i;
+  const anchorOf = (node) => {
+    for (const attr of ['data-testid', 'data-test', 'data-qa', 'name', 'id']) {
+      const value = node.getAttribute(attr);
+      if (!value || value.length > 60 || generated.test(value)) continue;
+      return attr === 'id' ? '#' + CSS.escape(value) : node.tagName.toLowerCase() + '[' + attr + '="' + CSS.escape(value) + '"]';
+    }
+    return null;
+  };
+  const positionOf = (node) => {
+    let index = 1;
+    for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+      if (sibling.tagName === node.tagName) index += 1;
+    }
+    return node.tagName.toLowerCase() + ':nth-of-type(' + index + ')';
+  };
+  const pointsOnlyHere = (selector) => {
+    try {
+      const found = document.querySelectorAll(selector);
+      return found.length === 1 && found[0] === el;
+    } catch (error) {
+      return false;
+    }
+  };
+  const parts = [];
+  let node = el;
+  let anchored = false;
+  for (let depth = 0; depth < 12 && node && node !== document.body && node !== document.documentElement; depth += 1) {
+    const anchor = anchorOf(node);
+    anchored = anchored || Boolean(anchor);
+    parts.unshift(anchor || positionOf(node));
+    if (anchored && pointsOnlyHere(parts.join(' > '))) return {selector: parts.join(' > '), kind: kindOf(el)};
+    node = node.parentElement;
+  }
+  const rooted = 'body > ' + parts.join(' > ');
+  return node === document.body && pointsOnlyHere(rooted) ? {selector: rooted, kind: kindOf(el)} : null;
+}
+"""
+
+
+MATCHES_STEP_JS = """
+(el, [step, kind]) => {
+  const box = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  if (box.width <= 2 || box.height <= 2 || style.visibility === 'hidden' || style.display === 'none') return false;
+  const kindNow = el.isContentEditable ? 'textbox' : (el.getAttribute('role') || el.tagName.toLowerCase() + (el.type ? ':' + el.type : ''));
+  if (kindNow !== kind) return false;
+  const labelledBy = (el.getAttribute('aria-labelledby') || '').split(/\\s+/).map(id => id && document.getElementById(id)).filter(Boolean).map(node => node.innerText);
+  const buttonValue = el.tagName === 'INPUT' && ['submit', 'button', 'reset'].includes(el.type) ? el.value : '';
+  const names = [el.getAttribute('aria-label'), ...labelledBy, ...Array.from(el.labels || []).map(label => label.innerText), el.innerText, buttonValue, el.placeholder, el.title, el.getAttribute('alt')];
+  return names.some(name => typeof name === 'string' && name.toLowerCase().replace(/\\s+/g, ' ').trim().includes(step));
+}
+"""
+
+
 # Gmail has its own ordinary Google Chrome window and profile, read by an extension (extensions/gmail/): Google
 # signs out a browser that a program drives through the debugging port, as this agent does with the main one.
 GMAIL_PROFILE = os.path.expanduser("~/.gmail-chrome")
@@ -134,6 +204,14 @@ TOKEN_MIN_CHARS = 32
 JSON_TYPE = "application/json"
 EXTENSION_ORIGIN = "chrome-extension://"
 LOCAL_HOST_NAMES = ("127.0.0.1", "localhost")
+SELECTOR_CACHE_FILE = os.path.join(AGENT_FOLDER, "selectors.json")
+SELECTOR_CACHE_LIMIT = 300
+SELECTOR_MAX_CHARS = 300
+KIND_MAX_CHARS = 40
+STEP_MAX_CHARS = 120
+PERSONAL_STEP = re.compile(r"@|\d{4,}")
+NO_CACHE_URLS = ("checkout", "payment", "/pay/", "/pay?", "billing", "/cart", "/basket", "/wallet", "/donate")
+SECRET_FIELD_PATTERN = r"password|cc-|card.?number|cardnumber|cvc|cvv|security.?code|expiry|iban|stripe|braintree|adyen|checkout"
 
 
 ACCEPT_COOKIE_LABEL = (r"^(?:(?:yes,? )?i (?:accept|agree)|(?:accept|allow|agree)(?: to)?(?: all| additional| optional)?"
@@ -267,6 +345,133 @@ def read_json_object(handler) -> dict:
     return body
 
 
+def tidy_step(target) -> str:
+    return " ".join(str(target).lower().split())[:STEP_MAX_CHARS]
+
+
+def site_of(url: str) -> str:
+    address = urllib.parse.urlparse(url)
+    if address.scheme not in ("http", "https") or not address.hostname:
+        return ""
+    try:
+        port = address.port
+    except ValueError:
+        return ""
+    return f"{address.hostname}:{port}" if port else address.hostname
+
+
+def page_may_show(page, script, *args) -> bool:
+    try:
+        return bool(page.evaluate(script, *args))
+    except PlaywrightError:
+        return True
+
+
+def on_sign_in_page(url: str) -> bool:
+    address = urllib.parse.urlparse(url)
+    path = address.path.lower()
+    return (address.hostname or "") in SIGN_IN_HOSTS or any(marker in path for marker in SIGN_IN_PATHS + LOGIN_URLS)
+
+
+def may_hold_secrets(page) -> bool:
+    return (page_may_show(page, VISIBLE_PASSWORD_JS) or page_may_show(page, CARD_FIELD_JS, SECRET_FIELD_PATTERN)
+            or page_may_show(page, VISIBLE_CHALLENGE_JS, list(CHALLENGE_FRAMES)))
+
+
+def cacheable_page(page) -> bool:
+    url = page.url.lower()
+    if not site_of(url) or on_sign_in_page(url) or any(marker in url for marker in NO_CACHE_URLS + CHALLENGE_URLS):
+        return False
+    if may_hold_secrets(page):
+        return False
+    try:
+        return not looks_like_bot_check(page, url, page.title(), page.inner_text("body"))
+    except PlaywrightError:
+        return False
+
+
+def valid_selector_entry(entry) -> dict | None:
+    if not isinstance(entry, dict):
+        return None
+    selector, kind = entry.get("selector"), entry.get("kind")
+    if not isinstance(selector, str) or not isinstance(kind, str):
+        return None
+    if not 0 < len(selector) <= SELECTOR_MAX_CHARS or not 0 < len(kind) <= KIND_MAX_CHARS:
+        return None
+    return {"selector": selector, "kind": kind}
+
+
+def stable_selector(element) -> dict | None:
+    try:
+        if element.count() != 1:
+            return None
+        return valid_selector_entry(element.evaluate(STABLE_SELECTOR_JS, SECRET_FIELD_PATTERN))
+    except PlaywrightError as error:
+        print(f"could not describe an element for the selector cache: {first_line(error)}", flush=True)
+        return None
+
+
+def selector_key(site: str, step: str) -> str:
+    return f"{site}\n{step}"
+
+
+class SelectorCache:
+    def __init__(self, path: str, limit: int = SELECTOR_CACHE_LIMIT):
+        self.path = path
+        self.limit = limit
+        self.entries = None
+
+    def load(self) -> dict:
+        if self.entries is None:
+            self.entries = self.read_file()
+        return self.entries
+
+    def read_file(self) -> dict:
+        try:
+            with open(self.path) as handle:
+                rows = json.load(handle).get("entries", [])
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError, AttributeError) as error:
+            print(f"selector cache unreadable, starting empty: {first_line(error)}", flush=True)
+            return {}
+        entries = {}
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, list) and len(row) == 2 and isinstance(row[0], str) and (entry := valid_selector_entry(row[1])):
+                entries[row[0]] = entry
+        return dict(list(entries.items())[-self.limit:])
+
+    def get(self, site: str, step: str) -> dict | None:
+        return self.load().get(selector_key(site, step))
+
+    def remember(self, site: str, step: str, entry: dict):
+        entries = self.load()
+        key = selector_key(site, step)
+        entries.pop(key, None)
+        entries[key] = entry
+        while len(entries) > self.limit:
+            entries.pop(next(iter(entries)))
+        self.save()
+
+    def touch(self, site: str, step: str):
+        entries = self.load()
+        key = selector_key(site, step)
+        if key in entries:
+            entries[key] = entries.pop(key)
+            self.save()
+
+    def forget(self, site: str, step: str):
+        if self.load().pop(selector_key(site, step), None) is not None:
+            self.save()
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+            write_private(self.path, json.dumps({"entries": [[key, entry] for key, entry in self.entries.items()]}))
+        except OSError as error:
+            print(f"could not save the selector cache: {first_line(error)}", flush=True)
+
+
 def chrome_listening() -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{DEBUG_PORT}/json/version", timeout=1):
@@ -315,6 +520,9 @@ class Browser:
         self.playwright = sync_playwright().start()
         self.browser = None
         self.context = None
+        self.selectors = SelectorCache(SELECTOR_CACHE_FILE)
+        self.pending_selector = None
+        self.used_saved_selector = False
 
     def page(self):
         if self.browser is None or not self.browser.is_connected() or not self.browser.contexts:
@@ -345,6 +553,34 @@ class Browser:
         target = str(target).strip()
         if target.isdigit():
             return page.locator(f'[data-agent-id="{target}"]').first
+        step = tidy_step(target)
+        if not step or PERSONAL_STEP.search(step) or not cacheable_page(page):
+            return self.search(page, target)
+        site = site_of(page.url)
+        saved = self.saved_element(page, site, step)
+        if saved is not None:
+            self.pending_selector = (site, step, None)
+            self.used_saved_selector = True
+            return saved
+        found = self.search(page, target)
+        self.pending_selector = (site, step, stable_selector(found))
+        return found
+
+    def saved_element(self, page, site, step):
+        saved = self.selectors.get(site, step)
+        if saved is None:
+            return None
+        try:
+            found = page.locator(saved["selector"])
+            if found.count() == 1 and found.first.evaluate(MATCHES_STEP_JS, [step, saved["kind"]]):
+                return found.first
+        except PlaywrightError as error:
+            print(f"saved selector on {site} failed to check: {first_line(error)}", flush=True)
+        print(f"saved selector on {site} no longer fits its step, searching again", flush=True)
+        self.selectors.forget(site, step)
+        return None
+
+    def search(self, page, target):
         exact = page.get_by_role("button", name=target).or_(page.get_by_role("link", name=target)).or_(page.get_by_label(target)).or_(page.get_by_placeholder(target))
         if exact.count():
             return exact.first
@@ -362,6 +598,32 @@ class Browser:
         return result
 
     def handle(self, action, args):
+        self.pending_selector = None
+        self.used_saved_selector = False
+        try:
+            result = self.act(action, args)
+        except PlaywrightError:
+            self.drop_saved_selector()
+            raise
+        self.keep_selector()
+        if self.used_saved_selector and isinstance(result, dict):
+            result["used_saved_selector"] = True
+        return result
+
+    def keep_selector(self):
+        if self.pending_selector is None:
+            return
+        site, step, entry = self.pending_selector
+        if self.used_saved_selector:
+            self.selectors.touch(site, step)
+        elif entry:
+            self.selectors.remember(site, step, entry)
+
+    def drop_saved_selector(self):
+        if self.used_saved_selector and self.pending_selector is not None:
+            self.selectors.forget(*self.pending_selector[:2])
+
+    def act(self, action, args):
         if action == "upload" and (reason := private_upload_reason(os.path.expanduser(str(args.get("path", ""))))):
             raise ValueError(reason)
         page = self.page()

@@ -1,21 +1,32 @@
-"""Requests Arty declines before the model or the web sees them. A 3B model doesn't refuse reliably (it searched
-the web and wrote out "Steps to Make a Nuclear Bomb"), so clear requests to make weapons that can kill many get a
-short, plain answer in code. Someone talking about hurting themselves gets care and where to find help, not a
-refusal. Narrow on purpose: "bath bomb" and history or news questions pass through. Other harmful requests are left
-to the model (system-prompt.md); Drew asked for the code check on hurting people to be removed (2026-10-24).
-"""
 import re
 
 HOW = r"\b(?:how (?:do|can|could|would|should) (?:i|you|we|one|someone)|how to|ways? to|best way to|help me|teach me|tell me how to)\b"
-WEAPON = (r"(?:(?:nuclear|atomic|dirty|pipe|nail|car|fertili[sz]er|home-?made|petrol|molotov)\s+bombs?|(?<!bath )(?<!photo )"
+WEAPON = (r"(?:(?:nuclear|atomic|dirty|pipe|nail|car|fertili[sz]er|home-?made|petrol|molotov)\s+bombs?|"
+          r"molotovs?(?:\s+cocktails?)?(?![-'\w])|(?<!bath )(?<!photo )"
           r"(?<!seed )(?<!glitter )\bbombs?|explosives|explosive devices?|ieds?|grenades?|nerve (?:agent|gas)|sarin|vx|ricin|anthrax|"
-          r"mustard gas|chlorine gas|bio-?weapons?|biological weapons?|chemical weapons?|weapons? of mass destruction|"
+          r"mustard gas|chlorine gas|napalm|fire-?bombs?|incendiary (?:bombs?|devices?|weapons?)|bio-?weapons?|biological weapons?|chemical weapons?|weapons? of mass destruction|"
           r"(?:3d[- ]printed |untraceable |ghost )guns?)\b")
-MAKE = r"\b(?:make|making|build|building|create|construct|assemble|synthesi[sz]e|produce|cook|brew|get|buy)\b"
+NOT_THE_WEAPON = (r"calorimeters?|disposal|squads?|shelters?|threats?|detection|detectors?|safety|awareness|drops?|"
+                  r"burgers?|sauces?|playlists?|desserts?|cyclones?|scares?|technicians?|proof")
+WEAPON_ITSELF = WEAPON + r"(?![-'\w]|\s+(?:" + NOT_THE_WEAPON + r")\b)"
+PHRASE_ENDS = (r"(?=\s*(?:[,.;:?!]|$)|\s+(?:please|at home|from scratch|myself|for me|now|step by step|"
+               r"in (?:my|our) \w+|in (?:the|a) (?:shed|garage|basement|cellar|attic|kitchen|garden|back ?yard|yard|house|flat|bedroom|woods))\b)")
+MAKE_ITSELF = r"\b(?:make|making|build|building|create|construct|assemble|synthesi[sz]e|produce|cook|brew)\b"
+OBTAIN = r"\b(?:get|buy)\b"
+SHOPPING_TAIL = (r"(?:\s+(?:online|anywhere|near me|cheap|without an? licen[cs]e|from (?:the |a )?[\w.-]+|"
+                 r"on the dark ?web)\b)?")
+MAKE = r"(?:" + MAKE_ITSELF + r"|" + OBTAIN + r")"
 # "how to make a nuclear bomb", "build a pipe bomb", "synthesize sarin", "enrich uranium for a bomb"
 WEAPONS = re.compile(
-    r"(?:" + HOW + r"|^\s*(?:please\s+)?)[^.?!]{0,20}" + MAKE + r"\s+(?:a |an |some |my own )?" + WEAPON +
+    r"(?:" + HOW + r"|^\s*(?:please\s+)?)[^.?!]{0,20}(?:" + MAKE_ITSELF + r"\s+(?:a |an |some |my own )?" + WEAPON_ITSELF +
+    r"|" + OBTAIN + r"\s+(?:a |an |some |my own )?" + WEAPON + SHOPPING_TAIL + PHRASE_ENDS + r")"
     r"|\benrich(?:ing)? uranium\b[^.?!]{0,30}\b(?:bomb|weapon)",
+    re.IGNORECASE)
+ASKS_FOR_STEPS = (r"\b(?:step[- ]by[- ]step|instructions?|steps|guides?|recipes?|tutorials?|walk-?\s?throughs?|directions|"
+                  r"blueprints?|schematics?)\b")
+WEAPON_STEPS = re.compile(
+    ASKS_FOR_STEPS + r"[^.?!]{0,40}?(?:" + MAKE_ITSELF + r"\s+(?:a |an |some |my own )?" + WEAPON_ITSELF +
+    r"|\b(?:for|on|to)\s+(?:a |an )?" + WEAPON + PHRASE_ENDS + r")",
     re.IGNORECASE)
 SELF_HARM = re.compile(
     r"\b(?:kill|hurt|harm) myself\b|\bcut myself\b(?!\s+(?:(?:while |when )?(?:shaving|cooking|chopping)|by accident|"
@@ -42,13 +53,20 @@ def self_harm_reply(crisis_help: str | None = None) -> str:
             f"with it on your own: {crisis_help or DEFAULT_CRISIS_HELP} I'm here if you want to talk.")
 
 
-def check(text: str, crisis_help: str | None = None) -> tuple[str, str] | None:
+ALL_CHECKS = ("self_harm", "weapons", "bot_check")
+
+
+def check(text: str, crisis_help: str | None = None, kinds: tuple[str, ...] = ALL_CHECKS) -> tuple[str, str] | None:
     """(kind, reply) for a request Arty declines (or a cry for help), or None."""
     text = text or ""
-    if SELF_HARM.search(text):
+    if "self_harm" in kinds and SELF_HARM.search(text):
         return "self_harm", self_harm_reply(crisis_help)
-    if WEAPONS.search(text):
+    if "weapons" in kinds and (WEAPONS.search(text) or WEAPON_STEPS.search(text)):
         return "weapons", WEAPONS_REPLY
-    if BOT_CHECK.search(text):
+    if "bot_check" in kinds and BOT_CHECK.search(text):
         return "bot_check", BOT_CHECK_REPLY
     return None
+
+
+def check_each(texts, crisis_help: str | None = None) -> tuple[str, str] | None:
+    return next((declined for text in texts if (declined := check(text, crisis_help))), None)

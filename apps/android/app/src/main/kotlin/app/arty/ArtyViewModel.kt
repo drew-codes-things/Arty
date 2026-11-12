@@ -52,7 +52,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -312,7 +311,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Saves a file Arty made (a link in its reply) to Downloads, then offers to open it. */
     fun download(link: String) = viewModelScope.launch {
-        val name = URLDecoder.decode(link.substringAfterLast('/').substringBefore('?'), "UTF-8").ifBlank { "arty-file" }
+        val name = ArtyClient.downloadName(link)
         notice = "Downloading $name…"
         try {
             val saved = withContext(Dispatchers.IO) { saveToDownloads(link, name) }

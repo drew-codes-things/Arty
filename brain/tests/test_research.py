@@ -109,6 +109,61 @@ class Research(unittest.TestCase):
         # The check and the answer share the prompt up to the notes, so the model's cache covers both.
         self.assertTrue(prompts[-2].startswith(answer_prompt[:answer_prompt.index("The question gets something wrong")]))
 
+    def test_the_short_checks_go_to_the_quick_model_call_and_the_answer_to_the_full_one(self):
+        checked, written = [], []
+
+        def classify(prompt):
+            checked.append(prompt)
+            if "check the notes against the question" in prompt:
+                return "WRONG"
+            return "It was at Wembley, not in Dudley."
+
+        def complete(prompt):
+            written.append(prompt)
+            return "The 1923 final was at Wembley [1]."
+        research.run("what was the attendance at the 1923 FA Cup final replay in Dudley?", fake_tools([]), complete,
+                     browser=False, classify=classify)
+        self.assertEqual(len(checked), 2)
+        self.assertIn("check the notes against the question", checked[0])
+        self.assertIn("say what's true", checked[1])
+        self.assertEqual(len(written), 1)
+        self.assertIn("Write the answer for the user", written[0])
+
+    def test_the_subject_for_a_second_search_gets_the_full_thinking_call(self):
+        checked, written = [], []
+
+        def classify(prompt):
+            checked.append(prompt)
+            return "MISSING"
+
+        def complete(prompt):
+            written.append(prompt)
+            return "1923 FA Cup final"
+        research.run("what was the attendance at the 1923 FA Cup final replay in Dudley?", fake_tools([]), complete,
+                     browser=False, classify=classify)
+        self.assertTrue(any("What is this question about?" in prompt for prompt in written))
+        self.assertFalse(any("What is this question about?" in prompt for prompt in checked))
+
+    def test_after_the_subject_search_the_notes_are_checked_again_with_thinking(self):
+        quick_checks, written = [], []
+
+        def classify(prompt):
+            quick_checks.append(prompt)
+            return "MISSING"
+
+        def complete(prompt):
+            written.append(prompt)
+            if "What is this question about?" in prompt:
+                return "1923 FA Cup final"
+            if "check the notes against the question" in prompt:
+                return "WRONG: It was at Wembley, not in Dudley."
+            return "The 1923 final was at Wembley [1]."
+        answer, _ = research.run("what was the attendance at the 1923 FA Cup final replay in Dudley?", fake_tools([]),
+                                 complete, browser=False, classify=classify)
+        self.assertEqual(len(quick_checks), 1)
+        self.assertIn("It was at Wembley, not in Dudley.", written[-1])
+        self.assertIn("Wembley", answer)
+
     def test_a_sound_question_gets_no_correction(self):
         prompts = []
 

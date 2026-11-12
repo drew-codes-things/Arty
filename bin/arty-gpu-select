@@ -1,5 +1,5 @@
 #!/bin/bash
-# Gives Arty's AI container (CT 104) whichever GPU is in the host, so swapping cards needs no fiddling.
+# Gives Arty's AI container whichever GPU is in the host, so swapping cards needs no fiddling.
 # Runs at boot before the guests start (arty-gpu-select.service), and by hand: arty-gpu-select [--dry-run].
 #   NVIDIA (/dev/nvidia0 present, e.g. the RTX 3060): passes the NVIDIA device nodes; Ollama uses CUDA.
 #   AMD (an amdgpu render node, e.g. the RX 570): passes the render node; Ollama uses Vulkan.

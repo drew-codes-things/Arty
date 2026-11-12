@@ -26,8 +26,15 @@ from listening import FRAME_BYTES, MAX_FRAMES, WHISPER_RATE, Downsampler, Uttera
 
 class FakeSenses:
 
+    def __init__(self):
+        self.collectors = []
+
     def wav(self, text):
         return b"RIFF" + text.encode()
+
+    def new_collector(self):
+        self.collectors.append(UtteranceCollector())
+        return self.collectors[-1]
 
 
 class RecordingOutput:
@@ -175,6 +182,12 @@ def test_an_odd_byte_from_the_headset_does_not_shift_later_audio():
     session.hear(b"\x01\x02\x03")
     session.hear(b"\x04\x05")
     assert session.collector.pending == b"\x01\x02\x04\x05"
+
+
+def test_a_headset_session_listens_with_the_collector_its_senses_make():
+    senses = FakeSenses()
+    session = headset.HeadsetSession(senses, None, FakeSocket())
+    assert senses.collectors == [session.collector]
 
 
 def test_the_downsampler_keeps_a_split_sample_for_the_next_chunk():

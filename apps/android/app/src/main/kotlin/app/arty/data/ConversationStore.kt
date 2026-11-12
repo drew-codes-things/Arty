@@ -1,6 +1,7 @@
 package app.arty.data
 
 import app.arty.core.Attachment
+import app.arty.core.MainModel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -27,7 +28,7 @@ data class Conversation(
     val pendingJobId: String? = null,
 ) {
     companion object {
-        const val DEFAULT_MODEL = "assistant-core"
+        const val DEFAULT_MODEL = MainModel.ID
         const val TITLE_LENGTH = 40
     }
 }
@@ -83,7 +84,7 @@ class ConversationStore(root: File) {
         return Conversation(
             id = json.getString("id"),
             title = json.optString("title", "Chat"),
-            model = json.optString("model", Conversation.DEFAULT_MODEL),
+            model = MainModel.currentName(json.optString("model", Conversation.DEFAULT_MODEL)),
             updated = json.optLong("updated"),
             pendingJobId = if (json.isNull("pendingJobId")) null else json.optString("pendingJobId"),
             messages = (0 until messages.length()).map { index ->

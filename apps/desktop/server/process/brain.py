@@ -22,7 +22,15 @@ from process.tools import registry as tools
 _config = load_config()
 _brain = _config.get("brain") or {}
 API_KEY = str(_brain.get("api_key") or "")
-MODEL = str(_brain.get("model") or "assistant-core")
+MAIN_MODEL = "Arty"
+RETIRED_MAIN_MODEL = "assistant-core"
+
+
+def as_current_name(model_id):
+    return MAIN_MODEL if model_id == RETIRED_MAIN_MODEL else model_id
+
+
+MODEL = as_current_name(str(_brain.get("model") or MAIN_MODEL))
 CLIENT_NAME = "desktop"
 TIMEOUT_SECONDS = float(_brain.get("timeout_seconds", 600))
 # The conversation sent with each message: HISTORY_TURNS to HISTORY_TURNS + HISTORY_STEP_TURNS exchanges.
@@ -147,7 +155,7 @@ def _stream(messages, offer_tools, lead=""):
     except route.UnprovenBrain as error:
         raise BrainError(str(error)) from None
     except requests.ConnectionError:
-        raise BrainError(f"Can't reach Arty's brain at {route.describe()}. Is the AI container (CT 104) on, and is this PC online?") from None
+        raise BrainError(f"Can't reach Arty's brain at {route.describe()}. Is Arty's server on, and is this PC online?") from None
     except requests.Timeout:
         raise BrainError("Arty's brain took too long to answer.") from None
     with response:
@@ -268,9 +276,8 @@ def current_model():
 
 
 def set_model(model_id):
-    """Uses this brain model from the next message on ("assistant-core" is Arty's main model)."""
     global MODEL
-    MODEL = model_id
+    MODEL = as_current_name(model_id)
 
 
 def list_models():
@@ -280,7 +287,7 @@ def list_models():
         response.raise_for_status()
     except requests.RequestException as error:
         raise BrainError(f"Couldn't list Arty's models: {error}") from None
-    return [{"id": m["id"], "name": "Arty (main model)" if m["id"] == "assistant-core" else m.get("name", m["id"]),
+    return [{"id": m["id"], "name": "Arty (main model)" if m["id"] == MAIN_MODEL else m.get("name", m["id"]),
              "model": m.get("model", ""), "description": m.get("description", "")}
             for m in response.json().get("data", [])]
 

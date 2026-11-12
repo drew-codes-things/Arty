@@ -21,20 +21,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,7 +48,11 @@ import app.arty.core.ArtyException
 import app.arty.core.SetupCode
 import app.arty.core.SetupCodeException
 import app.arty.notify.LiveConnection
+import app.arty.ui.ArtyButton
 import app.arty.ui.ArtyColors
+import app.arty.ui.ArtyOutlinedButton
+import app.arty.ui.ArtyTextButton
+import app.arty.ui.artyFieldColors
 import app.arty.ui.ArtyTheme
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
@@ -62,7 +60,6 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.ui.graphics.Color as ComposeColor
 import app.arty.ui.artyBackground
 
 /**
@@ -199,21 +196,20 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
             style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextDim,
         )
         if (!typingIn) {
-            Button(
+            ArtyButton(
                 enabled = !connecting, onClick = { scanSetupCode(context, ::useScanned) { problem = it } },
-                colors = ButtonDefaults.buttonColors(containerColor = ArtyColors.Signal, contentColor = ComposeColor.White),
-                shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth(),
             ) { Text("Scan QR code") }
-            OutlinedButton(
+            ArtyOutlinedButton(
                 enabled = !connecting, onClick = { typingIn = true },
-                shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth(),
-            ) { Text("Enter details manually", color = ArtyColors.Text) }
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Enter details manually") }
             Text(
                 "The QR code is in Arty on your computer: open its tray menu and choose Phone setup code.",
                 style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextDim,
             )
-            problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Signal) }
-            if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel", color = ArtyColors.TextDim) }
+            problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.SignalText) }
+            if (onCancel != null) ArtyTextButton("Cancel", onClick = onCancel, colour = ArtyColors.TextDim)
             return@Column
         }
         SetupField("Brain address", address, { address = it; cameFromScan = false }, "https://arty.example.com or http://arty-server:8081", KeyboardType.Uri)
@@ -225,16 +221,17 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
             }
             Switch(
                 checked = behindAccess, onCheckedChange = { behindAccess = it },
-                colors = SwitchDefaults.colors(checkedTrackColor = ArtyColors.Signal, checkedThumbColor = ArtyColors.Void),
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = ArtyColors.Signal, checkedThumbColor = ArtyColors.OnSignal,
+                    uncheckedTrackColor = ArtyColors.Sunken, uncheckedThumbColor = ArtyColors.TextFaint, uncheckedBorderColor = ArtyColors.LineControl,
+                ),
             )
         }
         if (behindAccess) {
             SetupField("Service token client ID", clientId, { clientId = it }, "....access", KeyboardType.Ascii)
             SetupField("Service token client secret", clientSecret, { clientSecret = it }, "", KeyboardType.Password, secret = true)
         }
-        TextButton(onClick = { showingHelp = !showingHelp }) {
-            Text(if (showingHelp) "Hide help" else "Where do I find these?", color = ArtyColors.TextDim)
-        }
+        ArtyTextButton(if (showingHelp) "Hide help" else "Where do I find these?", onClick = { showingHelp = !showingHelp }, colour = ArtyColors.TextDim)
         if (showingHelp) Text(WHERE_TO_FIND_THE_DETAILS, style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextDim)
         if (cameFromScan) {
             val sentTo = Connection.hostOf(address)
@@ -244,20 +241,14 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
                 style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Text,
             )
         }
-        problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Signal) }
+        problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.SignalText) }
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                enabled = ready && !connecting, onClick = ::connect,
-                colors = ButtonDefaults.buttonColors(containerColor = ArtyColors.Signal, contentColor = ComposeColor.White),
-                shape = RoundedCornerShape(4.dp),
-            ) { Text(if (connecting) "Connecting..." else "Connect") }
+            ArtyButton(enabled = ready && !connecting, onClick = ::connect) { Text(if (connecting) "Connecting..." else "Connect") }
             if (connecting) CircularProgressIndicator(Modifier.size(20.dp), color = ArtyColors.Signal, strokeWidth = 2.dp)
-            if (onCancel != null && !connecting) TextButton(onClick = onCancel) { Text("Cancel", color = ArtyColors.TextDim) }
+            if (onCancel != null && !connecting) ArtyTextButton("Cancel", onClick = onCancel, colour = ArtyColors.TextDim)
         }
-        TextButton(enabled = !connecting, onClick = { scanSetupCode(context, ::useScanned) { problem = it } }) {
-            Text("Scan QR code instead", color = ArtyColors.TextDim)
-        }
+        ArtyTextButton("Scan QR code instead", enabled = !connecting, onClick = { scanSetupCode(context, ::useScanned) { problem = it } }, colour = ArtyColors.TextDim)
     }
 }
 
@@ -266,11 +257,12 @@ private fun SetupField(label: String, value: String, onChange: (String) -> Unit,
     OutlinedTextField(
         value = value, onValueChange = onChange,
         label = { Text(label) },
-        placeholder = { Text(hint, color = ArtyColors.TextFaint) },
+        placeholder = { Text(hint) },
         singleLine = true,
+        shape = MaterialTheme.shapes.small,
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = keyboard, autoCorrectEnabled = false),
-        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ArtyColors.Signal, unfocusedBorderColor = ArtyColors.Line, cursorColor = ArtyColors.Signal),
+        colors = artyFieldColors(),
         modifier = Modifier.fillMaxWidth(),
     )
 }

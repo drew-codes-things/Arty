@@ -91,11 +91,20 @@ class ListingEverything(Server):
         self.assertNotIn("arty/qwen2.5:72b", listed)
 
     def test_asking_for_all_lists_every_downloaded_chat_model(self):
-        status, body = self.request("GET", "/v1/models?all=1")
+        with unittest.mock.patch.object(brain, "load_config", return_value={"coding_model": "qwen2.5:72b"}):
+            status, body = self.request("GET", "/v1/models?all=1")
         listed = {entry["id"]: entry for entry in json.loads(body)["data"]}
         self.assertEqual(status, 200)
         self.assertEqual(sorted(listed), ["arty/qwen2.5:72b", "arty/qwen3:14b"])
         self.assertIn("72.7B", listed["arty/qwen2.5:72b"]["description"])
+        self.assertFalse(listed["arty/qwen3:14b"]["coding"])
+        self.assertTrue(listed["arty/qwen2.5:72b"]["coding"])
+
+    def test_the_full_list_marks_the_coding_model_and_coder_models(self):
+        self.assertTrue(models.is_for_coding("mimo-v2.6:9b", "mimo-v2.6:9b"))
+        self.assertTrue(models.is_for_coding("qwen2.5-coder:14b", ""))
+        self.assertFalse(models.is_for_coding("qwen3:14b", "mimo-v2.6:9b"))
+        self.assertFalse(models.is_for_coding("qwen3:14b", ""))
 
     def test_ollama_being_down_is_a_clear_503(self):
         with unittest.mock.patch.object(models, "installed", side_effect=urllib.error.URLError("refused")):

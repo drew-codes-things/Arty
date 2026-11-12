@@ -8,7 +8,7 @@ brain:
   access_client_id: ""         # a Cloudflare Access service token for remote_url
   access_client_secret: ""
   api_key: ""                 # the Arty API key (setup-linux.sh copies it in)
-  model: "assistant-core"     # or "arty/<model>" to pick one of the brain's models
+  model: "Arty"               # or "arty/<model>" to pick one of the brain's models
   timeout_seconds: 600        # long jobs on this computer can take a while
   history_turns: 12           # exchanges kept as context for the next message
   max_tool_rounds: 60         # steps one request may take on this computer

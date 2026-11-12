@@ -3,6 +3,13 @@
   "think": "auto",
   "arty_models": [],
   "solo_models": [],
+  "vision_model": "mimo-v2.6:9b",
+  "coding_model": "mimo-v2.6:9b",
+  "route_coding_chats": true,
+  "model_strengths": {
+    "mimo-v2.6:9b": "writing, fixing and testing code across several files, and reading pictures and screenshots"
+  },
+  "vram_budget_mb": 11500,
   "system_prompt_file": "/srv/ai/brain/system-prompt.md",
   "keep_alive": -1,
   "options": {
@@ -586,6 +593,7 @@
         "convert_units",
         "convert_currency",
         "date_facts",
+        "place_time",
         "currency_facts"
       ],
       "keywords": [
@@ -596,6 +604,8 @@
         "what day",
         "weekday",
         "what time will",
+        "time in",
+        "time difference",
         "arrive",
         "finish",
         "convert",
@@ -735,7 +745,7 @@
       "tool": "homelab__pufferpanel_servers"
     },
     {
-      "pattern": "\\b(ips?|ip address(es)?|vms?|containers?|proxmox|servmox|homelab|server status|servers?)\\b",
+      "pattern": "\\b(ips?|ip address(es)?|vms?|containers?|proxmox|homelab|server status|servers?)\\b",
       "tool": "homelab__proxmox_status"
     },
     {
@@ -776,6 +786,14 @@
       "tool": "date_facts",
       "arguments": {
         "text": "{message}"
+      }
+    },
+    {
+      "pattern": "\\b(what('?s| is) the (local )?time (in|over in|now in)|what time is it (now |right now )?(in|over in)|(current|local) time in|time (is it )?(now |right now )?in|time difference)\\b",
+      "tool": "place_time",
+      "arguments": {
+        "text": "{message}",
+        "home": "Europe/London"
       }
     },
     {

@@ -17,7 +17,7 @@ and Discord bots and Open WebUI. The phone also needs it from anywhere, so the b
 Cloudflare Tunnel and locked down twice:
 
 ```
-Arty for Android ──HTTPS──▶ Cloudflare ──▶ Access: "Arty API" ──tunnel──▶ cloudflared on core-sys ──LAN──▶ brain :8081
+Arty for Android ──HTTPS──▶ Cloudflare ──▶ Access: "Arty API" ──tunnel──▶ cloudflared on your LAN ──LAN──▶ brain :8081
                            (arty.<your domain>)  service token only        (outbound only, no open ports)   API key checked
 ```
 
@@ -25,7 +25,7 @@ Arty for Android ──HTTPS──▶ Cloudflare ──▶ Access: "Arty API" �
    away at Cloudflare and never reaches your network.
 2. **The brain** then requires its Arty API key (`Authorization: Bearer ...`), the same as on the LAN.
 
-The tunnel only connects outwards from core-sys, so no ports are opened on the router.
+The tunnel only connects outwards from the machine running `cloudflared`, so no ports are opened on the router.
 
 ---
 
@@ -33,8 +33,8 @@ The tunnel only connects outwards from core-sys, so no ports are opened on the r
 
 You need a domain on Cloudflare and a Zero Trust account (the free plan is enough).
 
-1. **Tunnel.** Zero Trust > Networks > Tunnels > Create a tunnel (Cloudflared). Install `cloudflared` on a machine on
-   the LAN (here core-sys, CT 100) and run the command it shows. That installs a `cloudflared` service with the
+1. **Tunnel.** Zero Trust > Networks > Tunnels > Create a tunnel (Cloudflared). Install `cloudflared` on an always-on
+   machine on the LAN and run the command it shows. That installs a `cloudflared` service with the
    tunnel's token, and the tunnel is managed from the dashboard, with no local config file.
 2. **Route.** In the tunnel's Public Hostnames, add `arty.<your domain>` with service `http://192.0.2.13:8081` (the
    brain).
@@ -87,5 +87,5 @@ for the new key, and the personal build needs rebuilding with it, or a new code 
 
 ## Tested On
 
-`cloudflared` 2026.10.3 on core-sys (CT 100, Debian 12 bookworm). Used with Arty for Android on Android 16
+`cloudflared` 2026.10.3 in a Debian 12 (bookworm) container. Used with Arty for Android on Android 16
 (Realme RMX5085).

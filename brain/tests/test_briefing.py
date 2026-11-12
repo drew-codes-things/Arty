@@ -18,9 +18,9 @@ import briefing  # noqa: E402
 import personal  # noqa: E402
 import store  # noqa: E402
 
-STATUS = """Host servmox (192.168.1.253): online, CPU 17% of 8 cores
-CT 100 core-sys (192.168.1.10): running, CPU 5%
-CT 103 minecraft (192.168.1.40): stopped
+STATUS = """Host pve1 (192.0.2.253): online, CPU 17% of 8 cores
+CT 100 web (192.0.2.10): running, CPU 5%
+CT 103 minecraft (192.0.2.40): stopped
 VM 106 test-debian: stopped"""
 NO_EMAIL = "No emails match: in:inbox is:unread category:primary newer_than:3d"
 

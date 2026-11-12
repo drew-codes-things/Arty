@@ -8,7 +8,9 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -23,7 +25,11 @@ class ArtyClient(
     private val connectTimeoutMs: Int = 15_000,
     private val readTimeoutMs: Int = 45_000,
     private val uploadTimeoutMs: Int = 300_000,
+    private val clockMs: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
 ) {
+    @Volatile
+    private var identityProvenAtMs: Long? = null
+
     fun models(): List<ModelOption> {
         val data = request("GET", "/v1/models").getJSONArray("data")
         return data.objects().map {
@@ -60,8 +66,11 @@ class ArtyClient(
     fun download(link: String, target: OutputStream) {
         val path = ARTY_FILE_PATH.find(link.substringBefore('?').substringBefore('#'))?.value
             ?: throw ArtyException(-1, "That isn't a file from Arty.")
-        exchange("GET", path, uploadTimeoutMs, into = target) { }
+        exchange("GET", withEncodedName(path), uploadTimeoutMs, into = target) { }
     }
+
+    private fun withEncodedName(path: String): String =
+        path.substringBeforeLast('/') + "/" + URLEncoder.encode(plainName(path.substringAfterLast('/')), "UTF-8").replace("+", "%20")
 
     fun chatJob(id: String): ChatJob {
         val job = request("GET", "/v1/chat/jobs/${encode(id)}")
@@ -179,6 +188,61 @@ class ArtyClient(
             MemoryEntity(it.optString("name"), it.optString("entityType"), it.optJSONArray("observations")?.strings().orEmpty())
         }
 
+    fun remoteSessions(): List<RemoteSession> =
+        request("GET", "/v1/remote/sessions").optJSONArray("sessions")?.objects().orEmpty().map { it.toRemoteSession() }
+
+    fun remoteEvents(sessionId: String, after: Long, waitSeconds: Int = 0): RemoteEvents {
+        val wait = waitSeconds.coerceIn(0, MAX_REMOTE_WAIT_SECONDS)
+        val json = exchangeJson("GET", "${remotePath(sessionId, "events")}?after=$after&wait=$wait", (wait + REMOTE_WAIT_GRACE_SECONDS) * 1000)
+        return RemoteEvents(
+            events = json.optJSONArray("events")?.objects().orEmpty().map { it.toRemoteEvent() },
+            next = json.optLong("next", after),
+            ended = json.optBoolean("ended"),
+            missed = json.optBoolean("missed"),
+            session = json.optJSONObject("session")?.toRemoteSession(),
+        )
+    }
+
+    fun remoteMessage(sessionId: String, text: String) {
+        request("POST", remotePath(sessionId, "messages"), JSONObject().put("text", text))
+    }
+
+    fun remoteAnswer(sessionId: String, requestId: String, allow: Boolean) {
+        request("POST", remotePath(sessionId, "answers"), JSONObject().put("request_id", requestId).put("allow", allow))
+    }
+
+    fun remoteInterrupt(sessionId: String) {
+        request("POST", remotePath(sessionId, "interrupt"), JSONObject())
+    }
+
+    private fun remotePath(sessionId: String, action: String): String {
+        if (!RemoteView.isSessionId(sessionId)) throw ArtyException(-1, "That isn't an Arty CLI session.")
+        return "/v1/remote/sessions/$sessionId/$action"
+    }
+
+    private fun JSONObject.toRemoteSession() = RemoteSession(
+        id = optString("id"),
+        name = optString("name"),
+        folder = optString("folder"),
+        model = optString("model"),
+        mode = optString("mode"),
+        waitingFor = optJSONArray("waiting_for")?.objects().orEmpty().map {
+            PermissionRequest(it.optString("request_id"), it.optString("tool"), it.optString("text"))
+        },
+        title = optString("title"),
+    )
+
+    private fun JSONObject.toRemoteEvent() = RemoteEvent(
+        seq = optLong("seq"),
+        type = optString("type"),
+        text = optString("text"),
+        tool = optString("tool"),
+        requestId = optString("request_id"),
+        by = optString("by"),
+        allow = if (has("allow") && !isNull("allow")) optBoolean("allow") else null,
+        history = optBoolean("history"),
+    )
+
     private fun request(method: String, path: String, body: JSONObject? = null): JSONObject = exchangeJson(method, path, readTimeoutMs, body)
 
     private fun exchangeJson(method: String, path: String, timeoutMs: Int, body: JSONObject? = null): JSONObject {
@@ -197,8 +261,21 @@ class ArtyClient(
     }
 
     private fun exchange(method: String, path: String, timeoutMs: Int, into: OutputStream? = null, send: (HttpURLConnection) -> Unit): ByteArray {
-        if (isPlainHttp()) requireProvenIdentity()
-        return exchangeWith(method, path, timeoutMs, into, withKey = true, send)
+        if (isPlainHttp() && !isIdentityStillProven()) {
+            requireProvenIdentity()
+            identityProvenAtMs = clockMs()
+        }
+        return try {
+            exchangeWith(method, path, timeoutMs, into, withKey = true, send)
+        } catch (error: ArtyException) {
+            if (error.status in AUTH_FAILURES) identityProvenAtMs = null
+            throw error
+        }
+    }
+
+    private fun isIdentityStillProven(): Boolean {
+        val provenAt = identityProvenAtMs ?: return false
+        return clockMs() - provenAt < IDENTITY_PROOF_LIFETIME_MS
     }
 
     private fun isPlainHttp(): Boolean = config.baseUrl.trim().startsWith("http://", ignoreCase = true)
@@ -216,7 +293,7 @@ class ArtyClient(
         } catch (error: JSONException) {
             emptyList()
         }
-        if (config.apiKey.isEmpty() || identityProof(config.apiKey, nonce) !in proofs) {
+        if (config.apiKey.isEmpty() || acceptedProofs(config.apiKey, nonce).none { it in proofs }) {
             throw ArtyException(IDENTITY_NOT_PROVEN, "The server at ${config.baseUrl} isn't your Arty (it couldn't prove it knows the key), so the key wasn't sent. On another Wi-Fi, use Arty's https address.")
         }
     }
@@ -228,6 +305,8 @@ class ArtyClient(
             URI(config.baseUrl.trimEnd('/') + path).toURL().openConnection() as HttpURLConnection
         } catch (error: IllegalArgumentException) {
             throw ArtyException(0, "Bad server address: ${config.baseUrl}")
+        } catch (error: java.net.URISyntaxException) {
+            throw ArtyException(0, "Bad address: ${config.baseUrl.trimEnd('/')}$path")
         }
         try {
             connection.requestMethod = method
@@ -291,16 +370,38 @@ class ArtyClient(
     private fun encode(value: String) = URLEncoder.encode(value, "UTF-8")
 
     companion object {
+        private const val UNNAMED_DOWNLOAD = "arty-file"
+
+        fun downloadName(link: String): String =
+            plainName(link.substringBefore('?').substringBefore('#').substringAfterLast('/')).ifBlank { UNNAMED_DOWNLOAD }
+
+        private fun plainName(name: String): String = try {
+            URLDecoder.decode(name.replace("+", "%2B"), "UTF-8")
+        } catch (error: IllegalArgumentException) {
+            name
+        }
+
         const val MAX_UPLOAD_BYTES = 95L * 1024 * 1024 // the brain's limit, set by Cloudflare's 100 MB cap
         const val IDENTITY_NOT_PROVEN = -2
         private const val CLOUDFLARE_REFUSED = 403
         private const val IDENTITY_PATH = "/v1/identity"
+        internal const val IDENTITY_PROOF_LIFETIME_MS = 5 * 60 * 1000L
+        private const val NANOS_PER_MILLI = 1_000_000L
+        private val AUTH_FAILURES = setOf(401, 403)
         private const val NONCE_BYTES = 16
+        private const val MAX_REMOTE_WAIT_SECONDS = 20
+        private const val REMOTE_WAIT_GRACE_SECONDS = 15
         private const val HMAC = "HmacSHA256"
+        private const val SHA256 = "SHA-256"
         private val REDIRECTS = 300..399
         private val random = SecureRandom()
 
         private fun newNonce(): String = ByteArray(NONCE_BYTES).also { random.nextBytes(it) }.toHex()
+
+        fun acceptedProofs(key: String, nonce: String): List<String> =
+            listOf(identityProof(key, nonce), identityProof(sha256Hex(key), nonce))
+
+        private fun sha256Hex(text: String): String = MessageDigest.getInstance(SHA256).digest(text.toByteArray()).toHex()
 
         fun identityProof(key: String, nonce: String): String {
             val mac = Mac.getInstance(HMAC).apply { init(SecretKeySpec(key.toByteArray(), HMAC)) }

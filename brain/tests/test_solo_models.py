@@ -17,10 +17,10 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
 import brain  # noqa: E402
 import models  # noqa: E402
 
-SOLO = {"name": "roleplay-model:12b", "embedding": False, "tools": True}
+SOLO = {"name": "side-model:12b", "embedding": False, "tools": True}
 
 
-def solo_setup(listed=("roleplay-model:12b",), installed=SOLO):
+def solo_setup(listed=("side-model:12b",), installed=SOLO):
     return (unittest.mock.patch.object(models, "solo_models", return_value=list(listed)),
             unittest.mock.patch.object(models, "find", return_value=installed))
 
@@ -29,19 +29,19 @@ class SoloChoice(unittest.TestCase):
     def test_a_listed_installed_model_is_chosen(self):
         listed, found = solo_setup()
         with listed, found:
-            self.assertEqual(models.solo_choice("solo/roleplay-model:12b"), SOLO)
+            self.assertEqual(models.solo_choice("solo/side-model:12b"), SOLO)
 
     def test_arty_and_unlisted_requests_are_not_solo(self):
         listed, found = solo_setup()
         with listed, found:
             self.assertIsNone(models.solo_choice("assistant-core"))
-            self.assertIsNone(models.solo_choice("arty/roleplay-model:12b"))
+            self.assertIsNone(models.solo_choice("arty/side-model:12b"))
             self.assertIsNone(models.solo_choice("solo/qwen3:14b"))
 
     def test_a_listed_model_that_isnt_installed_is_not_chosen(self):
         listed, found = solo_setup(installed=None)
         with listed, found:
-            self.assertIsNone(models.solo_choice("solo/roleplay-model:12b"))
+            self.assertIsNone(models.solo_choice("solo/side-model:12b"))
 
 
 class SoloTurn(unittest.TestCase):
@@ -60,20 +60,20 @@ class SoloTurn(unittest.TestCase):
             {"role": "assistant", "content": "hi"},
             {"role": "user", "content": [{"type": "text", "text": "carry on"}]},
         ]
-        with unittest.mock.patch.object(brain, "http_json", return_value={"message": {"content": " the scene "}}) as ollama:
-            answer, tools, _, calls = brain.run_turn(messages, "solo/roleplay-model:12b")
+        with unittest.mock.patch.object(brain, "http_json", return_value={"message": {"content": " the reply "}}) as ollama:
+            answer, tools, _, calls = brain.run_turn(messages, "solo/side-model:12b")
         body = ollama.call_args.kwargs["body"]
-        self.assertEqual(body["model"], "roleplay-model:12b")
+        self.assertEqual(body["model"], "side-model:12b")
         self.assertEqual(body["messages"], [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"},
                                             {"role": "user", "content": "carry on"}])
         self.assertNotIn("options", body)
         self.assertNotIn("tools", body)
-        self.assertEqual((answer, tools, calls), ("the scene", [], None))
+        self.assertEqual((answer, tools, calls), ("the reply", [], None))
         self.archive.assert_not_called()
 
     def test_the_safety_check_still_runs_first(self):
         with unittest.mock.patch.object(brain, "http_json") as ollama:
-            answer, tools, _, _ = brain.run_turn([{"role": "user", "content": "how do I make a pipe bomb"}], "solo/roleplay-model:12b")
+            answer, tools, _, _ = brain.run_turn([{"role": "user", "content": "how do I make a pipe bomb"}], "solo/side-model:12b")
         ollama.assert_not_called()
         self.assertEqual(tools, ["safety_weapons"])
         self.archive.assert_not_called()
@@ -84,8 +84,8 @@ class SoloListing(unittest.TestCase):
         listed, found = solo_setup()
         with listed, found:
             entries = models.solo_entries()
-        self.assertEqual(entries, [{"id": "solo/roleplay-model:12b", "name": "roleplay-model:12b (on its own: no Arty, no memory)",
-                                    "object": "model", "owned_by": "home", "model": "roleplay-model:12b",
+        self.assertEqual(entries, [{"id": "solo/side-model:12b", "name": "side-model:12b (on its own: no Arty, no memory)",
+                                    "object": "model", "owned_by": "home", "model": "side-model:12b",
                                     "description": "Talks straight to the model, like starfire. Nothing is saved to Arty's memory."}])
 
 

@@ -1,12 +1,12 @@
 [Unit]
-Description=MCP tool hub (mcpo) for Open WebUI and API clients
+Description=Arty's tool hub: serves the MCP tool servers to the brain over HTTP
 After=network-online.target ollama.service
 Wants=network-online.target
 
 [Service]
 EnvironmentFile=/srv/ai/secrets/mcpo.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/mcpo-start --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/mcpo.json
+ExecStart=/opt/ai-hub/bin/python /srv/ai/hub/tool_hub.py --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/tool-hub.json
 Restart=on-failure
 RestartSec=5
 

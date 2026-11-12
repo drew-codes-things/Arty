@@ -4,7 +4,7 @@
 # last backed up (backup files are only shown to accounts that may make backups).
 # Runs daily from homelab-facts.timer, after Proxmox's own nightly package list refresh.
 set -euo pipefail
-out=/DataStarServ/ai/state/host-facts.json
+out=${HOST_FACTS_FILE:?set HOST_FACTS_FILE to the file on this host that the brain reads as /srv/ai/state/host-facts.json}
 mkdir -p "$(dirname "$out")"
 list=$(apt list --upgradable 2>/dev/null | tail -n +2 || true)
 count=$(printf '%s\n' "$list" | grep -c . || true)

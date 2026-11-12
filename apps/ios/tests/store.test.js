@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  ConversationStore, HISTORY_MESSAGES, MAX_CONVERSATIONS, historyToSend, recentWindow, titleFor,
+  CONVERSATIONS_KEY, ConversationStore, DEFAULT_MODEL, HISTORY_MESSAGES, MAX_CONVERSATIONS, historyToSend, randomId, recentWindow, titleFor,
 } from "../js/conversations.js";
 import { forgetEverything, forgetSettings, isComplete, loadPreferences, loadSettings, savePreferences, saveSettings } from "../js/settings.js";
 
@@ -65,6 +65,22 @@ test("conversations are saved newest first and can be removed", () => {
   assert.equal(store.get("missing"), null);
 });
 
+test("new chats use the main model, which is called Arty", () => {
+  assert.equal(DEFAULT_MODEL, "Arty");
+  assert.equal(new ConversationStore(memoryStorage(), { newId: () => "c1" }).create().model, "Arty");
+});
+
+test("chats saved under the main model's old name open as Arty", () => {
+  const storage = memoryStorage();
+  storage.setItem(CONVERSATIONS_KEY, JSON.stringify([
+    { id: "old", title: "old", model: "assistant-core", messages: [], updated: 2 },
+    { id: "picked", title: "picked", model: "arty/qwen3:14b", messages: [], updated: 1 },
+  ]));
+  const store = new ConversationStore(storage);
+  assert.equal(store.get("old").model, "Arty");
+  assert.deepEqual(store.list().map((c) => c.model), ["Arty", "arty/qwen3:14b"]);
+});
+
 test("old conversations beyond the limit are dropped and bad storage reads as empty", () => {
   let clock = 1;
   let next = 0;
@@ -107,4 +123,11 @@ test("forgetting everything clears the keys, the chats and the preferences", () 
   assert.deepEqual(new ConversationStore(storage).list(), []);
   assert.equal(loadPreferences(storage).readAloud, false);
   assert.equal(storage.getItem("unrelated"), "kept");
+});
+
+test("ids work on a plain http page, where crypto.randomUUID is missing", () => {
+  const onlyRandomValues = { getRandomValues: (bytes) => bytes.fill(171) };
+  assert.equal(randomId(onlyRandomValues), "ab".repeat(16));
+  assert.equal(randomId({ randomUUID: () => "uuid-1", getRandomValues: onlyRandomValues.getRandomValues }), "uuid-1");
+  assert.notEqual(randomId(), randomId());
 });

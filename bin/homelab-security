@@ -28,6 +28,9 @@ SCAN_EVERY = 30 * 60
 PORTS_EVERY = 24 * 3600
 COMMAND_SECONDS = 25
 SCAN_SECONDS = 600
+MAX_UNSENT = 50
+NOTIFY_SECONDS = 30
+RESEND_BUDGET_SECONDS = 60
 ACCEPTED = re.compile(r"Accepted (\w+) for (\S+) from (\S+)")
 FAILED = re.compile(r"(?:Failed password for (?:invalid user )?|Invalid user )(\S+) from (\S+)")
 
@@ -48,14 +51,34 @@ def run(args, seconds=COMMAND_SECONDS) -> str:
         return ""  # a container that doesn't answer is skipped this time
 
 
-def alert(settings: dict, title: str, message: str, urgent: bool = False):
+def delivered(settings: dict, title: str, message: str, urgent: bool, seconds: float = NOTIFY_SECONDS) -> bool:
     body = json.dumps({"title": title, "message": message, "urgent": urgent}).encode()
     request = urllib.request.Request(f"{settings['BRAIN_URL'].rstrip('/')}/hooks/notify?token={settings['ALERT_TOKEN']}",
                                      data=body, headers={"Content-Type": "application/json"})
     try:
-        urllib.request.urlopen(request, timeout=30).read()
+        urllib.request.urlopen(request, timeout=seconds).read()
+        return True
     except OSError as error:
-        print(f"couldn't alert ({error}): {title}: {message}", file=sys.stderr)
+        print(f"couldn't alert ({error}), will retry next run: {title}: {message}", file=sys.stderr)
+        return False
+
+
+def alert(settings: dict, state: dict, title: str, message: str, urgent: bool = False):
+    if not delivered(settings, title, message, urgent):
+        unsent = state.setdefault("unsent", [])
+        unsent.append({"title": title, "message": message, "urgent": urgent})
+        del unsent[:-MAX_UNSENT]
+
+
+def resend_unsent(settings: dict, state: dict):
+    deadline = time.monotonic() + RESEND_BUDGET_SECONDS
+    still_unsent = []
+    for item in state.pop("unsent", []):
+        seconds_left = deadline - time.monotonic()
+        if seconds_left <= 0 or not delivered(settings, item["title"], item["message"], item["urgent"],
+                                              min(NOTIFY_SECONDS, seconds_left)):
+            still_unsent.append(item)
+    state["unsent"] = still_unsent
 
 
 def running_containers() -> list[tuple[str, str]]:
@@ -84,7 +107,7 @@ def check_ssh(settings: dict, state: dict, learning: bool):
             if source not in known:
                 known.add(source)
                 if not learning:
-                    alert(settings, "🔐 New SSH login",
+                    alert(settings, state, "🔐 New SSH login",
                           f"{user} logged in to {machine} from {source} ({method}). This address hasn't logged in before. "
                           "If that wasn't you, change that account's password or key now.", urgent=True)
         elif match := FAILED.search(line):
@@ -94,7 +117,7 @@ def check_ssh(settings: dict, state: dict, learning: bool):
         if count >= FAILED_BURST and not learning and now - cooldowns.get(source, 0) > BURST_COOLDOWN:
             cooldowns[source] = now
             outside = not ipaddress.ip_address(source).is_private if re.match(r"^[\d.:a-f]+$", source) else True
-            alert(settings, "🚨 Failed SSH logins", f"{count} failed SSH logins from {source} in the last few minutes"
+            alert(settings, state, "🚨 Failed SSH logins", f"{count} failed SSH logins from {source} in the last few minutes"
                   + (" (from the internet)." if outside else " (from inside your network)."), urgent=True)
     state.update(ssh_checked=now, ssh_sources=sorted(known), burst_alerted=cooldowns)
 
@@ -127,7 +150,7 @@ def check_devices(settings: dict, state: dict, learning: bool):
     known = state.get("devices", {})
     for mac, device in found.items():
         if mac not in known and not learning:
-            alert(settings, "📶 New device on your network",
+            alert(settings, state, "📶 New device on your network",
                   f"{device['ip']}, made by {device['vendor']} (hardware address {mac}). If you don't recognise it, check your Wi-Fi.")
         known[mac] = {**device, "seen": time.time()}
     state.update(devices=known, devices_scanned=time.time())
@@ -159,7 +182,7 @@ def check_ports(settings: dict, state: dict, learning: bool):
         before = set(baseline.get(address, []))
         new = [p for p in open_ports if p not in before]
         if new and address in baseline and not learning:
-            alert(settings, "🔓 New open port", f"{address} now has port{'s' if len(new) > 1 else ''} {', '.join(map(str, new))} open, "
+            alert(settings, state, "🔓 New open port", f"{address} now has port{'s' if len(new) > 1 else ''} {', '.join(map(str, new))} open, "
                   "which wasn't open before. If you didn't set that up, find out what's listening.")
         baseline[address] = sorted(before | set(open_ports))
     state.update(ports=baseline, ports_scanned=time.time())
@@ -169,6 +192,7 @@ def main() -> int:
     settings = config()
     learning = not STATE.exists()
     state = json.loads(STATE.read_text()) if not learning else {}
+    resend_unsent(settings, state)
     for check in (check_ssh, check_devices, check_ports):
         try:
             check(settings, state, learning)

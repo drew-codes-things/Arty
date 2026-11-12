@@ -75,7 +75,6 @@ AIMED_AT_AI = re.compile(r"[^.!?\n]*\b(ignore (all |any )?(the )?(previous|prior
                          re.IGNORECASE)
 VERDICT = re.compile(r"^\W*(\d+)\s*[:.)-]\s*IMPORTANT\s*[:-]?\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 SUMMARY_CHARS = 240
-# "Andrew, your appointment is..." (the model copies the name an email greets them by): the line is to them anyway.
 GREETING = re.compile(r"^(?:(?i:hi|hello|hey|dear)\s+)?(?!(?i:monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
                       r"today|tomorrow|yes|no|ok|okay|also|however|unfortunately|sadly|good)\b)[A-Z][a-z]+(?: [A-Z][a-z]+)?,\s+(?=\S)")
 

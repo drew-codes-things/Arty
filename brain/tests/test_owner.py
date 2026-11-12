@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import sys
@@ -16,6 +17,15 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
 
 import brain  # noqa: E402
 import owner  # noqa: E402
+
+RELEASE_BUILDER = Path(__file__).resolve().parents[2] / "downloads" / "build_release.py"
+
+
+def owner_details() -> tuple:
+    spec = importlib.util.spec_from_file_location("build_release", RELEASE_BUILDER)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    return builder.OWNER_DETAILS
 
 
 def config_with(**settings) -> str:
@@ -45,7 +55,11 @@ class NameInPrompts(unittest.TestCase):
         self.assertEqual(owner.fill("OWNER said hi; OWNER's dog", "Sam"), "Sam said hi; Sam's dog")
         self.assertNotIn(owner.OWNER_TOKEN, brain.EXTRACT_PROMPT)
         self.assertIn(f"{brain.USER_NAME} said:", brain.EXTRACT_PROMPT)
-        self.assertNotIn("Drew", brain.EXTRACT_PROMPT.replace(brain.USER_NAME, ""))
+
+    @unittest.skipUnless(RELEASE_BUILDER.is_file(), "the release builder, which lists the owner's details, is not in this copy")
+    def test_no_owner_detail_is_written_into_the_prompt(self):
+        prompt = brain.EXTRACT_PROMPT.replace(brain.USER_NAME, "")
+        self.assertEqual([name for name, pattern in owner_details() if pattern.search(prompt)], [])
 
     def test_greetings_by_the_configured_name_are_tidied(self):
         greeting, tail = owner.vocative_patterns("Sam")

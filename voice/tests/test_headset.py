@@ -17,6 +17,7 @@ import headset
 import headset_commands
 import headset_panels
 import music
+from listening import UtteranceCollector
 
 
 @pytest.mark.parametrize("command, expected", [
@@ -46,8 +47,15 @@ def test_questions_go_to_the_brain(question):
 
 class FakeSenses:
 
+    def __init__(self):
+        self.collectors = []
+
     def wav(self, text):
         return b"RIFF" + text.encode()
+
+    def new_collector(self):
+        self.collectors.append(UtteranceCollector())
+        return self.collectors[-1]
 
 
 class FakeSocket:
@@ -203,16 +211,16 @@ def test_unknown_headsets_are_refused(monkeypatch):
 
 
 STATUS = """Uptime Kuma isn't connected yet, so here is the Proxmox server status instead:
-Host servmox (192.168.1.253): online, CPU 8% of 6 cores, RAM 12.3G/15.5G, up 88h
-CT 100 core-sys (192.168.1.10): running, CPU 4%, RAM 1.0G/4.0G, up 88h
+Host pve1 (192.0.2.253): online, CPU 8% of 6 cores, RAM 12.3G/15.5G, up 88h
+CT 100 web (192.0.2.10): running, CPU 4%, RAM 1.0G/4.0G, up 88h
 VM 106 test-debian: stopped
-Storage DataStarServ: 206.4G used of 348.1G"""
+Storage tank: 206.4G used of 348.1G"""
 
 
 def test_server_status_becomes_panel_rows():
     assert headset_panels.servers_from(STATUS) == [
-        {"name": "servmox", "state": "online", "ok": True, "detail": "CPU 8% of 6 cores, RAM 12.3G/15.5G"},
-        {"name": "core-sys", "state": "running", "ok": True, "detail": "CPU 4%, RAM 1.0G/4.0G"},
+        {"name": "pve1", "state": "online", "ok": True, "detail": "CPU 8% of 6 cores, RAM 12.3G/15.5G"},
+        {"name": "web", "state": "running", "ok": True, "detail": "CPU 4%, RAM 1.0G/4.0G"},
         {"name": "test-debian", "state": "stopped", "ok": False, "detail": ""},
     ]
 

@@ -1,7 +1,7 @@
 [Unit]
 Description=Assistant brain: memory, instructions, tool loop, background tasks and API (OpenAI-compatible)
-After=network-online.target ollama.service mcpo.service
-Wants=ollama.service mcpo.service
+After=network-online.target ollama.service tool-hub.service
+Wants=ollama.service tool-hub.service
 
 [Service]
 EnvironmentFile=/srv/ai/secrets/mcpo.env

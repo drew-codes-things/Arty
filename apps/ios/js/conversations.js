@@ -2,9 +2,16 @@ export const TITLE_LENGTH = 40;
 export const HISTORY_MESSAGES = 14;
 export const HISTORY_STEP = 8;
 export const MAX_CONVERSATIONS = 100;
-export const DEFAULT_MODEL = "assistant-core";
+export const DEFAULT_MODEL = "Arty";
+export const RETIRED_MAIN_MODEL = "assistant-core";
 
 export const CONVERSATIONS_KEY = "arty.conversations";
+const ID_BYTES = 16;
+
+export function randomId(source = globalThis.crypto) {
+  if (typeof source.randomUUID === "function") return source.randomUUID();
+  return [...source.getRandomValues(new Uint8Array(ID_BYTES))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export function recentWindow(messages, size, step, isUser) {
   if (size <= 0 || step <= 0) throw new RangeError("size and step must be positive");
@@ -25,8 +32,12 @@ export function titleFor(text, attachments = []) {
   return source.slice(0, TITLE_LENGTH);
 }
 
+function withCurrentModelName(conversation) {
+  return conversation?.model === RETIRED_MAIN_MODEL ? { ...conversation, model: DEFAULT_MODEL } : conversation;
+}
+
 export class ConversationStore {
-  constructor(storage, { now = Date.now, newId = () => globalThis.crypto.randomUUID() } = {}) {
+  constructor(storage, { now = Date.now, newId = randomId } = {}) {
     this.storage = storage;
     this.now = now;
     this.newId = newId;
@@ -35,7 +46,7 @@ export class ConversationStore {
   readAll() {
     try {
       const parsed = JSON.parse(this.storage.getItem(CONVERSATIONS_KEY) ?? "[]");
-      return Array.isArray(parsed) ? parsed : [];
+      return Array.isArray(parsed) ? parsed.map(withCurrentModelName) : [];
     } catch {
       return [];
     }

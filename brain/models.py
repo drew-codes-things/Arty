@@ -7,6 +7,7 @@ badly from a long list, so they get a focused subset.
 """
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -21,6 +22,11 @@ PULL_TIMEOUT_SECONDS = 6 * 3600
 MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9._/-]*(:[a-z0-9._-]+)?$")
 DROPDOWN_PREFIX = "arty/"
 SOLO_PREFIX = "solo/"
+CODER_MARK = "coder"
+VRAM_BUDGET_MB = 11500
+LOAD_OVERHEAD = 1.2
+UNLOAD_WAIT_SECONDS = 30
+UNLOAD_POLL_SECONDS = 0.5
 SOLO_LABEL = "{name} (on its own: no Arty, no memory)"
 SOLO_DESCRIPTION = "Talks straight to the model, like starfire. Nothing is saved to Arty's memory."
 
@@ -70,6 +76,7 @@ def _refresh_installed() -> list[dict]:
         capabilities = shown.get("capabilities") or []
         models.append({
             "name": entry["name"],
+            "bytes": entry.get("size", 0),
             "billions": _parameter_billions(shown.get("details") or entry.get("details") or {}),
             "tools": "tools" in capabilities,
             "vision": "vision" in capabilities,
@@ -129,17 +136,27 @@ def kept_solo(model: dict) -> bool:
     return _named_in(model, solo_models()) and not _named_in(model, arty_models())
 
 
+def separate_models() -> set[str]:
+    return set()
+
+
+def is_separate(model: dict) -> bool:
+    return _named_in(model, list(separate_models())) and not _named_in(model, arty_models())
+
+
 def chat_models() -> list[dict]:
     allowed = toolless_allowed()
-    return [model for model in installed() if not model["embedding"] and (model["tools"] or allowed) and in_arty(model)]
+    return [model for model in installed() if not model["embedding"] and (model["tools"] or allowed) and in_arty(model)
+            and not is_separate(model)]
 
 
 def downloaded_chat_models() -> list[dict]:
-    return [model for model in installed() if not model["embedding"] and not kept_solo(model)]
+    return [model for model in installed() if not model["embedding"] and not kept_solo(model) and not is_separate(model)]
 
 
 def usable(model: dict | None) -> bool:
-    return bool(model) and not model["embedding"] and (model["tools"] or toolless_allowed()) and in_arty(model)
+    return (bool(model) and not model["embedding"] and (model["tools"] or toolless_allowed()) and in_arty(model)
+            and not is_separate(model))
 
 
 NOT_ARTY_REFUSAL = ("{name} isn't one of my models ({allowed}). It's still there as a plain chat in starfire, "
@@ -154,6 +171,11 @@ def summary(model: dict) -> str:
               "all tools" if model.get("tools") else "chat only, no tools",
               "sees images" if model.get("vision") else ""]
     return " · ".join(part for part in [size, *traits] if part)
+
+
+def is_for_coding(name: str, coding_name: str) -> bool:
+    is_coding_model = bool(coding_name) and name in (coding_name, f"{coding_name}:latest")
+    return is_coding_model or CODER_MARK in name
 
 
 def find(name: str) -> dict | None:
@@ -242,6 +264,70 @@ def _pull_then_switch(name: str, previous: str, notify_send):
         _pulls.discard(name)
 
 
+def is_positive_megabytes(value) -> bool:
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    return is_number and math.isfinite(value) and value > 0
+
+
+def vram_budget(config: dict) -> int:
+    budget_mb = config.get("vram_budget_mb", VRAM_BUDGET_MB)
+    if not is_positive_megabytes(budget_mb):
+        log.warning("brain.json vram_budget_mb must be a positive number of MB, not %r; using %s", budget_mb,
+                    VRAM_BUDGET_MB)
+        budget_mb = VRAM_BUDGET_MB
+    return int(budget_mb * 1024 * 1024)
+
+
+def _size_on_card(name: str, budget_bytes: int) -> int:
+    found = next((m for m in installed() if m["name"] == name), None)
+    return int(found["bytes"] * LOAD_OVERHEAD) if found and found.get("bytes") else budget_bytes
+
+
+def _wait_until_gone(names: list[str]) -> None:
+    deadline = time.monotonic() + UNLOAD_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        still = {m["name"] for m in _ollama("/api/ps").get("models", [])} & set(names)
+        if not still:
+            return
+        time.sleep(UNLOAD_POLL_SECONDS)
+    log.warning("Ollama still holds %s %s s after being asked to unload it", ", ".join(names), UNLOAD_WAIT_SECONDS)
+
+
+def make_room(name: str, budget_bytes: int) -> list[str]:
+    try:
+        running = _ollama("/api/ps").get("models", [])
+        if any(m["name"] == name for m in running):
+            return []
+        in_use = sum(int(m.get("size_vram", 0)) for m in running)
+        if in_use + _size_on_card(name, budget_bytes) <= budget_bytes:
+            return []
+        others = [m["name"] for m in running]
+        for other in others:
+            _ollama("/api/generate", {"model": other, "keep_alive": 0}, timeout=60)
+        _wait_until_gone(others)
+        return others
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        log.warning("couldn't make room on the GPU for %s, leaving it to Ollama: %s", name, error)
+        return []
+
+
+def handoff_tool(config: dict, definition: dict) -> dict:
+    strengths = config.get("model_strengths", {})
+    if not strengths:
+        return definition
+    try:
+        others = [name for name in arty_models() if name != config["model"] and find(name) is not None]
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        log.warning("couldn't list models for the handoff tool: %s", error)
+        return definition
+    lines = [f"{name}: {strengths[name]}" for name in others if name in strengths]
+    if not lines:
+        return definition
+    function = definition["function"]
+    description = f"{function['description']} Models to hand jobs to, and what each is best at: " + "; ".join(lines) + "."
+    return {**definition, "function": {**function, "description": description}}
+
+
 def ask(name: str, prompt: str, config: dict) -> str:
     """One-shot question to another installed model (no tools, no memory), for delegating a job."""
     if not prompt.strip():
@@ -254,6 +340,7 @@ def ask(name: str, prompt: str, config: dict) -> str:
     if model["embedding"]:
         return f"{name} is a search-index model and can't answer questions."
     options = {key: value for key, value in config.get("options", {}).items() if key in ("num_ctx", "num_predict", "repeat_penalty")}
+    make_room(model["name"], vram_budget(config))
     try:
         reply = _ollama("/api/chat", {"model": model["name"], "messages": [{"role": "user", "content": prompt}], "stream": False,
                                       "options": options, "keep_alive": 0}, timeout=900)

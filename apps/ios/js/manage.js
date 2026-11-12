@@ -277,6 +277,23 @@ function deviceUse(device) {
   return lastUsed ? `Last used ${lastUsed}` : "Never used";
 }
 
+function remoteControlToggle(api, device) {
+  const toggle = h("input", { type: "checkbox", checked: Boolean(device.remote_control) });
+  toggle.addEventListener("change", async () => {
+    toggle.disabled = true;
+    try {
+      await api.setRemoteControl(device.id, toggle.checked);
+      showToast(toggle.checked ? "It can control Arty CLI now" : "It can't control Arty CLI any more");
+    } catch (error) {
+      toggle.checked = !toggle.checked;
+      showToast(error.message);
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+  return h("label", { class: "toggle" }, h("span", {}, "Can control Arty CLI"), toggle);
+}
+
 export async function renderDevices(container, api) {
   const reload = () => renderDevices(container, api);
   loading(container, "Devices");
@@ -290,6 +307,7 @@ export async function renderDevices(container, api) {
     h("div", { class: "card-title" }, device.name || "Unnamed device"),
     h("div", { class: "card-meta" }, `Approved ${formatMoment(fromUnixSeconds(device.created))} from ${device.address || "an unknown address"}`),
     h("div", { class: "card-meta" }, deviceUse(device)),
+    remoteControlToggle(api, device),
     h("div", { class: "row" }, twoStepButton("Turn off", "Tap again to turn it off", async () => {
       try {
         await api.revokeDevice(device.id);

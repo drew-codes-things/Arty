@@ -13,7 +13,7 @@ from process import route
 
 @pytest.fixture
 def remote(monkeypatch):
-    monkeypatch.setattr(route, "LOCAL_URL", "http://192.168.1.13:8081/v1")
+    monkeypatch.setattr(route, "LOCAL_URL", "http://192.0.2.13:8081/v1")
     monkeypatch.setattr(route, "REMOTE_URL", "https://arty.example.com/v1")
     monkeypatch.setattr(route, "ACCESS_CLIENT_ID", "id")
     monkeypatch.setattr(route, "ACCESS_CLIENT_SECRET", "secret")
@@ -22,7 +22,7 @@ def remote(monkeypatch):
 
 def test_home_is_used_when_reachable_with_no_access_headers(remote, monkeypatch):
     monkeypatch.setattr(route, "_home_brain_proves_itself", lambda: True)
-    assert route.base() == "http://192.168.1.13:8081/v1"
+    assert route.base() == "http://192.0.2.13:8081/v1"
     assert route.access_headers() == {}
 
 
@@ -77,9 +77,21 @@ def answering(monkeypatch, make_answer):
 def test_home_is_used_only_when_the_brain_there_proves_it_holds_our_key(remote, monkeypatch):
     asked = answering(monkeypatch, lambda nonce: Answer(200, {"proofs": ["other", proof("the-key", nonce)]}))
     assert route.base() == route.LOCAL_URL
-    assert asked[0]["url"] == "http://192.168.1.13:8081/v1/identity"
+    assert asked[0]["url"] == "http://192.0.2.13:8081/v1/identity"
     assert len(asked[0]["params"]["nonce"]) == 32
     assert "Authorization" not in asked[0]["headers"]
+
+
+def test_a_device_key_is_proven_by_the_brain_keying_its_proof_with_the_keys_sha256(remote, monkeypatch):
+    hashed = hashlib.sha256(b"the-key").hexdigest()
+    answering(monkeypatch, lambda nonce: Answer(200, {"proofs": ["other", proof(hashed, nonce)]}))
+    assert route.base() == route.LOCAL_URL
+
+
+def test_with_no_key_set_no_proof_is_ever_accepted(remote, monkeypatch):
+    answering(monkeypatch, lambda nonce: Answer(200, {"proofs": [proof("", nonce), proof(hashlib.sha256(b"").hexdigest(), nonce)]}))
+    monkeypatch.setattr(route, "API_KEY", "")
+    assert route.base() == route.REMOTE_URL
 
 
 @pytest.mark.parametrize("make_answer", [

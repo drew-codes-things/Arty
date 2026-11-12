@@ -1,6 +1,7 @@
 package app.arty.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,12 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -110,10 +111,10 @@ private fun inline(text: String): AnnotatedString = buildAnnotatedString {
         val (bold, code, linkText, linkUrl, italic) = match.destructured
         when {
             bold.isNotEmpty() -> pushStyle(SpanStyle(fontWeight = FontWeight.SemiBold)).also { append(bold) }
-            code.isNotEmpty() -> pushStyle(SpanStyle(fontFamily = PlexMono, fontSize = 13.sp, background = ArtyColors.PanelRaised)).also { append(code) }
+            code.isNotEmpty() -> pushStyle(SpanStyle(fontFamily = PlexMono, fontSize = 13.sp, background = ArtyColors.Raised)).also { append(code) }
             linkText.isNotEmpty() -> {
                 // Tapping opens it through LocalUriHandler, which the chat screen uses to catch Arty's file links.
-                withLink(LinkAnnotation.Url(linkUrl, TextLinkStyles(SpanStyle(color = ArtyColors.Signal, textDecoration = TextDecoration.Underline)))) {
+                withLink(LinkAnnotation.Url(linkUrl, TextLinkStyles(SpanStyle(color = ArtyColors.SignalText, textDecoration = TextDecoration.Underline)))) {
                     append(linkText)
                 }
                 last = match.range.last + 1
@@ -152,7 +153,7 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
                 }
                 is Block.Quote -> Row(
                     Modifier.fillMaxWidth().height(IntrinsicSize.Min)
-                        .background(ArtyColors.Panel, RoundedCornerShape(4.dp)),
+                        .clip(MaterialTheme.shapes.extraSmall).background(ArtyColors.Surface),
                 ) {
                     Box(Modifier.width(3.dp).fillMaxHeight().background(ArtyColors.Signal))
                     Text(inline(block.text), style = body, modifier = Modifier.padding(12.dp))
@@ -162,9 +163,10 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
                     fontFamily = PlexMono, fontSize = 13.sp, lineHeight = 19.sp, color = ArtyColors.Text,
                     softWrap = false,
                     modifier = Modifier.fillMaxWidth()
-                        .background(ArtyColors.Void, RoundedCornerShape(4.dp))
+                        .clip(MaterialTheme.shapes.small).background(ArtyColors.Sunken)
+                        .border(1.dp, ArtyColors.Line, MaterialTheme.shapes.small)
                         .horizontalScroll(rememberScrollState())
-                        .padding(10.dp),
+                        .padding(12.dp),
                 )
                 is Block.Media -> MediaBlock(block.name, block.link, block.kind)
             }

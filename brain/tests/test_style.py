@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import style  # noqa: E402
 
-LINKEDIN = """### Andrew (1w)
+LINKEDIN = """### Jordan (1w)
 I attended Nutanix NEXT as part of my work experience week.
 
 #AI #Infrastructure

@@ -98,6 +98,12 @@ object ArtyIcons {
         moveTo(9f, 6f); lineTo(15f, 12f); lineTo(9f, 18f)
     }
 
+    val Computer = lineIcon("computer") {
+        moveTo(4f, 5f); lineTo(20f, 5f); lineTo(20f, 16f); lineTo(4f, 16f); close()
+        moveTo(9f, 20f); lineTo(15f, 20f); moveTo(12f, 16f); lineTo(12f, 20f)
+        moveTo(7.5f, 9f); lineTo(9.5f, 10.5f); lineTo(7.5f, 12f); moveTo(11f, 12f); lineTo(14f, 12f)
+    }
+
     val Save = lineIcon("save") {
         moveTo(12f, 4f); lineTo(12f, 15f); moveTo(7f, 10f); lineTo(12f, 15f); lineTo(17f, 10f)
         moveTo(5f, 20f); lineTo(19f, 20f)

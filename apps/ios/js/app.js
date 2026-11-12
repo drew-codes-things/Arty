@@ -1,4 +1,5 @@
 import { ChatView } from "./chat.js";
+import { renderComputers } from "./computers.js";
 import { formatMoment, h, sectionHead, twoStepButton } from "./dom.js";
 import { renderCalendar, renderDevices, renderLectures, renderMemory, renderSchedules, renderTasks } from "./manage.js";
 import { renderSetup } from "./setup.js";
@@ -10,7 +11,8 @@ import { UpdatesFeed } from "./updates.js";
 const storage = window.localStorage;
 const byId = (id) => document.getElementById(id);
 const VIEWS = ["chat", "updates", "tasks", "calendar", "more"];
-const MORE_PAGES = { schedules: renderSchedules, lectures: renderLectures, memory: renderMemory, devices: renderDevices };
+const MORE_PAGES = { schedules: renderSchedules, lectures: renderLectures, memory: renderMemory, devices: renderDevices,
+  computers: renderComputers };
 
 const state = { api: null, chat: null, updates: null, view: "chat" };
 
@@ -38,7 +40,7 @@ function renderMore(container) {
   container.replaceChildren(
     sectionHead("More"),
     h("ul", { class: "menu" }, page("schedules", "Schedules"), page("lectures", "Lectures"), page("memory", "Memory"),
-      page("devices", "Approved devices")),
+      page("devices", "Approved devices"), page("computers", "Computers")),
     h("h3", { class: "kicker" }, "This iPhone"),
     h("label", { class: "toggle" }, h("span", {}, "Read Arty's replies aloud"), readAloud),
     h("p", { class: "notice" }, settings?.accessId ? "Connected with the app key and the Cloudflare access token." : "Connected with the app key only (home network)."),

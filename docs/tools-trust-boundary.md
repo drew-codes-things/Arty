@@ -67,6 +67,13 @@ What the brain checks whatever the caller says:
 - Outward actions in a chat (posting, sending, buying, running commands) wait for a plain "yes" as the user's latest
   message, under the same `approval` rules as above. Background tasks wait for the Approve button instead.
 - Private files are never uploaded, in a chat or a background task.
+- **Outside content taints the turn.** Once a turn (or a background task) has read something from outside, a web page,
+  a search result, an email, a fetched or library document, a file or the screen (`untrusted_reads` under `approval`),
+  the actions in `after_untrusted` wait for a yes or the Approve button even when the rules above would let them
+  through: memory writes, commands, typing, key presses and clicks on the desktop, writing files, the clipboard, email
+  drafts, Nextcloud uploads, and starting or scheduling background work. The reason ends "asked for after reading
+  outside content", so text in a page or an email can't quietly make Arty act. Reading more is never held back. Both
+  lists can be changed in `brain.json`; the defaults are in `brain/policy.py`.
 
 ## Limits of the Checks
 

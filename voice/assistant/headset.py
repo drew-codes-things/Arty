@@ -20,7 +20,6 @@ import music
 import quick_answers
 from arty_voice import BRAIN_KEY, BRAIN_URL, Assistant, Senses
 from headset_panels import REFRESH_SECONDS, Dashboard
-from listening import UtteranceCollector
 
 HEADSET_TOKEN = os.environ.get("HEADSET_TOKEN", "")
 HEADSET_PORT = int(os.environ.get("HEADSET_PORT", "8790"))
@@ -69,7 +68,7 @@ class HeadsetSession:
         self.output = HeadsetOutput(ws)
         self.http = http
         self.assistant = Assistant(senses, self.output, http, bare_wake=True, act=self.act)
-        self.collector = UtteranceCollector()
+        self.collector = senses.new_collector()
         self.pending: dict[int, asyncio.Future] = {}
         self.ids = itertools.count(1)
         self.clock = datetime.now

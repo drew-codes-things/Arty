@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import calendar_feed
 import quick
@@ -269,6 +270,88 @@ def date_facts(text) -> str:
     return "\n".join(lines)
 
 
+PLACE_AREAS = {"Africa", "America", "Asia", "Atlantic", "Australia", "Europe", "Indian", "Pacific"}
+WORDS_THAT_ARE_ZONES = {"easter", "wake", "midway", "center"}
+PLACE_ALIASES = {
+    "japan": "Asia/Tokyo", "china": "Asia/Shanghai", "beijing": "Asia/Shanghai", "india": "Asia/Kolkata",
+    "delhi": "Asia/Kolkata", "new delhi": "Asia/Kolkata", "mumbai": "Asia/Kolkata", "bangalore": "Asia/Kolkata",
+    "korea": "Asia/Seoul", "south korea": "Asia/Seoul", "thailand": "Asia/Bangkok", "vietnam": "Asia/Ho_Chi_Minh",
+    "philippines": "Asia/Manila", "indonesia": "Asia/Jakarta", "bali": "Asia/Makassar", "uae": "Asia/Dubai",
+    "abu dhabi": "Asia/Dubai", "uk": "Europe/London", "england": "Europe/London", "britain": "Europe/London",
+    "scotland": "Europe/London", "wales": "Europe/London", "ireland": "Europe/Dublin", "france": "Europe/Paris",
+    "germany": "Europe/Berlin", "spain": "Europe/Madrid", "italy": "Europe/Rome", "netherlands": "Europe/Amsterdam",
+    "poland": "Europe/Warsaw", "greece": "Europe/Athens", "turkey": "Europe/Istanbul", "russia": "Europe/Moscow",
+    "australia": "Australia/Sydney", "new zealand": "Pacific/Auckland", "canada": "America/Toronto",
+    "brazil": "America/Sao_Paulo", "mexico": "America/Mexico_City", "egypt": "Africa/Cairo",
+    "south africa": "Africa/Johannesburg", "cape town": "Africa/Johannesburg", "hawaii": "Pacific/Honolulu",
+    "california": "America/Los_Angeles", "san francisco": "America/Los_Angeles", "seattle": "America/Los_Angeles",
+    "las vegas": "America/Los_Angeles", "texas": "America/Chicago", "dallas": "America/Chicago",
+    "houston": "America/Chicago", "washington": "America/New_York", "boston": "America/New_York",
+    "miami": "America/New_York", "florida": "America/New_York",
+}
+FALLBACK_HOME_ZONE = "Europe/London"
+MAX_PLACES = 4
+CLOCK_FORMAT = "%H:%M on %A %d %B %Y"
+
+
+def now_in(zone: ZoneInfo) -> datetime:
+    return datetime.now(zone)
+
+
+def _place_zones() -> dict[str, str]:
+    zones = {}
+    for zone in available_timezones():
+        area, _, city = zone.partition("/")
+        if area not in PLACE_AREAS or not city or "/" in city:
+            continue
+        name = city.replace("_", " ").lower()
+        if name not in WORDS_THAT_ARE_ZONES:
+            zones.setdefault(name, zone)
+    zones.update(PLACE_ALIASES)
+    return zones
+
+
+def _home_zone(home) -> ZoneInfo:
+    try:
+        return ZoneInfo(str(home or FALLBACK_HOME_ZONE))
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo(FALLBACK_HOME_ZONE)
+
+
+def _gap_from_home(minutes: int) -> str:
+    if minutes == 0:
+        return "the same time as home"
+    hours, extra = divmod(abs(minutes), 60)
+    size = _plural(hours, "hour") if hours else ""
+    if extra:
+        size = f"{size} {_plural(extra, 'minute')}".strip()
+    return f"{size} {'ahead of' if minutes > 0 else 'behind'} home"
+
+
+def _places_named(text) -> list[tuple[str, str]]:
+    lowered = str(text or "").lower().replace("\u2019", "'")
+    zones = _place_zones()
+    found = []
+    for place in sorted(zones, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(place)}\b", lowered) and not any(place in earlier for earlier, _ in found):
+            found.append((place, zones[place]))
+    return found[:MAX_PLACES]
+
+
+def place_time(text, home=FALLBACK_HOME_ZONE) -> str:
+    home_zone = _home_zone(home)
+    home_now = now_in(home_zone)
+    lines = [f"At home ({home_zone.key}) it is {home_now:{CLOCK_FORMAT}}."]
+    places = _places_named(text)
+    for place, zone in places:
+        there = home_now.astimezone(ZoneInfo(zone))
+        minutes = round((there.utcoffset() - home_now.utcoffset()).total_seconds() / 60)
+        lines.append(f"In {place.title()} ({zone}) it is {there:{CLOCK_FORMAT}}, {_gap_from_home(minutes)}.")
+    if not places:
+        lines.append("No place found in the message; use the time tool's convert_time.")
+    return "\n".join(lines)
+
+
 def _tool(name, description, properties, required):
     return {"type": "function", "function": {"name": name, "description": description,
                                              "parameters": {"type": "object", "properties": properties, "required": required}}}
@@ -293,6 +376,10 @@ TOOLS = {
         "date_facts", "Every date in a piece of text worked out: Christmas, Easter, '14 Feb 2027', 'in 3 weeks', '90 days from today', "
                       "with its weekday and how many days away it is.",
         {"text": {"type": "string", "description": "the words containing the dates, e.g. the user's question"}}, ["text"])),
+    "place_time": (lambda a: place_time(a.get("text"), a.get("home")), _tool(
+        "place_time", "The time right now in the places named in a piece of text (cities or countries), and how far ahead or behind home they are.",
+        {"text": {"type": "string", "description": "the words naming the places, e.g. the user's question"},
+         "home": {"type": "string", "description": "home time zone, e.g. Europe/London"}}, ["text"])),
     "clock_maths": (lambda a: clock_maths(a.get("time"), a.get("hours", 0), a.get("minutes", 0)), _tool(
         "clock_maths", "Add or take away hours and minutes from a time of day, e.g. when a film ending or a journey arrives.",
         {"time": {"type": "string", "description": "24-hour time, e.g. 19:50"},

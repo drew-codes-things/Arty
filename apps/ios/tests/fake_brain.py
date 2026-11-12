@@ -20,8 +20,8 @@ PNG_PIXEL = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060
                           "1f15c4890000000d4944415478da63f8cfc0f01f0005000201a5f1b3e70000000049454e44ae426082")
 FILE_TOKEN = "t0k"
 ANSWER = ("Here's what I found:\n\n- **Weather:** dry, 12C\n- Bins tonight\n\n"
-          f"[report.txt](http://192.168.1.13:8443/arty-files/f1/{FILE_TOKEN}/report.txt)\n\n"
-          f"![chart](http://192.168.1.13:8443/arty-files/f2/{FILE_TOKEN}/chart.png)\n\n<script>alert(1)</script>")
+          f"[report.txt](http://192.0.2.13:8443/arty-files/f1/{FILE_TOKEN}/report.txt)\n\n"
+          f"![chart](http://192.0.2.13:8443/arty-files/f2/{FILE_TOKEN}/chart.png)\n\n<script>alert(1)</script>")
 
 ids = itertools.count(100)
 lock = threading.Lock()
@@ -106,9 +106,9 @@ class FakeBrain(BaseHTTPRequestHandler):
             return self.send_bytes(b"report body", "text/plain")
         if segments == ["v1", "models"]:
             return self.send_json(200, {"data": [
-                {"id": "assistant-core", "object": "model", "model": "qwen3:14b"},
+                {"id": "Arty", "object": "model", "model": "qwen3:14b"},
                 {"id": "arty/qwen3:14b", "name": "Arty (qwen3:14b)", "object": "model"},
-                {"id": "solo/roleplay-model:12b", "name": "roleplay-model:12b (on its own: no Arty, no memory)", "object": "model"},
+                {"id": "solo/side-model:12b", "name": "side-model:12b (on its own: no Arty, no memory)", "object": "model"},
             ]})
         if len(segments) == 4 and segments[:3] == ["v1", "chat", "jobs"]:
             with lock:

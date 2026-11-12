@@ -19,6 +19,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.arty.MainActivity
 import app.arty.R
+import app.arty.core.LectureFiles
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -41,7 +42,7 @@ class LectureRecorder : Service() {
             return START_NOT_STICKY
         }
         if (recorder != null) return START_NOT_STICKY
-        val file = File(folder(this), "lecture-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.UK).format(Date())}.m4a")
+        val file = LectureFiles.unusedFile(folder(this), SimpleDateFormat("yyyyMMdd-HHmm", Locale.UK).format(Date()))
         this.file = file
         val started = System.currentTimeMillis()
         ServiceCompat.startForeground(

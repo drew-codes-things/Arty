@@ -18,7 +18,7 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
 import brain  # noqa: E402
 import policy  # noqa: E402
 
-RESTART = "restarting CT 103 core-games"
+RESTART = "restarting CT 103 games"
 
 
 def text_of(message):
@@ -51,7 +51,7 @@ class ChatYes(unittest.TestCase):
 
     def test_the_approval_only_covers_the_same_action(self):
         self.assertTrue(policy.covers(RESTART, RESTART))
-        self.assertFalse(policy.covers(RESTART, "restarting VM 105 ai-desktop"))
+        self.assertFalse(policy.covers(RESTART, "restarting VM 205 ai-desktop"))
         self.assertFalse(policy.covers(None, RESTART))
 
     def test_a_question_saved_with_its_line_breaks_flattened_is_still_the_same_action(self):
@@ -64,12 +64,12 @@ class ChatYes(unittest.TestCase):
         self.assertFalse(policy.covers(policy.approved_reason(conversation, text_of), reason.replace("5", "6")))
 
 
-SELF_HEAL = {"kind": "approval", "message": "restart core-games",
+SELF_HEAL = {"kind": "approval", "message": "restart games",
              "call": {"name": "homelab__restart_guest", "arguments": {"vmid": 103}},
              "recheck": {"address": "192.0.2.12", "port": 25565}}
 
 
-def diagnosis(fix, summary="core-games is running but not answering. Restarting it should fix it."):
+def diagnosis(fix, summary="games is running but not answering. Restarting it should fix it."):
     return json.dumps({"summary": summary, "fix": fix})
 
 
@@ -87,18 +87,18 @@ class SelfHealApprovals(unittest.TestCase):
         return calls, state["messages"][-1]["content"]
 
     def test_still_broken_runs_the_approved_fix(self):
-        calls, result = self.decide(diagnosis({"action": "restart", "vmid": 103, "name": "core-games"}))
+        calls, result = self.decide(diagnosis({"action": "restart", "vmid": 103, "name": "games"}))
         self.assertEqual(calls, ["homelab__diagnose", "homelab__restart_guest"])
         self.assertIn("Restarted CT 103.", result)
 
     def test_answering_again_by_then_leaves_it_alone(self):
-        calls, result = self.decide(diagnosis(None, "192.0.2.12:25565 (core-games) is answering again now."))
+        calls, result = self.decide(diagnosis(None, "192.0.2.12:25565 (games) is answering again now."))
         self.assertEqual(calls, ["homelab__diagnose"])
         self.assertIn("answering again", result)
         self.assertIn("not done", result.lower())
 
     def test_a_different_problem_by_then_needs_a_fresh_ok(self):
-        calls, result = self.decide(diagnosis({"action": "start", "vmid": 103, "name": "core-games"}))
+        calls, result = self.decide(diagnosis({"action": "start", "vmid": 103, "name": "games"}))
         self.assertEqual(calls, ["homelab__diagnose"])
         self.assertIn("ask again", result.lower())
 

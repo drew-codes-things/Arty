@@ -25,7 +25,7 @@ Store.
 | Updates | Reminders, briefings, task results and alerts as they happen, with Approve / Deny |
 | Tasks | Background tasks: start one, approve, deny, mark done or cancel |
 | Calendar | The next 30 days from Arty and Google; add events in plain words, remove Arty's own |
-| More | Schedules, lectures (record or add a recording; read the notes), memory search, read-aloud, the keys, and **Approved devices** (every computer you approved, with a two-tap **Turn off**) |
+| More | Schedules, lectures (record or add a recording; read the notes), memory search, read-aloud, the keys, **Approved devices** (every computer you approved, with a two-tap **Turn off** and a **Can control Arty CLI** switch), and **Computers** (follow Arty CLI on a computer that ran `/remote`: its transcript, Allow / Deny for its questions, a message box and Stop) |
 | Approve a computer | Opened by the link a computer shows when it asks to join (`/ios/?authorise=CODE`): type the code it shows, then Approve or Deny. A failed approve has **Try again**. In a browser with no Arty key it shows the code with a link and a QR code to starfire's Arty devices page (when the brain has `BRAIN_STARFIRE_URL`), or **Paste an API key instead** |
 
 It talks to the brain with the same API as the Android app ([docs/API.md](../../docs/API.md)), as client `ios`.

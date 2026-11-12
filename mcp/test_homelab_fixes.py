@@ -1,9 +1,11 @@
+import importlib.util
 import inspect
 import json
 import os
 import subprocess
 import sys
 import urllib.error
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -11,6 +13,8 @@ import pytest
 
 pytest.importorskip("mcp.server.fastmcp")
 import homelab_server as homelab
+
+RELEASE_BUILDER = Path(__file__).resolve().parents[1] / "downloads" / "build_release.py"
 
 GUESTS = [
     {"vmid": 103, "kind": "lxc", "name": "puffer", "status": "stopped", "ip": "192.0.2.20", "mac": "aa:bb:cc:dd:ee:01"},
@@ -181,10 +185,18 @@ def test_set_node_wins(monkeypatch):
     assert homelab._node() == "custom"
 
 
+def owner_details() -> tuple:
+    if not RELEASE_BUILDER.is_file():
+        pytest.skip("the release builder, which lists the owner's details, is not in this copy")
+    spec = importlib.util.spec_from_file_location("build_release", RELEASE_BUILDER)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    return builder.OWNER_DETAILS
+
+
 def test_no_owner_names_in_tool_text():
     source = inspect.getsource(homelab)
-    for marker in ("A+J", "VM 105", "servmox", "Drew"):
-        assert marker not in source
+    assert [name for name, pattern in owner_details() if pattern.search(source)] == []
 
 
 def test_nextcloud_upload_does_not_mix_error_output_into_the_file(monkeypatch):

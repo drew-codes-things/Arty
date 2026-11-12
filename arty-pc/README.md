@@ -55,6 +55,11 @@ the Proxmox console at any time.
   close the window, and Arty's browser comes back with the logins. Arty never gets round CAPTCHAs itself.
 - **Cookie banners** - after opening a page or clicking, the agent accepts a cookie/consent banner if one is
   showing (an "Accept all"-style button inside the banner). It never clicks reject, manage or sign-in buttons.
+- **Repeated chores** - when the agent finds a button or field by its text, it remembers a CSS selector for it per
+  site and step in `~/.local/browser-agent/selectors.json` (owner-only, the 300 most recently used, no page text or
+  cookies). Next time it tries that selector first, checks the element still has the same kind and text, and
+  searches again if it doesn't. Nothing is remembered on sign-in, payment or bot-check pages, or for steps that
+  name an email address or a long number.
 - **Documents** - put files in `~/library` (or ask Arty to) and it finds them by meaning.
 - **Private folders** - Arty's tools refuse to read, list, write, upload or run commands in `~/.gmail-chrome`,
   `~/.browser-profile`, `~/.local/browser-agent` and `~/.ssh`, checked again by real path on the VM so a link into

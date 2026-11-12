@@ -189,7 +189,7 @@ class PictureSize(unittest.TestCase):
 
 class WebPictures(unittest.TestCase):
     def test_private_addresses_are_refused(self):
-        for url in ("http://127.0.0.1/a.png", "http://192.168.1.13:8443/x.png", "file:///etc/passwd", "http://localhost/a.png"):
+        for url in ("http://127.0.0.1/a.png", "http://192.168.1.50:8443/x.png", "file:///etc/passwd", "http://localhost/a.png"):
             with self.assertRaises(sharing.ShareError, msg=url):
                 sharing.check_public_url(url)
 

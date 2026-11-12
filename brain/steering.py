@@ -9,13 +9,14 @@ from reply_rules import TOOL_FAILED
 
 # Tools the brain may run by itself before the model answers (see look_up_first): read-only ones only.
 LOOKUP_TOOLS = {"homelab__proxmox_status", "homelab__service_status", "weather", "calendar_events", "deadlines_show",
-                "list_show", "quiz_progress", "week_recap", "research__web_search", "workspace__gmail_unread", "date_facts",
+                "list_show", "quiz_progress", "week_recap", "research__web_search", "workspace__gmail_unread", "date_facts", "place_time",
                 "currency_facts", "workspace__look_at_desktop", "homelab__pufferpanel_servers"}
 # In a lookup rule's arguments, this stands for the user's message (e.g. the web search query).
 MESSAGE_PLACEHOLDER = "{message}"
 # Polite padding that only makes a search query worse.
 QUERY_PADDING = re.compile(r"^(hey |hi )?(arty,? )?(can|could|would) you (please )?(tell me|show me|find( me)?|let me know)?\s*|\bplease\b", re.I)
 MAX_LOOKUPS = 2
+HOMELAB_STATUS_TOOL = "homelab__proxmox_status"
 LOOKUP_TEMPERATURE = 0.15
 HARD_REQUEST = re.compile(r"\b(think (it |this |that )?(through|hard|carefully)|step[- ]by[- ]step|work out|figure out|calculate|"
                           r"solve|puzzle|riddle|prove|plan (out |my |a |the )?|compare|pros and cons|"
@@ -86,6 +87,15 @@ def sign_in_help(config) -> str:
     return (f"I can't open your Gmail right now: the Gmail window on my desktop isn't signed in to Google. "
             f"{on_my_desktop(config)}, double-click the \"Sign in to Google (Gmail)\" icon and sign in once, leave that "
             "window open, and ask me again.")
+
+
+def with_homelab_names(lookups: list[dict], names) -> list[dict]:
+    if not names:
+        return lookups
+    rule = {"pattern": r"\b(" + "|".join(map(re.escape, names)) + r")\b", "tool": HOMELAB_STATUS_TOOL}
+    tools = [entry.get("tool") for entry in lookups]
+    place = tools.index(HOMELAB_STATUS_TOOL) + 1 if HOMELAB_STATUS_TOOL in tools else len(lookups)
+    return lookups[:place] + [rule] + lookups[place:]
 
 
 def matches_lookup(config, said: str) -> bool:

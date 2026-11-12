@@ -28,7 +28,7 @@ function fakeFetch(...replies) {
 const KEYS = { apiKey: "app-key", accessId: "id.access", accessSecret: "secret" };
 
 test("every request carries the app key and the Cloudflare service token", async () => {
-  const { calls, fetchImpl } = fakeFetch(reply(200, { data: [{ id: "assistant-core" }] }));
+  const { calls, fetchImpl } = fakeFetch(reply(200, { data: [{ id: "Arty" }] }));
   await new ArtyApi(KEYS, { base: "https://arty.example/", fetchImpl }).models();
   assert.equal(calls[0].url, "https://arty.example/v1/models");
   assert.equal(calls[0].headers.Authorization, "Bearer app-key");
@@ -45,13 +45,13 @@ test("at home without Cloudflare no service token headers are sent", async () =>
 
 test("models keep their ids and fall back to the id as the name", async () => {
   const { fetchImpl } = fakeFetch(reply(200, { data: [
-    { id: "assistant-core", model: "qwen3:14b" },
-    { id: "solo/roleplay-model:12b", name: "roleplay-model:12b (on its own: no Arty, no memory)" },
+    { id: "Arty", model: "qwen3:14b" },
+    { id: "solo/side-model:12b", name: "side-model:12b (on its own: no Arty, no memory)" },
   ] }));
   const models = await new ArtyApi(KEYS, { fetchImpl }).models();
   assert.deepEqual(models.map((m) => [m.id, m.name]), [
-    ["assistant-core", "assistant-core"],
-    ["solo/roleplay-model:12b", "roleplay-model:12b (on its own: no Arty, no memory)"],
+    ["Arty", "Arty"],
+    ["solo/side-model:12b", "side-model:12b (on its own: no Arty, no memory)"],
   ]);
 });
 
@@ -59,11 +59,11 @@ test("a chat starts a job as the ios client with files as content parts", async 
   const { calls, fetchImpl } = fakeFetch(reply(202, { id: "job1" }));
   const id = await new ArtyApi(KEYS, { fetchImpl }).startChat([
     { role: "user", content: "what's this?", attachments: [{ fileId: "f1", name: "photo.jpg" }] },
-  ], "solo/roleplay-model:12b");
+  ], "solo/side-model:12b");
   assert.equal(id, "job1");
   const sent = JSON.parse(calls[0].body);
   assert.equal(sent.client, CLIENT_NAME);
-  assert.equal(sent.model, "solo/roleplay-model:12b");
+  assert.equal(sent.model, "solo/side-model:12b");
   assert.deepEqual(sent.messages[0].content, [
     { type: "text", text: "what's this?" },
     { type: "file", file: { file_id: "f1", filename: "photo.jpg" } },
@@ -139,7 +139,7 @@ test("uploads send the raw file with its name and refuse anything over the limit
 
 test("downloads use only the arty-files path, so home links work remotely", async () => {
   const { calls, fetchImpl } = fakeFetch(reply(200, "pdf bytes"));
-  const blob = await new ArtyApi(KEYS, { base: "https://arty.example", fetchImpl }).download("http://192.168.1.13:8443/arty-files/abc/token/report.pdf");
+  const blob = await new ArtyApi(KEYS, { base: "https://arty.example", fetchImpl }).download("http://192.0.2.13:8443/arty-files/abc/token/report.pdf");
   assert.equal(calls[0].url, "https://arty.example/arty-files/abc/token/report.pdf");
   assert.equal(await blob.text(), "pdf bytes");
   const expired = fakeFetch(reply(404, "<html>gone</html>"));

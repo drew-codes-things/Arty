@@ -20,9 +20,9 @@ test("only web and Arty file links become links", () => {
 });
 
 test("Arty's files open through the app and pictures load through it", () => {
-  assert.match(renderMarkdown("[report.pdf](http://192.168.1.13:8443/arty-files/ab/tok/report.pdf)"),
+  assert.match(renderMarkdown("[report.pdf](http://192.0.2.13:8443/arty-files/ab/tok/report.pdf)"),
     /<a href="#" class="arty-file" data-path="\/arty-files\/ab\/tok\/report.pdf">report.pdf<\/a>/);
-  assert.match(renderMarkdown("![chart](http://192.168.1.13:8443/arty-files/ab/tok/chart.png)"),
+  assert.match(renderMarkdown("![chart](http://192.0.2.13:8443/arty-files/ab/tok/chart.png)"),
     /<img class="arty-file-image" data-path="\/arty-files\/ab\/tok\/chart.png" alt="chart">/);
   assert.equal(renderMarkdown("![x](https://tracker.example/pixel.png)").includes("<img"), false);
 });
@@ -48,7 +48,7 @@ test("speech skips quotes, code and link addresses", () => {
 });
 
 test("Arty file links and media kinds are recognised", () => {
-  assert.equal(artyFilePath("http://192.168.1.13:8443/arty-files/a/b/c.mp4"), "/arty-files/a/b/c.mp4");
+  assert.equal(artyFilePath("http://192.0.2.13:8443/arty-files/a/b/c.mp4"), "/arty-files/a/b/c.mp4");
   assert.equal(artyFilePath("https://example.com/c.mp4"), null);
   assert.equal(artyFilePath("/arty-files/a/b/c.png?size=2"), "/arty-files/a/b/c.png");
 });

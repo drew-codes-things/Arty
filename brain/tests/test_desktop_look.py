@@ -39,7 +39,7 @@ class DesktopLook(unittest.TestCase):
         Path(os.environ["DESKTOP_LOOK_STATE"]).unlink(missing_ok=True)
         desktop_look._last_user_message["time"] = 0.0
 
-    def test_recognises_drews_requests_and_nothing_else(self):
+    def test_recognises_the_owners_requests_and_nothing_else(self):
         for text in ["Go on, you can do it, its your desktop, customise it however you want",
                      "customise your desktop to your own personality", "change your wallpaper", "personalise your computer",
                      "customise the desktop however you want, it's your own"]:

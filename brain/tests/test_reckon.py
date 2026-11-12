@@ -1,6 +1,6 @@
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -154,3 +154,35 @@ class CurrencyFacts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlaceTime(unittest.TestCase):
+    WINTER_EVENING = datetime(2026, 11, 12, 19, 6, tzinfo=timezone.utc)
+
+    def setUp(self):
+        patcher = mock.patch.object(reckon, "now_in", lambda zone: self.WINTER_EVENING.astimezone(zone))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_city_from_the_time_zone_list(self):
+        answer = reckon.place_time("What time is it right now in Tokyo?", "Europe/London")
+        self.assertIn("In Tokyo (Asia/Tokyo) it is 04:06 on Friday 13 November 2026, 9 hours ahead of home.", answer)
+        self.assertIn("At home (Europe/London) it is 19:06 on Thursday 12 November 2026.", answer)
+
+    def test_country_name_and_half_hour_zone(self):
+        answer = reckon.place_time("time in india", "Europe/London")
+        self.assertIn("In India (Asia/Kolkata) it is 00:36 on Friday 13 November 2026, 5 hours 30 minutes ahead of home.", answer)
+
+    def test_place_behind_home_and_two_word_city(self):
+        answer = reckon.place_time("what's the time in new york", "Europe/London")
+        self.assertIn("In New York (America/New_York) it is 14:06 on Thursday 12 November 2026, 5 hours behind home.", answer)
+
+    def test_same_zone_as_home(self):
+        self.assertIn("same time as home", reckon.place_time("time in london", "Europe/London"))
+
+    def test_common_words_are_not_places(self):
+        answer = reckon.place_time("what time is easter mass, and should I wake you", "Europe/London")
+        self.assertIn("No place found", answer)
+
+    def test_unknown_home_zone_falls_back(self):
+        self.assertIn("At home (Europe/London)", reckon.place_time("time in tokyo", "Mars/Olympus"))

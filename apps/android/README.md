@@ -72,6 +72,9 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
   Android 12 and later, which asks for the unlock first. On older Android, tap the notice and decide in the app.
 - **Tasks**, **Schedules** and **Memory** - what Arty's working on, what's planned, and what it remembers about you.
 - **Calendar** - your events, and adding new ones.
+- **Computers** (under More) - follow Arty CLI on a computer that ran `/remote`: read what it's doing, answer its
+  permission questions with Allow or Deny, send it a message, or Stop the current turn. A phone with its own device key
+  needs **Arty CLI** switched on for it on starfire's Arty devices page first.
 - **Lectures** - record a lesson (or pick a recording) and read the notes Arty writes from it.
 - **Share to Arty** - send text or files to Arty from any other app.
 - **Widget and quick tile** - talk to or call Arty without opening the app.
@@ -92,6 +95,7 @@ Android 9 (API 28) or newer.
 
 ```bash
 ./gradlew :core:test                      # API client tests against a local fake server
+./gradlew :app:testPersonalDebugUnitTest  # theme colours, list arrivals and reduced motion
 ./gradlew :app:assembleShareableRelease   # app.arty.shareable: asks on first launch
 ./gradlew :app:assemblePersonalRelease    # app.arty: details built in (see below)
 ./gradlew :app:assemblePersonalDebug      # app.arty.debug, installs alongside the release build
@@ -122,6 +126,8 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
   any, otherwise the personal build's built-in ones.
 - Chat turns run as brain jobs that the app polls, because Cloudflare ends any request that waits more than 100
   seconds. The wait rides out a dropped connection, 429, 500, 502 to 504 and Cloudflare's 520 to 530 (`ChatWait`).
+- `ui/Theme.kt` and `ui/Controls.kt` - the warm look: colour, shape and motion tokens, and the buttons, fields, cards
+  and list arrivals every screen shares. Motion stops when the phone's animations are turned off.
 - `design/` - the Arty logo source and icon previews. Fonts are IBM Plex Sans and Mono (SIL Open Font License).
 - Toolchain: Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21, JDK 21, compileSdk and targetSdk 35, minSdk 28.
 

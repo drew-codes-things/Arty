@@ -41,7 +41,9 @@ covering how to install it, how to use it, and what it's been run and tested on.
   smaller model with fewer tools per request. A bigger card can run a bigger model: any Ollama model that supports tool
   calling works as the main model, and models over 16B are shown every tool at once (`tool_budget_by_size` in
   `brain/brain.json`). A 27B to 32B model at 4-bit, such as `qwen3:32b`, needs roughly 20 GB of VRAM, so a 24 GB card;
-  only `qwen3:14b` has been tested.
+  only `qwen3:14b` has been tested. Set `vram_budget_mb` in `brain/brain.json` to a little under your card's memory
+  (11500, the default, suits 12 GB; about 23000 suits 24 GB): before a picture or a handed-off job loads a second
+  model, Arty unloads the others if together they would go over it.
 - **A Debian 13 VM with XFCE for Arty's own PC** - its browser, Gmail window, terminal and document library.
 - **SSH from the machine you deploy from** to the Proxmox host as root (the SSH host name in `PROXMOX`, `proxmox` by
   default) and to Arty's PC (`DESKTOP`, `ai@<its address>`).
@@ -56,7 +58,7 @@ covering how to install it, how to use it, and what it's been run and tested on.
  Arty Desktop (your PC) ───────LAN─────────┐
  Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ Ollama (models, GPU)
  Arty for iPhone ────LAN or Cloudflare─────┤                       │
- Arty for Quest (beta) ─▶ voice server ────┼─▶ Brain (:8081) ──────┼─▶ Tool hub (mcpo): memory, web search, homelab, ...
+ Arty for Quest (beta) ─▶ voice server ────┼─▶ Brain (:8081) ──────┼─▶ Tool hub: memory, web search, homelab, ...
  Voice assistant ("Hey Arty") ─────────────┤                       │
  Telegram / Discord bots ──────────────────┘                       └─▶ Arty's PC (VM): browser, Gmail window, terminal
 ```
@@ -121,8 +123,8 @@ These three projects are made to work together, and each one links to the other 
 | Project | What it is | What it does for the other two |
 |---|---|---|
 | [Arty](https://github.com/drew-codes-things/Arty) | The assistant: the brain and its API, tools, memory and voice, plus the desktop, Android, iPhone and Quest apps | Answers for both. Arty CLI and starfire.ai send their chats to Arty's API and use its models and tools. Arty's approve page sends a browser that has no Arty key to starfire.ai |
-| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) (ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser |
-| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (Arty CLI's browser login), lists and turns off approved devices, and makes a new key with a QR code for a phone |
+| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) (ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser. With `/remote` it shares a session through Arty, so starfire.ai and the Arty phone apps can follow and steer it |
+| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (Arty CLI's browser login), lists and turns off approved devices, chooses which devices may control Arty CLI, and makes a new key with a QR code for a phone. Its admin-only **Arty CLI** page follows and steers shared Arty CLI sessions |
 
 How to link them:
 
@@ -135,6 +137,11 @@ How to link them:
 - **Arty CLI to Arty**: set `ARTY_URL` (home network) or `ARTY_REMOTE_URL` (from anywhere, with
   `ARTY_ACCESS_CLIENT_ID` and `ARTY_ACCESS_CLIENT_SECRET` if Cloudflare Access guards it), then run `arty login`.
 
+- **Controlling Arty CLI from elsewhere**: run `/remote` (or start with `arty --remote`) on the computer. Open
+  **Arty CLI** in starfire's sidebar, or **More > Computers** in the Android and iPhone apps. A phone with its own
+  device key also needs **Arty CLI** switched on for it on starfire's **Arty devices** page; Arty's own key always
+  may. Everything goes through Arty's brain (`/v1/remote/...`, see [docs/API.md](docs/API.md)).
+
 Arty works without the other two. Arty CLI needs Arty. starfire.ai works with other models on its own, but its
 **Arty devices** page needs Arty.
 
@@ -144,16 +151,16 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.3.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.3.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.1.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-1.4.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.4.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.4.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (below).
 
-What changed lately: [release notes for 11 November 2026](docs/release-notes-2026-11-11.md).
+What changed lately: [release notes for 12 November 2026](docs/release-notes-2026-11-12.md), and before that [11 November 2026](docs/release-notes-2026-11-11.md).
 
 ---
 
@@ -177,27 +184,32 @@ Point Ollama at its own folder and keep models loaded, in `/etc/systemd/system/o
 Environment="OLLAMA_HOST=127.0.0.1:11434"
 Environment="OLLAMA_MODELS=/srv/ai/ollama"
 Environment="OLLAMA_KEEP_ALIVE=-1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 ```
 
 ```bash
 mkdir -p /srv/ai/ollama && chown ollama:ollama /srv/ai/ollama
 systemctl daemon-reload && systemctl restart ollama
 ollama pull qwen3:14b
-ollama pull qwen2.5vl:7b
+ollama pull mimo-v2.6:9b
+ollama pull nomic-embed-text
 ```
 
 The tool hub and its MCP servers:
 
 ```bash
 export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
-pipx install mcpo && pipx inject mcpo "mcp<2" "fastapi==0.116.1"
 pipx install mcp-server-fetch
 pipx install mcp-server-time
 npm install -g @modelcontextprotocol/server-memory @modelcontextprotocol/server-sequential-thinking
 python3 -m venv /opt/ai-mcp && /opt/ai-mcp/bin/pip install "mcp==1.30.0" cryptography
+python3 -m venv /opt/ai-hub && /opt/ai-hub/bin/pip install "mcp==2.3.0"
 ```
 
-mcpo needs `mcp<2` and `fastapi==0.116.1`; the fetch server's page reader needs Node 20 or newer.
+The tool hub (`hub/tool_hub.py`, run from `/opt/ai-hub`) starts every server in `mcp/tool-hub.json` with the official
+MCP Python SDK and serves each tool to the brain over HTTP on 127.0.0.1:8000, behind `MCPO_API_KEY`. A server that
+dies is started again. Tool servers get only the settings in their `env` plus a basic environment (`PATH`, `HOME`,
+`USER`), never the hub's key. The fetch server's page reader needs Node 20 or newer.
 
 ### 2. Folders and keys
 
@@ -218,9 +230,9 @@ Before the first deploy, in this repository:
 
 | File | Change |
 |---|---|
-| `brain/brain.json` | `user_name` (what Arty calls you in its notes; it always talks to you as "you"), `weather` (your town and its latitude and longitude), `expiry_watch` (your domains and the sites whose certificates to watch) |
+| `brain/brain.json` | `user_name` (what Arty calls you in its notes; it always talks to you as "you"), `weather` (your town and its latitude and longitude), `expiry_watch` (your domains and the sites whose certificates to watch), `vram_budget_mb` (if your GPU isn't 12 GB: a little under its memory in MB) |
 | `brain/persona.md` | Who Arty is and how it talks. Add a paragraph about yourself and one or two things you've written so it can match your style |
-| `mcp/mcpo.json` | The time zone in `--local-timezone` |
+| `mcp/tool-hub.json` | The time zone in `--local-timezone` |
 
 Then put your server addresses in the files listed in [Your Own Servers](#your-own-servers).
 
@@ -232,9 +244,7 @@ the range reserved for documentation, 192.0.2.0/24: replace them with yours. The
 
 ```bash
 cp hosts.env.example hosts.env      # then edit it
-CT=104 DESKTOP_VMID=105 TIMEZONE=Europe/London \
-HEAL_GUESTS="" NEXTCLOUD_CT="" SET_BACKUP_JOBS=no \
-./provision.sh
+CT=104 DESKTOP_VMID=105 TIMEZONE=Europe/London ./provision.sh
 ```
 
 You can also pass `AI_ADDRESS`, `DESKTOP_ADDRESS`, `HOST_ADDRESS` and `NETWORK` on the command line instead. The
@@ -249,25 +259,30 @@ the GPU at every boot, installs the speech-to-text tools and makes the Arty API 
 | `CT`, `DESKTOP_VMID` | The brain's container and Arty's PC | use 104 and 105 |
 | `AI_ADDRESS`, `DESKTOP_ADDRESS` | Their LAN addresses (required) | stop and ask for them |
 | `HOST_ADDRESS`, `NETWORK` | The Proxmox host and your LAN, for the security watch (required) | stop and ask for them |
-| `HEAL_GUESTS` | Guests Arty may start or restart after you tap Fix | use 100-103 and Arty's PC; `""` gives none |
-| `NEXTCLOUD_CT` | The container running Nextcloud in Docker, for Arty's own account | use 100; `""` skips it |
-| `SET_BACKUP_JOBS` | Rewrite the vzdump jobs to back up the brain and Arty's PC | rewrite them; `no` leaves your jobs alone |
+| `HEAL_GUESTS` | Guests Arty may start or restart after you tap Fix (ids, space separated) | give it none |
+| `NEXTCLOUD_CT` | The container running Nextcloud in Docker, for Arty's own account | skip it |
+| `HOST_FACTS_FILE` | The file on the Proxmox host that the brain's container sees as `/srv/ai/state/host-facts.json` (updates waiting and last backups, for the weekly report) | skip the daily host facts |
+| `BACKUP_JOB` | The id of a vzdump job in `/etc/pve/jobs.cfg` to add the brain and Arty's PC to. Nothing else in that job, and no other job, is changed | leave every backup job alone |
+| `SET_BACKUP_JOBS` | `no` skips the backup step even when `BACKUP_JOB` is set | add them to `BACKUP_JOB` |
 | `TIMEZONE` | The container's time zone | use Europe/London |
+
+Any of these can also go in `hosts.env`.
 
 ### 5. Deploy
 
 ```bash
-CT=104 ARTY_DISCORD_ID= ARTY_TELEGRAM_ID= ./deploy.sh
+CT=104 ./deploy.sh
 ```
 
 It copies the brain, the tool servers, the iPhone app and the services to the container, the scripts to Arty's PC,
-and restarts everything. It keeps whichever main model is live. Leave `ARTY_DISCORD_ID` and `ARTY_TELEGRAM_ID` empty
-unless your bots run in PufferPanel. Run it again after every change.
+and restarts everything. It keeps whichever main model is live. If your chat bots run in PufferPanel, set
+`ARTY_DISCORD_ID` and `ARTY_TELEGRAM_ID` (their PufferPanel server ids) and `PUFFER_DIR` (PufferPanel's servers folder
+on the Proxmox host) in `hosts.env`; left empty, the bots are skipped. Run it again after every change.
 
 Check it's up:
 
 ```bash
-pct exec 104 -- systemctl is-active ollama mcpo brain
+pct exec 104 -- systemctl is-active ollama tool-hub brain
 pct exec 104 -- cat /srv/ai/secrets/arty-api.txt
 ```
 
@@ -281,7 +296,7 @@ Follow [arty-pc/README.md](arty-pc/README.md) to sign Arty's browser in to the s
 | App | First start |
 |---|---|
 | [Arty Desktop](apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](apps/android/README.md) | Install `Arty-1.1.0.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](apps/android/README.md) | Install `Arty-1.4.0.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |
@@ -297,7 +312,7 @@ from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
 - [Voice](voice/README.md): the room mic and speakers hub, "Hey Arty", and the Quest headset socket.
 - The [Telegram](chat-bots/telegram/README.md) and [Discord](chat-bots/discord/README.md) bots.
 - Homelab tools: put the keys in `/srv/ai/secrets/homelab.env` (Uptime Kuma: `UPTIME_KUMA_API_KEY`, created under
-  Settings > API Keys) and run `systemctl restart mcpo brain`.
+  Settings > API Keys) and run `systemctl restart tool-hub brain`.
 
 ---
 
@@ -317,12 +332,13 @@ is not set (Proxmox, Uptime Kuma, Nextcloud, PufferPanel, Arty's PC) simply says
 | `NEXTCLOUD_URL` | `/srv/ai/secrets/homelab.env` | Nextcloud |
 | `PUFFERPANEL_URL`, `PUFFERPANEL_CLIENT_ID`, `PUFFERPANEL_CLIENT_SECRET` | `/srv/ai/secrets/homelab.env` | Game servers |
 | `CALENDAR_TIMEZONE` | `/srv/ai/secrets/brain.env` | Your calendar's time zone |
+| `HOMELAB_NAMES` | `/srv/ai/secrets/brain.env` | Comma-separated names of your Proxmox host and guests: a message naming one gets the server status looked up first |
 | `BRAIN_TRUSTED_PROXIES` | `/srv/ai/secrets/brain.env` | Comma-separated addresses of the proxy in front of the brain (the Cloudflare tunnel's machine), the only ones whose `Cf-Connecting-Ip` is believed |
 | `BRAIN_STARFIRE_URL` | `/srv/ai/secrets/brain.env` | starfire's address (for example `https://<STARFIRE_ADDRESS>`). When a computer asks to be approved in a browser with no Arty key, the approve page links to starfire's Arty devices page with a QR code. Leave it out and the page only offers pasting a key |
 | `BRAIN_URL`, `HUB_URL` | the voice assistant's environment | The brain and the voice hub ([voice/](voice/README.md)) |
 | `BRAIN_URL` | each chat bot's environment | The brain ([chat-bots/](chat-bots/)) |
 
-Restart with `systemctl restart mcpo brain` after changing them.
+Restart with `systemctl restart tool-hub brain` after changing them.
 
 ---
 
@@ -331,11 +347,23 @@ Restart with `systemctl restart mcpo brain` after changing them.
 - **Chat**: any of the apps, or your own code through [the Arty API](docs/API.md).
 - **In the browser**: [starfire.ai](https://github.com/drew-codes-things/starfire.ai) works with Arty. In starfire,
   Settings → Connections → "Add API provider" → "Other (OpenAI-compatible)", with the brain's address
-  (`http://<AI_ADDRESS>:8081/v1`) and `ARTY_API_KEY`, then pick `assistant-core` (Arty's main model).
+  (`http://<AI_ADDRESS>:8081/v1`) and `ARTY_API_KEY`, then pick `Arty` (the main model; the old name `assistant-core` still works).
 - **Models**: on the brain's container, `ai-pull <model>` downloads one (no arguments: suggestions), `ai-models`
   lists them and `ai-use <model>` switches Arty's main model. Or tell Arty "switch to <model>" in any app; only models
   in `arty_models` in `brain.json` are accepted. Only models that can use tools can run Arty, unless you run
   `ai-toolless on`. Hugging Face GGUFs work too: `ai-pull hf.co/<user>/<repo>:Q4_K_M`.
+- **Pictures**: `vision_model` in `brain.json` names the model that looks at pictures (`mimo-v2.6:9b`). If it isn't
+  downloaded, the first downloaded Arty model that can see is used (never a solo model).
+- **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (`mimo-v2.6:9b`). For anything else the
+  main model can hand a job to another model in `arty_models` with `ask_other_model`; `model_strengths` says what each
+  one is best at. A model that isn't downloaded is never picked: Arty falls back to the coding model in agent
+  mode, or the main model, and logs it.
+- **Coding questions in chat**: `route_coding_chats` in `brain.json` (on by default when `coding_model` is set) sends a
+  chat to `coding_model` when it picks plain `Arty` and is clearly about code: a fenced code block, a pasted traceback or
+  compiler error, or asking to write, fix, debug, refactor, review or explain code, a script, a regex, a SQL query or a
+  shell command. Every app gets it with no update, the reply still comes from Arty, and the main model is loaded again
+  200 seconds later. A model picked by name, solo models and the private add-on are never moved; if the coding model
+  isn't downloaded, the main model answers and the brain logs it. Set it to `false` to keep every chat on the main model.
 - **Models on their own**: anything listed in `solo_models` in `brain.json` shows up in the apps' model pickers as a
   plain chat, with no Arty persona, tools or memory.
 - **Approvals**: in chat Arty asks and acts when you say yes; for background tasks, Updates in the phone and desktop
@@ -343,6 +371,11 @@ Restart with `systemctl restart mcpo brain` after changing them.
 - **Documents**: put files in `~/library` on Arty's PC (or ask Arty to) and `search_library` finds them by meaning.
 - **Changing how it behaves**: personality in `brain/persona.md`, instructions in `brain/system-prompt.md`, settings
   in `brain/brain.json` (in `/srv/ai/brain` on the container). Changes apply on the next message.
+- **Memory**: each message gets the saved facts that match its words first, then the newest facts, up to 4,000
+  characters. Every night at 04:00 a tidy-up moves facts saved twice, and facts a later fact replaces (a new address,
+  a new job), out of memory into `/srv/ai/memory/archived-facts.jsonl`, with the reason. Nothing is deleted: say "undo
+  the memory tidy-up" to put the last night's facts back. `memory_tidy` in `brain.json` takes `"enabled": false` or
+  another `"hour"`.
 - **Where things live**: memory in `/srv/ai/memory/memory.json`, past chats in `/srv/ai/memory/conversations/`,
   tasks and schedules in `/srv/ai/brain/state/arty.db`.
 
@@ -381,7 +414,7 @@ Know these before relying on it:
 
 | Part | Ran and tested on |
 |---|---|
-| Brain | Proxmox VE 9.2.21 (kernel 7.0.14-25-pve), LXC container on Debian 13 (trixie), Python 3.13.5, Ollama 0.40.11 with `qwen3:14b` on an NVIDIA RTX 3060 (12 GB, CUDA), mcpo 0.0.20 with mcp 1.30.0, SearXNG |
+| Brain | Proxmox VE 9.2.21 (kernel 7.0.14-25-pve), LXC container on Debian 13 (trixie), Python 3.13.5, Ollama 0.40.16 with `qwen3:14b` on an NVIDIA RTX 3060 (12 GB, CUDA), the tool hub on mcp 2.3.0 with tool servers on mcp 1.30.0, SearXNG |
 | Everything else | See each part's own README |
 
 ## Test Results
@@ -395,6 +428,10 @@ Know these before relying on it:
 | qwen3:14b | 8k | 33 tok/s | 100% GPU (10 GB) |
 | qwen3:14b | 12k | 33 tok/s | 100% GPU (11 GB) |
 | qwen3:14b | 16k | 22 tok/s | 9% spills onto the CPU (12 GB) |
+| qwen3:14b, q8_0 context cache | 12k | 29.6 tok/s | 100% GPU (9.8 GB, cache 1,020 MB instead of 1,920 MB) |
+| qwen3:14b, q8_0 context cache | 24k | 28.6 tok/s | 100% GPU (10.8 GB) |
+| qwen3:14b, q8_0 context cache | 32k | - | 11% spills onto the CPU |
+| mimo-v2.6:9b | - | 53.4 to 53.9 tok/s | 100% GPU (6.6 GB) |
 
 ### qwen2.5:7b and qwen3:14b, same prompts
 
@@ -435,8 +472,10 @@ A full run of 17 test questions passed 16; everything left over passed when re-t
 
 ```bash
 cd brain && python3 -m unittest discover -s tests
+(cd hub && /opt/ai-hub/bin/python -m unittest discover -s tests)   # needs mcp 2
 python3 -m pytest -q mcp voice/tests tests arty-pc chat-bots   # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
 (cd downloads && python3 -m unittest discover -p 'test_*.py')
+ARTY_URL=http://<AI_ADDRESS>:8081/v1 ARTY_KEY=... python3 tests/e2e_battery.py   # scored eval against the live brain, see --help
 cd apps/ios && node --test tests/
 ```
 
@@ -455,4 +494,4 @@ To ask for permission, open an issue on this repository.
 The parts of Arty Desktop adapted from MIT-licensed projects stay under MIT, see
 [apps/desktop/NOTICE](apps/desktop/NOTICE).
 
-Made by [Drew](https://github.com/drew-codes-things)
+Made by [drew-codes-things](https://github.com/drew-codes-things)

@@ -365,3 +365,249 @@ class TestPrivateUploads:
         monkeypatch.setattr(agent.browser, "page", lambda: pytest.fail("the page was used"))
         with pytest.raises(ValueError, match="private"):
             agent.browser.handle("upload", {"path": str(profile / "Default" / "Cookies"), "target": "1"})
+
+
+class FakeElement:
+    def __init__(self, selector, kind, label, stable=True):
+        self.selector = selector
+        self.kind = kind
+        self.label = label
+        self.stable = stable
+
+
+class FakeElements:
+    def __init__(self, page, matches):
+        self.page = page
+        self.matches = list(matches)
+
+    def count(self):
+        return len(self.matches)
+
+    @property
+    def first(self):
+        return FakeElements(self.page, self.matches[:1])
+
+    def or_(self, other):
+        return FakeElements(self.page, self.matches + [found for found in other.matches if found not in self.matches])
+
+    def evaluate(self, script, argument=None):
+        element = self.matches[0]
+        if script == agent.STABLE_SELECTOR_JS:
+            return {"selector": element.selector, "kind": element.kind} if element.stable else None
+        if script == agent.MATCHES_STEP_JS:
+            step, kind = argument
+            return element.kind == kind and step in element.label.lower()
+        raise AssertionError("unexpected element script")
+
+    def click(self):
+        if not self.matches:
+            raise FakePlaywrightError("no element")
+        if self.page.broken_clicks:
+            raise FakePlaywrightError("click timed out")
+        self.page.clicked.append(self.matches[0].selector)
+
+
+class FakeSelectorPage:
+    def __init__(self, url, elements, password_field=False, challenge_frame=False, card_field=False):
+        self.url = url
+        self.elements = elements
+        self.password_field = password_field
+        self.challenge_frame = challenge_frame
+        self.card_field = card_field
+        self.clicked = []
+        self.broken_clicks = False
+        self.frames = []
+
+    def evaluate(self, script, *args):
+        if script == agent.VISIBLE_CHALLENGE_JS:
+            return self.challenge_frame
+        if script == agent.VISIBLE_PASSWORD_JS:
+            return self.password_field
+        if script == agent.CARD_FIELD_JS:
+            return self.card_field
+        if script == agent.LIST_ELEMENTS_JS:
+            return []
+        raise AssertionError("unexpected page script")
+
+    def matching(self, text):
+        return FakeElements(self, [element for element in self.elements if text.lower() in element.label.lower()])
+
+    def locator(self, selector):
+        return FakeElements(self, [element for element in self.elements if element.selector == selector])
+
+    def get_by_role(self, role, name):
+        return FakeElements(self, [element for element in self.matching(name).matches if element.kind.startswith(role)])
+
+    def get_by_label(self, text):
+        return FakeElements(self, [])
+
+    def get_by_placeholder(self, text):
+        return FakeElements(self, [])
+
+    def get_by_text(self, text):
+        return self.matching(text)
+
+    def wait_for_timeout(self, milliseconds):
+        pass
+
+    def wait_for_load_state(self, state):
+        pass
+
+    def inner_text(self, selector):
+        return LONG_ARTICLE
+
+    def title(self):
+        return "Fixture shop"
+
+
+SHOP = "http://shop.test/search"
+FIND = FakeElement("form#search > button:nth-of-type(1)", "button:submit", "Find")
+
+
+@pytest.fixture
+def shop_browser(tmp_path, monkeypatch):
+    browser = agent.Browser()
+    browser.selectors = agent.SelectorCache(str(tmp_path / "selectors.json"))
+    browser.current = None
+    monkeypatch.setattr(browser, "page", lambda: browser.current)
+    return browser
+
+
+def click_on(browser, page, target="Find"):
+    browser.current = page
+    return browser.handle("click", {"target": target})
+
+
+class TestSavedSelectors:
+    def test_a_step_that_worked_is_remembered_for_the_site(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        assert shop_browser.selectors.get("shop.test", "find") == {"selector": FIND.selector, "kind": "button:submit"}
+
+    def test_the_saved_selector_is_tried_first_next_time(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        decoy = FakeElement("header > button:nth-of-type(2)", "button:submit", "Find stores")
+        later = FakeSelectorPage("http://shop.test/other", [decoy, FIND])
+        result = click_on(shop_browser, later)
+        assert later.clicked == [FIND.selector]
+        assert result["used_saved_selector"] is True
+
+    def test_a_first_search_says_nothing_about_saved_selectors(self, shop_browser):
+        assert "used_saved_selector" not in click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+
+    def test_a_saved_selector_that_now_points_elsewhere_is_replaced(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        moved_find = FakeElement("main > button:nth-of-type(3)", "button:submit", "Find")
+        impostor = FakeElement(FIND.selector, "button:submit", "Delete account")
+        page = FakeSelectorPage(SHOP, [impostor, moved_find])
+        result = click_on(shop_browser, page)
+        assert page.clicked == [moved_find.selector]
+        assert "used_saved_selector" not in result
+        assert shop_browser.selectors.get("shop.test", "find")["selector"] == moved_find.selector
+
+    def test_a_saved_selector_for_a_different_kind_of_element_is_not_used(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        link_now = FakeElement(FIND.selector, "a", "Find")
+        button = FakeElement("main > button:nth-of-type(1)", "button:submit", "Find")
+        page = FakeSelectorPage(SHOP, [link_now, button])
+        click_on(shop_browser, page)
+        assert shop_browser.selectors.get("shop.test", "find")["selector"] == button.selector
+
+    def test_a_saved_selector_that_matches_nothing_falls_back_to_searching(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        moved = FakeElement("aside > button:nth-of-type(1)", "button:submit", "Find")
+        page = FakeSelectorPage(SHOP, [moved])
+        click_on(shop_browser, page)
+        assert page.clicked == [moved.selector]
+
+    def test_a_saved_selector_whose_action_fails_is_forgotten(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        page = FakeSelectorPage(SHOP, [FIND])
+        page.broken_clicks = True
+        with pytest.raises(FakePlaywrightError):
+            click_on(shop_browser, page)
+        assert shop_browser.selectors.get("shop.test", "find") is None
+
+    def test_a_step_whose_action_fails_is_not_remembered(self, shop_browser):
+        page = FakeSelectorPage(SHOP, [FIND])
+        page.broken_clicks = True
+        with pytest.raises(FakePlaywrightError):
+            click_on(shop_browser, page)
+        assert shop_browser.selectors.get("shop.test", "find") is None
+
+    def test_numbered_targets_from_a_snapshot_are_never_remembered(self, shop_browser):
+        numbered = FakeElement('[data-agent-id="3"]', "button:submit", "Find")
+        click_on(shop_browser, FakeSelectorPage(SHOP, [numbered]), target="3")
+        assert shop_browser.selectors.load() == {}
+
+    @pytest.mark.parametrize("target", ["Reply to sam@example.com", "Order 482913"])
+    def test_steps_naming_an_address_or_long_number_are_never_remembered(self, shop_browser, target):
+        mail = FakeElement("main > button:nth-of-type(1)", "button", target)
+        click_on(shop_browser, FakeSelectorPage(SHOP, [mail]), target=target)
+        assert shop_browser.selectors.load() == {}
+
+    def test_an_element_without_a_stable_selector_is_not_remembered(self, shop_browser):
+        loose = FakeElement("div > div > button", "button:submit", "Find", stable=False)
+        click_on(shop_browser, FakeSelectorPage(SHOP, [loose]))
+        assert shop_browser.selectors.load() == {}
+
+    @pytest.mark.parametrize("page", [
+        FakeSelectorPage("http://shop.test/login", [FIND], password_field=True),
+        FakeSelectorPage("http://shop.test/account", [FIND], password_field=True),
+        FakeSelectorPage("http://shop.test/checkout/delivery", [FIND]),
+        FakeSelectorPage("http://shop.test/payment", [FIND]),
+        FakeSelectorPage("http://shop.test/basket", [FIND]),
+        FakeSelectorPage(SHOP, [FIND], card_field=True),
+        FakeSelectorPage(SHOP, [FIND], challenge_frame=True),
+        FakeSelectorPage("https://accounts.google.com/v3/signin", [FIND]),
+        FakeSelectorPage("https://www.google.com/sorry/index", [FIND]),
+    ])
+    def test_login_payment_and_bot_check_pages_are_never_remembered(self, shop_browser, page):
+        click_on(shop_browser, page)
+        assert shop_browser.selectors.load() == {}
+
+    def test_a_saved_selector_is_not_used_on_a_payment_page(self, shop_browser):
+        click_on(shop_browser, FakeSelectorPage(SHOP, [FIND]))
+        decoy = FakeElement("form#pay > button:nth-of-type(1)", "button:submit", "Find")
+        page = FakeSelectorPage("http://shop.test/checkout", [decoy, FIND])
+        result = click_on(shop_browser, page)
+        assert page.clicked == [decoy.selector]
+        assert "used_saved_selector" not in result
+
+
+class TestSelectorCacheFile:
+    def test_saved_selectors_survive_a_restart_in_a_private_file(self, tmp_path):
+        path = str(tmp_path / "selectors.json")
+        agent.SelectorCache(path).remember("shop.test", "find", {"selector": "form > button", "kind": "button"})
+        assert agent.SelectorCache(path).get("shop.test", "find") == {"selector": "form > button", "kind": "button"}
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+    def test_the_file_holds_only_sites_steps_selectors_and_kinds(self, tmp_path):
+        path = str(tmp_path / "selectors.json")
+        agent.SelectorCache(path).remember("shop.test", "find", {"selector": "form > button", "kind": "button"})
+        with open(path) as handle:
+            assert json.load(handle) == {"entries": [["shop.test\nfind", {"selector": "form > button", "kind": "button"}]]}
+
+    def test_the_cache_is_bounded_and_drops_the_least_recently_used(self, tmp_path):
+        cache = agent.SelectorCache(str(tmp_path / "selectors.json"), limit=3)
+        for step in ("one", "two", "three"):
+            cache.remember("shop.test", step, {"selector": f"#{step}", "kind": "button"})
+        cache.touch("shop.test", "one")
+        cache.remember("shop.test", "four", {"selector": "#four", "kind": "button"})
+        assert sorted(key.split("\n")[1] for key in cache.load()) == ["four", "one", "three"]
+
+    def test_a_damaged_file_starts_an_empty_cache_instead_of_failing(self, tmp_path):
+        path = tmp_path / "selectors.json"
+        path.write_text("{not json")
+        assert agent.SelectorCache(str(path)).get("shop.test", "find") is None
+
+    def test_odd_entries_in_the_file_are_ignored(self, tmp_path):
+        path = tmp_path / "selectors.json"
+        path.write_text(json.dumps({"entries": [["shop.test\nfind", {"selector": "x" * 1000, "kind": "button"}],
+                                                ["shop.test\nok", {"selector": "#ok", "kind": "button"}],
+                                                ["bad"], "nonsense", ["shop.test\nnokind", {"selector": "#a"}]]}))
+        assert list(agent.SelectorCache(str(path)).load()) == ["shop.test\nok"]
+
+    def test_steps_are_matched_however_they_are_spaced_or_capitalised(self, tmp_path):
+        cache = agent.SelectorCache(str(tmp_path / "selectors.json"))
+        cache.remember("shop.test", agent.tidy_step("  Find   NOW "), {"selector": "#f", "kind": "button"})
+        assert cache.get("shop.test", agent.tidy_step("find now")) == {"selector": "#f", "kind": "button"}

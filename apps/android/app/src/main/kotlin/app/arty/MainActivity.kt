@@ -21,21 +21,26 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import android.graphics.Color
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -67,13 +72,19 @@ import app.arty.lectures.LectureRecorder
 import app.arty.ui.CalendarScreen
 import app.arty.ui.LecturesScreen
 import app.arty.ui.ChatScreen
+import app.arty.ui.ComputersScreen
 import app.arty.ui.MemoryScreen
 import app.arty.ui.SchedulesScreen
 import app.arty.ui.TasksScreen
 import app.arty.ui.UpdatesScreen
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.unit.dp
+import app.arty.ui.ArtyMotion
 import app.arty.ui.artyBackground
+import app.arty.ui.pressScale
+import app.arty.ui.rememberArrivals
+import app.arty.ui.riseIn
+import app.arty.ui.softShadow
 
 private enum class Tab(val label: String, val icon: ImageVector, val inBar: Boolean = true) {
     Chat("Chat", ArtyIcons.Chat),
@@ -84,6 +95,7 @@ private enum class Tab(val label: String, val icon: ImageVector, val inBar: Bool
     Lectures("Lectures", ArtyIcons.Book, inBar = false),
     Schedules("Schedules", ArtyIcons.Clock, inBar = false),
     Memory("Memory", ArtyIcons.Brain, inBar = false),
+    Computers("Computers", ArtyIcons.Computer, inBar = false),
 }
 
 class MainActivity : ComponentActivity() {
@@ -196,32 +208,35 @@ private fun ArtyApp(vm: ArtyViewModel) {
         contentColor = ArtyColors.Text,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            NavigationBar(containerColor = ArtyColors.Void.copy(alpha = 0.92f), tonalElevation = 0.dp) {
-                Tab.entries.filter { it.inBar }.forEach { item ->
-                    val waiting = (item == Tab.Tasks && vm.tasks.any { it.status == "waiting" }) ||
-                        (item == Tab.Updates && tab != Tab.Updates && vm.unseenUpdates > 0)
-                    NavigationBarItem(
-                        selected = tab == item || (item == Tab.More && !tab.inBar),
-                        onClick = { tab = item },
-                        icon = {
-                            BadgedBox(badge = { if (waiting) Badge(containerColor = ArtyColors.Signal) }) {
-                                Icon(item.icon, contentDescription = item.label)
-                            }
-                        },
-                        label = { Text(item.label, maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = ArtyColors.Signal, selectedTextColor = ArtyColors.Signal,
-                            unselectedIconColor = ArtyColors.TextFaint, unselectedTextColor = ArtyColors.TextFaint,
-                            indicatorColor = ArtyColors.Signal.copy(alpha = 0.14f),
-                        ),
-                    )
+            Column {
+                HorizontalDivider(color = ArtyColors.Line)
+                NavigationBar(containerColor = ArtyColors.Ink.copy(alpha = NAV_BAR_ALPHA), tonalElevation = 0.dp) {
+                    Tab.entries.filter { it.inBar }.forEach { item ->
+                        val waiting = (item == Tab.Tasks && vm.tasks.any { it.status == "waiting" }) ||
+                            (item == Tab.Updates && tab != Tab.Updates && vm.unseenUpdates > 0)
+                        NavigationBarItem(
+                            selected = tab == item || (item == Tab.More && !tab.inBar),
+                            onClick = { tab = item },
+                            icon = {
+                                BadgedBox(badge = { if (waiting) Badge(containerColor = ArtyColors.Signal) }) {
+                                    Icon(item.icon, contentDescription = item.label)
+                                }
+                            },
+                            label = { Text(item.label, maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = ArtyColors.SignalText, selectedTextColor = ArtyColors.SignalText,
+                                unselectedIconColor = ArtyColors.TextFaint, unselectedTextColor = ArtyColors.TextFaint,
+                                indicatorColor = ArtyColors.SignalSoft,
+                            ),
+                        )
+                    }
                 }
             }
         },
     ) { padding ->
         // Consuming the bar padding stops the chat's imePadding from adding the bar height again above the keyboard.
-        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-            when (tab) {
+        Crossfade(tab, Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), ArtyMotion.quick(), label = "tab") { shown ->
+            when (shown) {
                 Tab.Chat -> ChatScreen(vm)
                 Tab.Updates -> UpdatesScreen(vm)
                 Tab.Tasks -> TasksScreen(vm)
@@ -240,18 +255,27 @@ private fun ArtyApp(vm: ArtyViewModel) {
                 )
                 Tab.Schedules -> SchedulesScreen(vm)
                 Tab.Memory -> MemoryScreen(vm)
+                Tab.Computers -> ComputersScreen()
             }
         }
     }
 }
 
+private const val NAV_BAR_ALPHA = 0.92f
+
 @Composable
 private fun MoreScreen(pages: List<Tab>, onOpen: (Tab) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp)) {
-        Text("More", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("More", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
+        val arrivals = rememberArrivals()
         pages.forEach { page ->
+            val press = remember { MutableInteractionSource() }
+            val shape = MaterialTheme.shapes.medium
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onOpen(page) }.padding(horizontal = 12.dp, vertical = 14.dp),
+                Modifier.fillMaxWidth().riseIn(arrivals, page).pressScale(press).softShadow(shape).clip(shape)
+                    .background(ArtyColors.Surface).border(1.dp, ArtyColors.Line, shape)
+                    .clickable(interactionSource = press, indication = LocalIndication.current) { onOpen(page) }
+                    .padding(horizontal = 14.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(page.icon, contentDescription = null, tint = ArtyColors.TextDim, modifier = Modifier.size(22.dp))

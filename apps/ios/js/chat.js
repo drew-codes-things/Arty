@@ -1,4 +1,4 @@
-import { ConversationStore, historyToSend, titleFor } from "./conversations.js";
+import { ConversationStore, historyToSend, randomId, titleFor } from "./conversations.js";
 import { h, showToast } from "./dom.js";
 import { fileNameFromPath, mediaKind } from "./links.js";
 import { renderMarkdown, speakableText } from "./markdown.js";
@@ -103,7 +103,7 @@ export class ChatView {
   attach(files) {
     this.fileInput.value = "";
     for (const file of files) {
-      const pending = { key: crypto.randomUUID(), name: file.name, uploading: true };
+      const pending = { key: randomId(), name: file.name, uploading: true };
       this.pendingFiles.push(pending);
       this.api.upload(file)
         .then((attachment) => Object.assign(pending, { attachment, uploading: false }))

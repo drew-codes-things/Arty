@@ -27,8 +27,8 @@ test("the code is taken out of the address once read", () => {
 });
 
 test("the request says the name is the device's own claim and shows where it asked from", () => {
-  assert.equal(deviceSummary({ name: "Arty CLI on vivadrew", address: "192.0.2.5" }),
-    "A device calling itself \u201cArty CLI on vivadrew\u201d, asking from 192.0.2.5, wants its own key for Arty.");
+  assert.equal(deviceSummary({ name: "Arty CLI on laptop", address: "192.0.2.5" }),
+    "A device calling itself \u201cArty CLI on laptop\u201d, asking from 192.0.2.5, wants its own key for Arty.");
   assert.equal(deviceSummary({}), "A device calling itself \u201cA device\u201d wants its own key for Arty.");
 });
 

@@ -1,10 +1,3 @@
-"""Notifications to Drew: they go to the Updates channel in Arty's own apps (the phone app and the desktop app) and
-nowhere else. Drew asked for them to stay out of Telegram and Discord (2026-10-25).
-
-send() hands each one to the listeners: the brain keeps them as a feed (brain.record_announcement) that both apps
-follow, show in Updates and turn into phone or desktop notifications. Buttons (Approve / Deny / Done / Cancel) carry
-a task callback ("t:<id>:<action>") that the apps answer through the brain's task API.
-"""
 import logging
 
 log = logging.getLogger("brain.notify")

@@ -1,7 +1,0 @@
-#!/bin/sh
-set -eu
-mcpo=${MCPO_BIN:-/usr/local/bin/mcpo}
-[ -n "${MCPO_API_KEY:-}" ] || { echo "mcpo-start: MCPO_API_KEY is not set, refusing to run the tool hub without a key" >&2; exit 1; }
-interpreter=$(sed -n '1s/^#!//p' "$mcpo")
-[ -n "$interpreter" ] || { echo "mcpo-start: can't find the Python that runs $mcpo" >&2; exit 1; }
-exec $interpreter -c 'from mcpo import app; app(auto_envvar_prefix="MCPO")' "$@"

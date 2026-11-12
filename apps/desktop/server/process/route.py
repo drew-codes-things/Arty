@@ -1,11 +1,9 @@
-import hashlib
-import hmac
-import secrets
 import time
 from urllib.parse import urlsplit
 
 import requests
 
+from process import identity
 from process.config import load_config
 
 _brain = load_config().get("brain") or {}
@@ -15,8 +13,6 @@ REMOTE_URL = str(_brain.get("remote_url") or "").rstrip("/")
 ACCESS_CLIENT_ID = str(_brain.get("access_client_id") or "")
 ACCESS_CLIENT_SECRET = str(_brain.get("access_client_secret") or "")
 API_KEY = str(_brain.get("api_key") or "")
-IDENTITY_CONTEXT = "arty-identity:"
-NONCE_BYTES = 16
 LOCAL_CHECK_SECONDS = 1.5
 ROUTE_CHECK_SECONDS = 30
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -27,22 +23,15 @@ class UnprovenBrain(requests.ConnectionError):
     pass
 
 
-def _expected_proof(nonce):
-    return hmac.new(API_KEY.encode(), f"{IDENTITY_CONTEXT}{nonce}".encode(), hashlib.sha256).hexdigest()
-
-
 def _home_brain_proves_itself():
-    nonce = secrets.token_hex(NONCE_BYTES)
+    nonce = identity.new_nonce()
     try:
         response = requests.get(f"{LOCAL_URL.removesuffix('/v1')}/v1/identity", params={"nonce": nonce},
                                 timeout=LOCAL_CHECK_SECONDS)
         proofs = response.json().get("proofs") if response.status_code == 200 else None
     except (requests.RequestException, ValueError, AttributeError):
         return False
-    if not isinstance(proofs, list):
-        return False
-    expected = _expected_proof(nonce)
-    return any(isinstance(proof, str) and hmac.compare_digest(proof.encode(), expected.encode()) for proof in proofs)
+    return identity.is_proven(proofs, API_KEY, nonce)
 
 
 def _home_needs_proof():

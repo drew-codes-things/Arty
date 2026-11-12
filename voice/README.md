@@ -2,7 +2,7 @@
 
 The USB mic and the speakers are plugged into the Proxmox host. Only one container can hold the mic, so:
 
-- **my-voice (CT 108, 192.0.2.15)** owns the mic and the speakers. `hub/voice_hub.py` streams the mic over a
+- **my-voice (192.0.2.15)** owns the mic and the speakers. `hub/voice_hub.py` streams the mic over a
   WebSocket (48 kHz, 16-bit mono) and plays anything the assistant says on the server speakers and on every linked PC.
   Its website, http://192.0.2.15:8780, has its own account: the first visit asks for the one-time setup code in
   `/var/lib/my-voice/setup-code` on the server, then an email and password (`/var/lib/my-voice/accounts.json`,
@@ -10,15 +10,80 @@ The USB mic and the speakers are plugged into the Proxmox host. Only one contain
   and `HUB_HOST` picks the listen address (default 0.0.0.0). It gives each PC a
   one-file setup script with its own key. Keys are stored hashed and can be removed from
   the page.
-- **ai-arty (CT 109, 192.0.2.16)** runs `assistant/arty_voice.py`. It listens to the hub's mic stream, uses VAD to
-  find speech, checks the start of each phrase for "Hey Arty" with whisper `tiny.en`, transcribes the request with
-  `small.en`, streams the answer from Arty's brain (CT 104, `ARTY_API_KEY`) and speaks it sentence by sentence with
+- **ai-arty (192.0.2.16)** runs `assistant/arty_voice.py`. It listens to the hub's mic stream, uses VAD to
+  find speech and Smart Turn to tell when a request has ended, checks the start of each phrase for "Hey Arty" with whisper `tiny.en`, transcribes the request with
+  `small.en`, streams the answer from Arty's brain (`ARTY_API_KEY`) and speaks it sentence by sentence with
   Piper (`en_GB-alan-medium`) through the hub's `/speak`. It ignores the mic while it is talking, and for 6 s after
   an answer it takes a follow-up without the wake word. Nothing it hears is logged unless the wake word was said.
 - **Wake switch**: the "Hey Arty" switch on the my-voice page turns the wake word off and on (saved in
   `/var/lib/my-voice/wake.json`, pushed to the assistant over its mic stream). Saying "Arty off" / "Arty on" does the
   same by voice; while it's off the assistant only listens for "Arty on". The wake check primes whisper `tiny.en`
   with "Hey Arty. Arty on. Arty off." because unprimed it mishears the name in two-word phrases.
+
+## When a request has ended
+
+The assistant finds speech with Silero VAD and decides a request has ended with Smart Turn v3.2, which listens to how
+the words end, not just to the silence after them (`assistant/turn_end.py`, licences in [NOTICE](NOTICE)). After 300 ms
+of quiet it asks Smart Turn whether the speaker has finished, again every 300 ms while it stays quiet, and ends the
+request anyway after 1.6 s. On the recorded test phrases this cut the wait after speaking from about 860 ms to about
+400 ms on average; "Arty, skip this song" was judged unfinished and waited the full 1.6 s. Settings (in
+`/etc/arty-voice/secrets.env` or the unit's environment):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `VOICE_TURN_END` | `smart` | `silence` goes back to the old rule: the request ends after 810 ms of quiet |
+| `VOICE_VAD` | `silero` | `webrtc` goes back to webrtcvad for finding speech |
+| `VOICE_TURN_WAIT_MS` | `1600` | longest quiet before a request ends when Smart Turn keeps saying it is unfinished |
+| `SMART_TURN_MODEL` | `/opt/ai-arty/models/smart-turn-v3.2-cpu.onnx` | |
+| `SILERO_VAD_MODEL` | `/opt/ai-arty/models/silero_vad.onnx` | |
+
+`fetch-models.sh [folder]` downloads these models (and Moonshine's, below) at pinned versions and refuses a file whose SHA-256 differs. If a
+model file is missing the assistant logs a warning and uses the old behaviour for that part. If Smart Turn fails
+during a request, that request falls back to the 810 ms rule.
+
+## Hearing the request while it is spoken
+
+The request itself is transcribed by Moonshine (tiny streaming English, MIT, `assistant/live_text.py`) while it is
+being spoken: as soon as the start of speech is found, each 30 ms of audio goes to a Moonshine stream on its own
+thread, so when the request ends only the last moment is left to transcribe. "Arty" is given to Moonshine as a key
+term. The wake word is still checked first with whisper `tiny.en` as before. On ai-arty with the recorded test phrases,
+the time from the end of speech to the command text went from a median of 3.6 s (810 ms of silence, then `small.en`)
+to 0.44 s (Smart Turn, then the rest of the Moonshine stream).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `COMMAND_ENGINE` | `moonshine` | `whisper` goes back to transcribing the whole request with `small.en` after it ends |
+| `MOONSHINE_MODEL` | `/opt/ai-arty/models/moonshine-tiny-streaming-en` | folder with the model files from `fetch-models.sh` |
+
+If the Moonshine model folder is missing, commands use whisper. If a live transcript fails, times out (10 s) or comes
+back empty, that request is transcribed with `small.en` instead. If the Moonshine text has no "Arty" in it after
+the wake check heard one, `small.en` is asked as well before the request is ignored. A live transcript that is never collected (the
+request had no wake word, or arrived while Arty was talking) is closed straight away, or after 30 s at the latest.
+
+## The "Hey Arty" spotter
+
+The room assistant first asks a small "Hey Arty" model (`assistant/wake_spotter.py`, files in `models/hey-arty`)
+whether the start of a request is the wake phrase. It is Google's speech_embedding model (Apache 2.0) with a
+classifier trained for Arty on top. If it hears "Hey Arty" and the Moonshine text also starts with the wake phrase,
+the whisper `tiny.en` check is skipped. In every other case the request goes through the whisper checks as before,
+so a false alarm costs a little CPU and never acts on its own. Headsets (which also wake on a bare "Arty") do not
+use it. It takes about 26 ms per request.
+
+It was trained only on synthetic speech: 1,214 clips from the 54 Kokoro voices plus 40 blends of them, with noise and
+echo added, and near misses such as "Hey Marty", "Hey party" and a bare "Arty" as negatives. Tested on voices it
+never saw in training it fired on 105 of 108 wake clips and 0 of 123 other clips; on a different voice engine
+(Piper `en_GB-alan-medium`) it fired on 10 of 10 wake clips and 0 of 20 others, and on 0 of the 16 recorded
+"Arty, ..." requests without "hey". It has not yet heard a real voice.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WAKE_ENGINE` | `spotter` | `whisper` turns the spotter off |
+| `WAKE_SPOTTER_MODEL` | `/opt/ai-arty/models/hey-arty` | copy of `models/hey-arty` |
+
+To retrain: `wake-training/make_clips.py clips.npz` (needs the desktop app's Kokoro files and kokoro-onnx), then
+`wake-training/train_spotter.py clips.npz models/hey-arty/speech_embedding.onnx models/hey-arty/hey_arty.npz samples`
+(needs numpy, scipy, scikit-learn, onnxruntime). `wake-training/convert_embedding.py` rebuilt
+`speech_embedding.onnx` from the TensorFlow module (needs tensorflow, tf2onnx).
 
 ## Room speaker volume
 
@@ -65,7 +130,7 @@ Wyoming has no keys, so only the addresses listed there may connect (comma separ
 `/etc/arty-voice/secrets.env`). `SATELLITE_PORT` defaults to 10300 and `SATELLITE_HOST` to 0.0.0.0.
 
 On the satellite: speech to text and text to speech are both `<ai-arty address>:10300` (leave the voice empty); the
-chat model endpoint is the brain's `http://<brain address>:8081/v1` with model `assistant-core` and the brain's API key.
+chat model endpoint is the brain's `http://<brain address>:8081/v1` with model `Arty` and the brain's API key.
 
 ## PCs
 
@@ -76,14 +141,17 @@ chat model endpoint is the brain's `http://<brain address>:8081/v1` with model `
 
 ## Deploy
 
-| | my-voice (CT 108) | ai-arty (CT 109) |
+| | my-voice | ai-arty |
 |---|---|---|
 | code | `/opt/my-voice/app` (copy of `hub/`) | `/opt/ai-arty/app` (copy of `assistant/`) |
-| venv | `/opt/my-voice/venv` (aiohttp, bcrypt) | `/opt/ai-arty/venv` (aiohttp, numpy, faster-whisper, webrtcvad-wheels, piper-tts) |
+| venv | `/opt/my-voice/venv` (aiohttp, bcrypt) | `/opt/ai-arty/venv` (aiohttp, numpy, faster-whisper, onnxruntime, moonshine-voice, webrtcvad-wheels, piper-tts) |
 | data | `/var/lib/my-voice` (user `myvoice`, 700): accounts, sessions, devices | models in `/opt/ai-arty/models`; keys in `/etc/arty-voice/secrets.env` (root, 600) |
 | service | `my-voice.service` | `arty-voice.service` (user `arty`) |
 
-The hub needs `/dev/snd` in CT 108 (`lxc.cgroup2.devices.allow: c 116:* rwm` and a bind mount) and the host udev
+The hub needs `/dev/snd` in the my-voice container (`lxc.cgroup2.devices.allow: c 116:* rwm` and a bind mount) and the host udev
 rules that make the mic and the onboard sound card mode 0666.
 
-Tests: `python -m pytest voice/tests` (needs aiohttp, bcrypt, numpy, webrtcvad-wheels).
+Tests: `python -m pytest voice/tests` (needs aiohttp, bcrypt, numpy, webrtcvad-wheels). The tests that run the real Smart Turn, Silero and
+Moonshine models also need onnxruntime, faster-whisper and moonshine-voice, and the folder holding the models in `ARTY_TEST_MODELS` (recorded phrases in `ARTY_TEST_PHRASES`,
+wake word samples in `ARTY_TEST_WAKE_SAMPLES`; each test skips while its folder is unset); run them on
+their own (`python -m pytest voice/tests/test_turn_end.py`, then `voice/tests/test_live_text.py`), as other test files stand in a fake faster-whisper.

@@ -13,8 +13,9 @@ import app.arty.phone.PhoneAction
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +35,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,16 +60,12 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -100,7 +99,6 @@ import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 
 private val SUGGESTIONS = listOf(
     "How's my server doing?",
@@ -155,8 +153,7 @@ private fun ModelSheet(models: List<ModelOption>, current: String, onChoose: (St
     val shown = models.filter { it.id == Conversation.DEFAULT_MODEL || main == null || main.model.isBlank() || it.model != main.model }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = ArtyColors.Panel,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = ArtyColors.LineBright) },
+        dragHandle = { BottomSheetDefaults.DragHandle(color = ArtyColors.LineStrong) },
     ) {
         Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 28.dp)) {
             Text("Model", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp))
@@ -174,8 +171,8 @@ private fun ModelSheet(models: List<ModelOption>, current: String, onChoose: (St
 @Composable
 private fun ModelRow(model: ModelOption, selected: Boolean, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(14.dp))
-            .background(if (selected) ArtyColors.Signal.copy(alpha = 0.12f) else Color.Transparent)
+        Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(MaterialTheme.shapes.small)
+            .background(if (selected) ArtyColors.FillPress else Color.Transparent)
             .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -184,15 +181,15 @@ private fun ModelRow(model: ModelOption, selected: Boolean, onClick: () -> Unit)
                 Text(model.model.ifBlank { model.name }, style = MaterialTheme.typography.titleSmall)
                 if (model.id == Conversation.DEFAULT_MODEL) {
                     Spacer(Modifier.width(8.dp))
-                    Text("Default", style = MaterialTheme.typography.labelSmall, color = Color.White,
-                        modifier = Modifier.clip(RoundedCornerShape(50)).background(ArtyRedGradient).padding(horizontal = 7.dp, vertical = 1.dp))
+                    Text("Default", style = MaterialTheme.typography.labelSmall, color = ArtyColors.SignalText,
+                        modifier = Modifier.clip(CircleShape).background(ArtyColors.SignalSoft).padding(horizontal = 7.dp, vertical = 1.dp))
                 }
             }
             if (model.description.isNotBlank()) {
                 Text(model.description, style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextFaint, modifier = Modifier.padding(top = 2.dp))
             }
         }
-        if (selected) Icon(Icons.Filled.Check, contentDescription = "Current model", tint = ArtyColors.Signal, modifier = Modifier.size(20.dp))
+        if (selected) Icon(Icons.Filled.Check, contentDescription = "Current model", tint = ArtyColors.SignalText, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -211,29 +208,36 @@ private fun ChatTopBar(vm: ArtyViewModel, onMenu: () -> Unit) {
         Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onMenu) { Icon(Icons.Filled.Menu, "Conversations", tint = ArtyColors.TextDim) }
+        ArtyIconButton(onClick = onMenu) { Icon(Icons.Filled.Menu, "Conversations", tint = ArtyColors.TextDim) }
         Column(Modifier.weight(1f)) {
             Box {
+                val pill = remember { MutableInteractionSource() }
                 Row(
-                    Modifier.clip(RoundedCornerShape(10.dp)).clickable { modelMenu = true }.padding(horizontal = 8.dp, vertical = 6.dp),
+                    Modifier.padding(start = 2.dp).pressScale(pill).clip(CircleShape)
+                        .background(if (modelMenu) ArtyColors.FillHover else ArtyColors.Fill)
+                        .border(1.dp, if (modelMenu) ArtyColors.LineStrong else ArtyColors.Line, CircleShape)
+                        .clickable(interactionSource = pill, indication = LocalIndication.current) { modelMenu = true }
+                        .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(modelName, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Icon(Icons.Filled.KeyboardArrowDown, "Choose model", tint = ArtyColors.TextDim, modifier = Modifier.size(18.dp))
+                    Text(modelName, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false))
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.Filled.KeyboardArrowDown, "Choose model", tint = ArtyColors.TextFaint, modifier = Modifier.size(18.dp))
                 }
                 if (modelMenu) {
                     ModelSheet(vm.models, vm.current.model, onChoose = { vm.chooseModel(it); modelMenu = false }, onDismiss = { modelMenu = false })
                 }
             }
         }
-        IconButton(enabled = vm.thinkingSince == null, onClick = {
+        ArtyIconButton(enabled = vm.thinkingSince == null, onClick = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.startCall()
             else askMic.launch(Manifest.permission.RECORD_AUDIO)
-        }) { Icon(ArtyIcons.Call, "Call Arty", tint = ArtyColors.Signal) }
-        IconButton(onClick = vm::newChat) { Icon(Icons.Filled.Add, "New chat", tint = ArtyColors.TextDim) }
+        }) { Icon(ArtyIcons.Call, "Call Arty", tint = if (vm.thinkingSince == null) ArtyColors.Signal else ArtyColors.TextFaint) }
+        ArtyIconButton(onClick = vm::newChat) { Icon(Icons.Filled.Add, "New chat", tint = ArtyColors.TextDim) }
         Box {
-            IconButton(onClick = { moreMenu = true }) { Icon(ArtyIcons.Speaker, "Read aloud settings", tint = if (vm.autoSpeak) ArtyColors.Signal else ArtyColors.TextDim) }
-            DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+            ArtyIconButton(onClick = { moreMenu = true }) { Icon(ArtyIcons.Speaker, "Read aloud settings", tint = if (vm.autoSpeak) ArtyColors.SignalText else ArtyColors.TextDim) }
+            DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }, shape = MaterialTheme.shapes.medium) {
                 DropdownMenuItem(
                     text = { Text("Read every reply aloud", style = MaterialTheme.typography.bodyMedium) },
                     trailingIcon = { Switch(checked = vm.autoSpeak, onCheckedChange = { vm.toggleAutoSpeak() }) },
@@ -269,13 +273,12 @@ private fun EmptyChat(onPick: (String) -> Unit) {
         Spacer(Modifier.size(12.dp))
         Text("What can I do for you?", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.size(20.dp))
+        val arrivals = rememberArrivals()
         SUGGESTIONS.forEach { suggestion ->
-            OutlinedButton(
+            ArtyOutlinedButton(
                 onClick = { onPick(suggestion) },
-                border = BorderStroke(1.dp, ArtyColors.Line),
-                shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            ) { Text(suggestion, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Text) }
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).riseIn(arrivals, suggestion),
+            ) { Text(suggestion, style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }
@@ -285,21 +288,32 @@ private fun MessageList(vm: ArtyViewModel) {
     val messages = vm.current.messages
     val listState = rememberLazyListState()
     val itemCount = messages.size + if (vm.thinkingSince != null) 1 else 0
+    val arrivals = rememberArrivals()
+    val chatId = vm.current.id
     LaunchedEffect(itemCount, vm.current.id, vm.partialReply) {
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
     }
+    if (vm.partialReply != null) arrivals.markSeen(messageKey(chatId, messages.size))
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        items(messages) { message ->
-            if (message.role == "user") UserBubble(message) else ArtyMessage(message, vm)
+        itemsIndexed(messages, key = { index, _ -> messageKey(chatId, index) }) { index, message ->
+            Box(Modifier.arrival(this, arrivals, messageKey(chatId, index))) {
+                if (message.role == "user") UserBubble(message) else ArtyMessage(message, vm)
+            }
         }
-        vm.thinkingSince?.let { since -> item { Thinking(since, vm.partialReply) } }
+        vm.thinkingSince?.let { since ->
+            item(key = THINKING_KEY) { Box(Modifier.arrival(this, arrivals, "$chatId:$THINKING_KEY:$since")) { Thinking(since, vm.partialReply) } }
+        }
     }
 }
+
+private const val THINKING_KEY = "thinking"
+
+private fun messageKey(chatId: String, index: Int) = "$chatId:$index"
 
 @Composable
 private fun UserBubble(message: StoredMessage) {
@@ -309,8 +323,8 @@ private fun UserBubble(message: StoredMessage) {
             message.content,
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.widthIn(max = 320.dp)
-                .background(ArtyColors.PanelRaised, RoundedCornerShape(20.dp))
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .background(ArtyColors.Raised, YourBubbleShape)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
         )
     }
 }
@@ -323,18 +337,18 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             if (message.failed) {
-                Text(message.content, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.Signal)
-                TextButton(onClick = vm::retry) {
-                    Icon(Icons.Filled.Refresh, null, tint = ArtyColors.Signal, modifier = Modifier.size(16.dp))
+                Text(message.content, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.SignalText)
+                ArtyOutlinedButton(onClick = vm::retry, modifier = Modifier.padding(top = 6.dp)) {
+                    Icon(Icons.Filled.Refresh, null, tint = ArtyColors.SignalText, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Retry", color = ArtyColors.Signal)
+                    Text("Retry", color = ArtyColors.SignalText)
                 }
                 return@Column
             }
             MarkdownText(message.content)
             PhoneAction.fromJson(message.phoneAction)?.let { action ->
-                OutlinedButton(onClick = { vm.openPhoneAction(action) }, modifier = Modifier.padding(top = 6.dp)) {
-                    Text(action.label, color = ArtyColors.Signal)
+                ArtyOutlinedButton(onClick = { vm.openPhoneAction(action) }, modifier = Modifier.padding(top = 6.dp)) {
+                    Text(action.label, color = ArtyColors.SignalText)
                 }
             }
             if (message.tools.isNotEmpty()) {
@@ -345,10 +359,10 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { vm.speak(message.content) }, modifier = Modifier.size(36.dp)) {
+                ArtyIconButton(onClick = { vm.speak(message.content) }, modifier = Modifier.size(36.dp)) {
                     Icon(ArtyIcons.Speaker, "Read aloud", tint = ArtyColors.TextFaint, modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = { copy(context, message.content) }, modifier = Modifier.size(36.dp)) {
+                ArtyIconButton(onClick = { copy(context, message.content) }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Share, "Copy", tint = ArtyColors.TextFaint, modifier = Modifier.size(16.dp))
                 }
                 Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.time)), style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
@@ -360,7 +374,7 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
 @Composable
 private fun ArtyAvatar() {
     Box(
-        Modifier.size(30.dp).clip(CircleShape).background(ArtyColors.PanelRaised).border(1.dp, ArtyColors.Line, CircleShape),
+        Modifier.size(30.dp).clip(CircleShape).background(ArtyColors.Raised).border(1.dp, ArtyColors.Line, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Image(painterResource(R.drawable.arty_symbol), contentDescription = null, modifier = Modifier.size(20.dp))
@@ -383,7 +397,7 @@ private fun Thinking(since: Long, partial: String?) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ArtyAvatar()
                 Spacer(Modifier.width(10.dp))
-                Text("writing$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.Muted)
+                Text("writing$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.TextDim)
             }
             MarkdownText(partial)
         }
@@ -392,7 +406,7 @@ private fun Thinking(since: Long, partial: String?) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         ArtyAvatar()
         Spacer(Modifier.width(10.dp))
-        Text("thinking$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.Muted, modifier = Modifier.width(96.dp))
+        Text("thinking$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.TextDim, modifier = Modifier.width(96.dp))
         Text("${elapsed}s", style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
     }
 }
@@ -409,12 +423,12 @@ private fun kindLabel(attachment: Attachment) = when (attachment.kind) {
 private fun FileChip(name: String, kind: String, uploading: Boolean = false, failed: Boolean = false, onRemove: (() -> Unit)? = null) {
     Row(
         Modifier.widthIn(max = 260.dp)
-            .background(ArtyColors.PanelRaised, RoundedCornerShape(12.dp))
-            .border(1.dp, if (failed) ArtyColors.Signal else ArtyColors.Line, RoundedCornerShape(12.dp))
+            .background(ArtyColors.Surface, MaterialTheme.shapes.small)
+            .border(1.dp, if (failed) ArtyColors.Signal else ArtyColors.Line, MaterialTheme.shapes.small)
             .padding(start = 10.dp, end = if (onRemove != null) 0.dp else 10.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(kind, style = KickerStyle, color = ArtyColors.Muted)
+        Text(kind, style = KickerStyle, color = ArtyColors.TextDim)
         Spacer(Modifier.width(8.dp))
         Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         if (uploading) {
@@ -422,7 +436,7 @@ private fun FileChip(name: String, kind: String, uploading: Boolean = false, fai
             CircularProgressIndicator(strokeWidth = 2.dp, color = ArtyColors.Signal, modifier = Modifier.size(14.dp))
         }
         if (onRemove != null) {
-            IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+            ArtyIconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
                 Icon(Icons.Filled.Close, "Remove $name", tint = ArtyColors.TextFaint, modifier = Modifier.size(16.dp))
             }
         }
@@ -478,10 +492,10 @@ private fun InputBar(vm: ArtyViewModel) {
         verticalAlignment = Alignment.Bottom,
     ) {
         Box {
-            IconButton(enabled = !thinking, onClick = { attachMenu = true }) {
+            ArtyIconButton(enabled = !thinking, onClick = { attachMenu = true }) {
                 Icon(ArtyIcons.Attach, "Attach a photo, video, audio or file", tint = if (thinking) ArtyColors.TextFaint else ArtyColors.TextDim)
             }
-            DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+            DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }, shape = MaterialTheme.shapes.medium) {
                 DropdownMenuItem(
                     text = { Text("Photos & videos", style = MaterialTheme.typography.bodyMedium) },
                     onClick = {
@@ -501,16 +515,12 @@ private fun InputBar(vm: ArtyViewModel) {
             placeholder = { Text(if (thinking) "Arty is working on it…" else "Message Arty", color = ArtyColors.TextFaint) },
             maxLines = 6,
             textStyle = MaterialTheme.typography.bodyLarge,
-            shape = RoundedCornerShape(24.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = ArtyColors.LineBright, unfocusedBorderColor = ArtyColors.Line,
-                focusedContainerColor = ArtyColors.PanelRaised, unfocusedContainerColor = ArtyColors.PanelRaised,
-                cursorColor = ArtyColors.Signal,
-            ),
-            modifier = Modifier.weight(1f),
+            shape = ComposerShape,
+            colors = artyFieldColors(container = ArtyColors.Surface),
+            modifier = Modifier.weight(1f).softShadow(ComposerShape),
         )
         if (vm.draft.isBlank() && vm.pendingFiles.isEmpty()) {
-            IconButton(enabled = !thinking, onClick = {
+            ArtyIconButton(enabled = !thinking, onClick = {
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-GB")
@@ -522,17 +532,19 @@ private fun InputBar(vm: ArtyViewModel) {
                 }
             }) { Icon(ArtyIcons.Mic, "Speak", tint = if (thinking) ArtyColors.TextFaint else ArtyColors.Signal) }
         } else {
-            IconButton(
+            ArtyIconButton(
                 enabled = vm.canSend,
                 onClick = { vm.send(vm.draft) },
-                modifier = Modifier.padding(start = 4.dp).size(44.dp).clip(CircleShape)
-                    .background(if (vm.canSend) ArtyRedGradient else SolidColor(ArtyColors.PanelRaised)),
+                modifier = Modifier.padding(start = 6.dp).size(44.dp).clip(CircleShape)
+                    .background(if (vm.canSend) ArtyColors.Signal else ArtyColors.Raised),
             ) {
-                Icon(Icons.Filled.Send, "Send", tint = if (vm.canSend) Color.White else ArtyColors.TextFaint, modifier = Modifier.size(20.dp))
+                Icon(Icons.Filled.Send, "Send", tint = if (vm.canSend) ArtyColors.OnSignal else ArtyColors.TextFaint, modifier = Modifier.size(20.dp))
             }
         }
     }
 }
+
+private val ComposerShape = RoundedCornerShape(ArtyRadius.ExtraLarge)
 
 @Composable
 private fun ConversationDrawer(
@@ -542,12 +554,12 @@ private fun ConversationDrawer(
     onOpen: (Conversation) -> Unit,
     onDelete: (Conversation) -> Unit,
 ) {
-    ModalDrawerSheet(drawerContainerColor = ArtyColors.Panel, modifier = Modifier.width(300.dp)) {
+    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.arty_symbol), null, modifier = Modifier.size(28.dp))
             Spacer(Modifier.width(10.dp))
             Text("Chats", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = onNew) { Icon(Icons.Filled.Add, "New chat", tint = ArtyColors.Signal) }
+            ArtyIconButton(onClick = onNew) { Icon(Icons.Filled.Add, "New chat", tint = ArtyColors.SignalText) }
         }
         HorizontalDivider(color = ArtyColors.Line)
         var query by remember { mutableStateOf("") }
@@ -557,11 +569,8 @@ private fun ConversationDrawer(
             placeholder = { Text("Search chats", color = ArtyColors.TextFaint) },
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = ArtyColors.Signal, unfocusedBorderColor = ArtyColors.Line,
-                focusedContainerColor = ArtyColors.Void, unfocusedContainerColor = ArtyColors.Void, cursorColor = ArtyColors.Signal,
-            ),
+            shape = CircleShape,
+            colors = artyFieldColors(),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         )
         val matches = remember(conversations, query) { searchConversations(conversations, query) }
@@ -569,14 +578,15 @@ private fun ConversationDrawer(
             Text(if (query.isBlank()) "No chats yet." else "Nothing matches “${query.trim()}”.",
                 style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextFaint, modifier = Modifier.padding(16.dp))
         }
-        LazyColumn {
+        val arrivals = rememberArrivals()
+        LazyColumn(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
             items(matches, key = { it.first.id }) { (conversation, snippet) ->
                 val selected = conversation.id == currentId
                 Row(
-                    Modifier.fillMaxWidth()
-                        .background(if (selected) ArtyColors.PanelRaised else ArtyColors.Panel)
+                    Modifier.arrival(this, arrivals, conversation.id).fillMaxWidth().clip(MaterialTheme.shapes.small)
+                        .background(if (selected) ArtyColors.FillPress else Color.Transparent)
                         .clickable { onOpen(conversation) }
-                        .padding(start = 16.dp, top = 10.dp, bottom = 10.dp),
+                        .padding(start = 12.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -588,7 +598,7 @@ private fun ConversationDrawer(
                         Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(conversation.updated)),
                             style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
                     }
-                    IconButton(onClick = { onDelete(conversation) }) { Icon(Icons.Filled.Delete, "Delete chat", tint = ArtyColors.TextFaint, modifier = Modifier.size(18.dp)) }
+                    ArtyIconButton(onClick = { onDelete(conversation) }) { Icon(Icons.Filled.Delete, "Delete chat", tint = ArtyColors.TextFaint, modifier = Modifier.size(18.dp)) }
                 }
             }
         }

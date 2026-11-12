@@ -1,5 +1,6 @@
 """Arty says when it can't do something: no claiming actions no tool did, or that failed tools worked.
 Run from brain/: python3 -m unittest discover tests"""
+import json
 import os
 import sys
 import tempfile
@@ -172,17 +173,17 @@ class Honesty(unittest.TestCase):
 
 
 class MemoryRequests(unittest.TestCase):
-    GRAPH = {"entities": [{"name": "Drew", "observations": ["Drew's favourite snack is Monster Munch", "Drew's dog is called Bo"]}]}
+    GRAPH = {"entities": [{"name": "Alex", "observations": ["Alex's favourite snack is popcorn", "Alex's dog is called Rex"]}]}
 
     def setUp(self):
-        named = unittest.mock.patch.object(brain, "USER_NAME", "Drew")
+        named = unittest.mock.patch.object(brain, "USER_NAME", "Alex")
         named.start()
         self.addCleanup(named.stop)
 
     def test_remember_saves_the_fact(self):
         with unittest.mock.patch.object(brain, "save_facts") as save:
-            reply = brain.remember_reply("Remember that my favourite snack is Monster Munch")
-        save.assert_called_once_with([{"about": "Drew", "fact": "Drew's favourite snack is Monster Munch"}])
+            reply = brain.remember_reply("Remember that my favourite snack is popcorn")
+        save.assert_called_once_with([{"about": "Alex", "fact": "Alex's favourite snack is popcorn"}])
         self.assertIn("remember", reply)
 
     def test_remember_leaves_reminders_and_secrets_alone(self):
@@ -194,8 +195,8 @@ class MemoryRequests(unittest.TestCase):
         with unittest.mock.patch.object(brain, "http_json", side_effect=[self.GRAPH, None]) as call:
             reply = brain.forget_reply("Forget the favourite snack fact")
         self.assertEqual(call.call_args.kwargs["body"],
-                         {"deletions": [{"entityName": "Drew", "observations": ["Drew's favourite snack is Monster Munch"]}]})
-        self.assertIn("Monster Munch", reply)
+                         {"deletions": [{"entityName": "Alex", "observations": ["Alex's favourite snack is popcorn"]}]})
+        self.assertIn("popcorn", reply)
 
     def test_forget_with_nothing_saved(self):
         with unittest.mock.patch.object(brain, "http_json", return_value=self.GRAPH):
@@ -206,7 +207,7 @@ class MemoryRequests(unittest.TestCase):
 
 class SentFiles(unittest.TestCase):
     def test_a_sent_picture_keeps_its_picture_mark(self):
-        link = "![a.png](https://192.168.1.13:8443/arty-files/abc/tok/a.png)"
+        link = "![a.png](https://192.0.2.13:8443/arty-files/abc/tok/a.png)"
         self.assertEqual(brain.DOWNLOAD_LINK.search(f"Sent: {link}\nmore").group(0), link)
         self.assertLessEqual(set(brain.sharing.TOOLS), brain.SENDS_FILES)
 
@@ -239,6 +240,32 @@ class WeekRecap(unittest.TestCase):
         self.assertNotIn("old question", prompt)
         self.assertEqual(reply, "- You set up the 3060")
         self.assertTrue(brain.TALKED_ABOUT.search("What did we get up to this week?"))
+
+
+class HomelabNames(unittest.TestCase):
+    def test_homelab_names_from_the_settings_look_up_the_server_status(self):
+        lookups = [{"tool": "homelab__proxmox_status", "pattern": "servers?"}, {"tool": "weather", "pattern": "rain"}]
+        config = {"lookups": brain.with_homelab_names(lookups, ("pve1", "nas.home"))}
+        self.assertEqual([rule["tool"] for rule in config["lookups"]],
+                         ["homelab__proxmox_status", "homelab__proxmox_status", "weather"])
+        with unittest.mock.patch.object(brain.hub, "call", lambda name, arguments: "Host pve1: online"):
+            used, notes, _ = brain.look_up_first(config, "is PVE1 ok?")
+            self.assertEqual(brain.look_up_first(config, "is nasXhome ok?"), ([], "", None))
+        self.assertEqual(used, ["homelab__proxmox_status"])
+        self.assertIn("Host pve1: online", notes)
+        self.assertEqual(brain.with_homelab_names(lookups, ()), lookups)
+
+    def test_the_loaded_config_carries_the_homelab_names(self):
+        with tempfile.TemporaryDirectory(prefix="arty-config-") as name:
+            folder = Path(name)
+            (folder / "prompt.md").write_text("prompt")
+            (folder / "brain.json").write_text(json.dumps({"system_prompt_file": str(folder / "prompt.md"),
+                                                           "lookups": [{"tool": "homelab__proxmox_status", "pattern": "servers?"}]}))
+            with unittest.mock.patch.object(brain, "CONFIG_FILE", str(folder / "brain.json")), \
+                    unittest.mock.patch.object(brain, "HOMELAB_NAMES", ("pve1",)):
+                lookups = brain.load_config()["lookups"]
+        self.assertEqual([rule["pattern"] for rule in lookups], ["servers?", r"\b(pve1)\b"])
+
 
 if __name__ == "__main__":
     unittest.main()

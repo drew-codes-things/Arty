@@ -22,8 +22,8 @@ android {
         applicationId = "app.arty"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2.1"
+        versionCode = 6
+        versionName = "1.4.0"
     }
 
     // personal: the owner's own build, with the brain's address and keys built in (keep that APK private).
@@ -105,4 +105,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("androidx.fragment:fragment:1.8.5")
+    testImplementation(kotlin("test"))
 }

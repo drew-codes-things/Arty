@@ -83,8 +83,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.3.0-x86_64.AppImage
-./Arty-1.3.0-x86_64.AppImage
+chmod +x Arty-1.4.0-x86_64.AppImage
+./Arty-1.4.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -95,7 +95,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.3.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.4.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.

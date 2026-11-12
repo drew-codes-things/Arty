@@ -13,16 +13,18 @@ Any OpenAI client library works: set `base_url` to `http://192.0.2.13:8081/v1` a
 `POST /v1/chat/completions`
 
 ```json
-{"model": "assistant-core", "messages": [{"role": "user", "content": "What's on my server?"}]}
+{"model": "Arty", "messages": [{"role": "user", "content": "What's on my server?"}]}
 ```
 
-- `model`: `assistant-core` uses Arty's main model; `arty/<ollama model>` (e.g. `arty/qwen2.5-coder:14b`) uses that model for this request only. `GET /v1/models` lists them.
+- `model`: `Arty` uses the main model (the old name `assistant-core` still works); `arty/<ollama model>` (e.g. `arty/mimo-v2.6:9b`) uses that model for this request only. `GET /v1/models` lists them.
 - `GET /v1/models?all=1` lists every downloaded chat model. A request sending `X-Arty-Client-Tools: 1` and `X-Arty-Any-Model: 1` may name any of them; a model that isn't downloaded or only makes embeddings is a 400, and Ollama being down is a 503. See [Who Can Run Arty's Tools](tools-trust-boundary.md).
 - `client` (optional, on chats and chat jobs): your app's name, such as `desktop`, `voice`, `telegram` or `discord`. Lowercase letters, digits, `_` and `-`, up to 32 characters.
 - Arty adds its persona, long-term memory, recent conversations and all its tools itself, and remembers the exchange. Send only your app's messages; a `system` message is added as extra instructions.
 - The reply has the usual `choices[0].message.content`, plus `tools_used`.
 - Behind Cloudflare (https://arty.example.com, which cuts requests off at 100 s), use chat jobs instead: `POST /v1/chat/jobs` with the same body returns `{"id"}` at once (202); poll `GET /v1/chat/jobs/{id}` until `status` is `done` (`answer`, `tools_used`) or `failed` (`error`); while it's `running`, `partial` holds the answer's first sentences so far. Jobs live in memory for an hour.
 - `"stream": true` sends the answer as SSE chunks: each sentence as soon as nothing can rewrite it, then the rest. Sent text is never taken back (the final answer starts with it), so it can be shown and spoken as it arrives. "Remind me" answers, and replies that may yet be sent back to use tools, arrive only at the end.
+- Coding agents: a request sending `X-Arty-Client-Tools: 1` and `X-Arty-Agent: 1` is an agent turn. The model gets only the tools the request lists and the request's own `system` message as its instructions, and every tool call comes back to the client to run.
+- Reasoning on agent turns (opt in): a streamed agent turn that also sends `X-Arty-Reasoning: 1`, or `"arty_reasoning": true` in the body, gets the model's reasoning as it is written, in chunks whose delta is `{"reasoning_content": "..."}`. They arrive while the model thinks, so normally before the answer text and tool calls, and again if the brain sends the model back for another try within the same request; the `content` and `tool_calls` chunks are unchanged, reasoning is never put in `content`, and it is never sent back to the model, so a client must not return it in `messages`. Nothing is sent when the model did not think on that turn (the brain's `think` setting decides, as before), when the request has no `system` message of its own, when the request is not streamed, or outside agent mode. The `: working` notes keep coming every 15 s either way.
 - Outward actions (posting, sending, buying) aren't done until the user's latest message is a plain "yes"/"go ahead": Arty asks first.
 
 ## Files and attachments
@@ -111,10 +113,38 @@ Held for approval: clicking post/send/connect/apply/delete-style buttons, submit
 
 - `POST /v1/device/start` (no key) with `{"name"}` starts the "approve this computer" flow and returns a `device_code`, a `user_code` and a link for a signed-in app; `POST /v1/device/token` (no key) with `{"device_code"}` returns the computer's own key once the owner has approved it.
 - `GET /v1/device/pending?code=` and `POST /v1/device/approve` with `{"user_code", "approve": true | false}` are for the signed-in app.
-- `GET /v1/devices` lists the approved computers (`id`, `name`, `address`, `created`, `last_used`; never the key). `DELETE /v1/devices/{id}` turns one key off at once.
+- `GET /v1/devices` lists the approved computers (`id`, `name`, `address`, `created`, `last_used`, `remote_control`; never the key). `DELETE /v1/devices/{id}` turns one key off at once.
+- `POST /v1/devices/{id}/remote-control` with `{"allow": true | false}` lets that device follow and steer Arty CLI sessions (below). It is off for every new key, and only the brain's own keys may change it.
 - A device key works everywhere the shared key does. Its `/v1/identity` proof is the HMAC keyed with the SHA-256 hex of the key.
 - `POST /v1/devices` with `{"name"}` makes a named device key straight away and returns `{"id", "name", "api_key"}`; the key is shown only in this answer. Only the brain's own keys (`BRAIN_API_KEY` or `ARTY_API_KEY`) may call it: a device key gets 403. At most 100 device keys can be live at once (429 after that).
 - `GET /v1/device/approver` (no key) returns `{"approve_page"}`: starfire's approve page when `BRAIN_STARFIRE_URL` is set, otherwise an empty string. The approve sheet uses it to send a browser with no Arty key to starfire.
+
+## Arty CLI remote control
+
+A computer running Arty CLI with `/remote` on shares that session through the brain, so a phone, the iPhone web app or starfire can follow it and steer it without any port open on the computer. Sessions live in memory only: a brain restart ends them.
+
+Who may do what:
+
+- **The computer** (the key that started the session) posts its events, reads its inbox and ends it. No other key can.
+- **A controller** is the brain's own key, or a device key with `remote_control` turned on. Any other key gets 403.
+- A controller can send text, answer a waiting permission request and interrupt. Nothing in the relay changes Arty CLI's permission mode.
+
+The computer's side:
+
+- `POST /v1/remote/sessions` with `{"name", "folder", "model", "mode"}` (and optionally `"title"`) returns the session (`id` is 16 hex characters, `title` is the name it is listed under: the title asked for, else the folder, else the computer's name, with a number added when another live session already has it, such as `greeter 2`). A key may share 5 sessions at once, 20 in all (429 after that).
+- `POST /v1/remote/sessions/{id}/events` with `{"events": [...]}` (at most 50) adds to the transcript. Types: `user`, `assistant`, `tool_call`, `tool_result`, `permission` (with `request_id`), `permission_answered` (`request_id`, `allow`, `by`), `status` (`mode`, `text`), `error`, `compacted` (`text` is the summary the conversation was swapped for), `end`. Fields kept: `type`, `text`, `tool`, `request_id`, `by`, `mode`, `allow`, and `history` when it is `true` (the event is from before sharing began; a computer sends its conversation so far this way when it starts sharing); text is cut to 8000 characters and other fields are dropped.
+- `GET /v1/remote/sessions/{id}/inbox?wait=` returns `{"inbox": [...]}` and empties it: `{"type": "message", "text", "by"}`, `{"type": "answer", "request_id", "allow", "by"}` and `{"type": "interrupt", "by"}`. `wait` (at most 25 s) holds the request until something arrives. A session whose computer hasn't called in for 10 minutes ends.
+- `POST /v1/remote/sessions/{id}/title` with `{"title"}` renames it; the answer's `title` is the name it ended up with (numbered if taken). Readers get a `status` event.
+- `DELETE /v1/remote/sessions/{id}` ends it.
+
+A controller's side:
+
+- `GET /v1/remote/sessions` lists live sessions, each with its `title` and `waiting_for` (the permission requests still open).
+- `GET /v1/remote/sessions/{id}/events?after=&wait=` returns `{"events", "next", "missed", "ended", "session"}`. Each event has a `seq`; pass the last `next` as `after`. The brain keeps the newest 2000 events and at most about 2 MB of their text, and `missed` says some were dropped.
+- `POST /v1/remote/sessions/{id}/messages` with `{"text"}` (up to 8000 characters) queues a message and shows it in the transcript as `remote_message`.
+- `POST /v1/remote/sessions/{id}/answers` with `{"request_id", "allow"}` answers a waiting request. The first answer wins: a second one gets 409 naming who answered, and an answer given on the computer closes the request too.
+- `POST /v1/remote/sessions/{id}/interrupt` stops the current turn, like Esc on the computer.
+- An ended session answers 410 for a few minutes, then 404.
 
 ## Health
 

@@ -11,7 +11,6 @@ from quick import ASKING
 PHONE_CLIENT = "phone"
 PHONE_CLIENTS = {PHONE_CLIENT, "ios"}
 WHO = r"(?P<who>[\w'+() -]{1,40}?)"
-# "call my mum", "ring 07700 900123", "phone Sam back" (not "call me Drew": that's naming)
 CALL = re.compile(ASKING + r"(?:call|ring|phone|facetime)\s+(?!me\b|it\b|that\b|this\b|them\b|those\b|him\b|her\b)" + WHO +
                   r"(?:\s+(?:now|please|for me|back))*\W*$", re.IGNORECASE)
 # "text Sam saying I'll be late", "text my mum that I'm on my way", "message Jake: running late", "text Sam"

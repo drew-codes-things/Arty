@@ -6,12 +6,16 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -44,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -171,7 +176,7 @@ fun CallScreen(vm: ArtyViewModel) {
         Text(
             caption,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (problem != null) ArtyColors.Signal else ArtyColors.TextDim,
+            color = if (problem != null) ArtyColors.SignalText else ArtyColors.TextDim,
             textAlign = TextAlign.Center,
             maxLines = 6,
             overflow = TextOverflow.Ellipsis,
@@ -182,17 +187,25 @@ fun CallScreen(vm: ArtyViewModel) {
             RoundButton(
                 icon = ArtyIcons.Mic,
                 label = if (muted) "Unmute" else "Mute",
-                background = if (muted) ArtyColors.Text else ArtyColors.PanelRaised,
-                tint = if (muted) ArtyColors.Void else ArtyColors.Text,
+                background = if (muted) ArtyColors.Text else ArtyColors.Raised,
+                tint = if (muted) ArtyColors.Ink else ArtyColors.Text,
                 onClick = {
                     problem = null
                     muted = !muted
                 },
             )
-            RoundButton(icon = ArtyIcons.HangUp, label = "End call", background = ArtyColors.Signal, tint = Color.White, onClick = vm::endCall)
+            RoundButton(icon = ArtyIcons.HangUp, label = "End call", background = ArtyColors.Signal, tint = ArtyColors.OnSignal, onClick = vm::endCall)
         }
     }
 }
+
+private const val ORB_BREATH = 1.08f
+private const val ORB_GLOW_ALPHA = 0.2f
+private const val ORB_GLOW_REACH = 0.72f
+private val OrbGlow = Brush.radialGradient(
+    0f to ArtyColors.Signal.copy(alpha = ORB_GLOW_ALPHA),
+    ORB_GLOW_REACH to Color.Transparent,
+)
 
 @Composable
 private fun Orb(phase: CallPhase, onTap: () -> Unit) {
@@ -202,20 +215,26 @@ private fun Orb(phase: CallPhase, onTap: () -> Unit) {
         CallPhase.Thinking -> 900
         else -> 1600
     }
+    val still = LocalReducedMotion.current
     val grow by pulse.animateFloat(
         initialValue = 1f,
-        targetValue = if (phase == CallPhase.Muted) 1f else 1.08f,
-        animationSpec = infiniteRepeatable(tween(speed), RepeatMode.Reverse),
+        targetValue = if (phase == CallPhase.Muted || still) 1f else ORB_BREATH,
+        animationSpec = infiniteRepeatable(tween(speed, easing = EaseInOut), RepeatMode.Reverse),
         label = "grow",
     )
-    val ring = when (phase) {
-        CallPhase.Listening -> ArtyColors.Muted
-        CallPhase.Speaking -> ArtyColors.Signal
-        CallPhase.Thinking -> ArtyColors.Caution
-        CallPhase.Muted -> ArtyColors.Line
-    }
+    val ring by animateColorAsState(
+        when (phase) {
+            CallPhase.Listening, CallPhase.Speaking -> ArtyColors.Signal
+            CallPhase.Thinking -> ArtyColors.Caution
+            CallPhase.Muted -> ArtyColors.LineStrong
+        },
+        ArtyMotion.quick(),
+        label = "ring",
+    )
+    val press = remember { MutableInteractionSource() }
     Box(
-        Modifier.size(200.dp).scale(grow).clip(CircleShape).background(ArtyColors.Panel).border(3.dp, ring, CircleShape).clickable(onClick = onTap),
+        Modifier.size(200.dp).scale(grow).pressScale(press).softShadow(CircleShape).clip(CircleShape).background(ArtyColors.Surface).background(OrbGlow)
+            .border(3.dp, ring, CircleShape).clickable(interactionSource = press, indication = LocalIndication.current, onClick = onTap),
         contentAlignment = Alignment.Center,
     ) {
         Image(painterResource(R.drawable.arty_symbol), contentDescription = "Arty", modifier = Modifier.size(110.dp))
@@ -237,9 +256,11 @@ private fun PhaseLabel(phase: CallPhase, thinkingSince: Long?) {
 
 @Composable
 private fun RoundButton(icon: ImageVector, label: String, background: Color, tint: Color, onClick: () -> Unit) {
+    val press = remember { MutableInteractionSource() }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.size(68.dp).clip(CircleShape).background(background).clickable(onClick = onClick),
+            Modifier.size(68.dp).pressScale(press, ArtyMotion.PRESS_SCALE_ICON).softShadow(CircleShape).clip(CircleShape).background(background)
+                .clickable(interactionSource = press, indication = LocalIndication.current, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(30.dp)) }
         Spacer(Modifier.height(8.dp))

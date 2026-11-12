@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from policy import approval_reason, remember_tool_result  # noqa: E402
 
 RULES = {"always": ["homelab__restart_guest", "homelab__start_guest", "homelab__pufferpanel_power"]}
-STATUS = "Host pve: online\nCT 103 core-games (192.168.1.12): running, CPU 3%\nVM 105 ai-desktop: stopped"
+STATUS = "Host pve: online\nCT 103 games (192.0.2.12): running, CPU 3%\nVM 205 ai-desktop: stopped"
 
 
 class ApprovalWording(unittest.TestCase):
@@ -17,16 +17,16 @@ class ApprovalWording(unittest.TestCase):
 
     def test_guests_are_named(self):
         self.assertEqual(approval_reason("homelab__restart_guest", {"vmid": 103}, self.context, RULES),
-                         "restart CT 103 (core-games)")
-        self.assertEqual(approval_reason("homelab__start_guest", {"vmid": 105}, self.context, RULES),
-                         "start VM 105 (ai-desktop)")
+                         "restart CT 103 (games)")
+        self.assertEqual(approval_reason("homelab__start_guest", {"vmid": 205}, self.context, RULES),
+                         "start VM 205 (ai-desktop)")
 
     def test_unknown_guest_still_reads_plainly(self):
         self.assertEqual(approval_reason("homelab__restart_guest", {"vmid": 999}, {}, RULES), "restart guest 999")
 
     def test_pufferpanel_actions_name_the_server(self):
-        self.assertEqual(approval_reason("homelab__pufferpanel_power", {"server": "A+J", "action": "stop"}, {}, RULES),
-                         "stop A+J")
+        self.assertEqual(approval_reason("homelab__pufferpanel_power", {"server": "Survival", "action": "stop"}, {}, RULES),
+                         "stop Survival")
 
     def test_no_raw_dictionaries(self):
         reason = approval_reason("homelab__restart_guest", {"vmid": 103}, {}, RULES)

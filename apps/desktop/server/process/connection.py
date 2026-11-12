@@ -1,9 +1,10 @@
+import ipaddress
 from dataclasses import astuple, dataclass, fields, replace
 from urllib.parse import urlparse
 
 import requests
 
-from process import config
+from process import config, identity
 
 SECTION = "brain"
 API_PATH = "/v1"
@@ -14,6 +15,8 @@ REFUSED_STATUSES = (401, 403)
 OK_STATUS = 200
 EXAMPLE_ADDRESS = "http://arty-server:8081/v1"
 EXAMPLE_REMOTE_ADDRESS = "https://arty.example.com/v1"
+HOME_NAME_ENDINGS = (".local", ".lan", ".home.arpa", ".home", ".internal", ".ts.net")
+PRIVATE_VPN_RANGE = ipaddress.ip_network("100.64.0.0/10")
 
 
 class ConnectionProblem(ValueError):
@@ -46,6 +49,21 @@ def _api_address(text: str, schemes: tuple[str, ...], example: str) -> str:
     return address if parsed.path not in ("", "/") else address + API_PATH
 
 
+def _is_home_network(host: str) -> bool:
+    name = host.lower()
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return name == "localhost" or "." not in name or name.endswith(HOME_NAME_ENDINGS)
+    return address.is_private or address.is_loopback or address.is_link_local or address in PRIVATE_VPN_RANGE
+
+
+def _require_home_for_http(address: str) -> None:
+    parsed = urlparse(address)
+    if parsed.scheme == "http" and not _is_home_network(parsed.hostname or ""):
+        raise ConnectionProblem("Use https:// for addresses outside your home network, so the API key isn't sent unencrypted.")
+
+
 def _has_line_break(connection: Connection) -> bool:
     return any("\n" in value or "\r" in value for value in astuple(connection))
 
@@ -62,7 +80,9 @@ def cleaned(connection: Connection) -> Connection:
     remote_url = _api_address(tidy.remote_url, REMOTE_SCHEMES, EXAMPLE_REMOTE_ADDRESS) if tidy.remote_url else ""
     if bool(tidy.access_client_id) != bool(tidy.access_client_secret):
         raise ConnectionProblem("A Cloudflare Access token needs both its client ID and its client secret.")
-    return replace(tidy, base_url=_api_address(tidy.base_url, LOCAL_SCHEMES, EXAMPLE_ADDRESS), remote_url=remote_url)
+    base_url = _api_address(tidy.base_url, LOCAL_SCHEMES, EXAMPLE_ADDRESS)
+    _require_home_for_http(base_url)
+    return replace(tidy, base_url=base_url, remote_url=remote_url)
 
 
 def _attempts(connection: Connection) -> list[tuple[str, dict]]:
@@ -82,11 +102,24 @@ def _lists_models(response) -> bool:
         return False
 
 
+def _proves_it_knows(address: str, key: str, get) -> bool:
+    nonce = identity.new_nonce()
+    response = get(f"{address}/identity?nonce={nonce}", headers={}, timeout=CHECK_TIMEOUT_SECONDS)
+    try:
+        proofs = response.json().get("proofs") if response.status_code == OK_STATUS else None
+    except (ValueError, AttributeError):
+        return False
+    return identity.is_proven(proofs, key, nonce)
+
+
 def check(connection: Connection, get=None) -> str:
     get = get or requests.get
     problem = ""
     for address, headers in _attempts(connection):
         try:
+            if urlparse(address).scheme == "http" and not _proves_it_knows(address, connection.api_key, get):
+                problem = f"{address} didn't prove it's your Arty, so the API key wasn't sent to it."
+                continue
             response = get(f"{address}/models", headers=headers, timeout=CHECK_TIMEOUT_SECONDS)
         except requests.RequestException:
             problem = f"Can't reach {address}. Check the address and that the Arty server is on."

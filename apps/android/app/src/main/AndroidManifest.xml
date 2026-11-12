@@ -24,7 +24,10 @@
         </intent>
     </queries>
 
+    <!-- A brain on the home network is usually plain http. SetupActivity only accepts http:// for home-network
+         addresses (Connection.addressProblem), so the API key never crosses the internet unencrypted. -->
     <application
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"

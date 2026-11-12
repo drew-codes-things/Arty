@@ -518,7 +518,7 @@ function modelOption(model, current) {
   const title = document.createElement('span');
   title.className = 'model-title';
   title.textContent = model.model || model.name;
-  if (model.id === 'assistant-core') {
+  if (model.id === 'Arty') {
     const tag = document.createElement('span');
     tag.className = 'model-tag';
     tag.textContent = 'Default';
@@ -545,8 +545,8 @@ async function loadModels() {
   try {
     const { models, current } = await (await api(`/models`)).json();
     if (!models.length) return;
-    const main = models.find((model) => model.id === 'assistant-core');
-    const shown = models.filter((model) => model.id === 'assistant-core' || !main?.model || model.model !== main.model);
+    const main = models.find((model) => model.id === 'Arty');
+    const shown = models.filter((model) => model.id === 'Arty' || !main?.model || model.model !== main.model);
     $('model-menu').replaceChildren(...shown.map((model) => modelOption(model, current)));
     showModel(models.find((model) => model.id === current) || main);
     modelsLoaded = true;

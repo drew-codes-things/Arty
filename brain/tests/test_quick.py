@@ -31,18 +31,18 @@ class Sums(unittest.TestCase):
 
     def test_not_sums(self):
         for text in ["who won the 2026 world cup", "what's the best way to learn python", "remind me at 6", "what is 42",
-                     "is CT 104 running", "1 divided by 0", "9 to the power of 99999"]:
+                     "is CT 204 running", "1 divided by 0", "9 to the power of 99999"]:
             self.assertIsNone(quick.calculate(text), text)
 
 
 class Addresses(unittest.TestCase):
-    STATUS = """Host servmox (192.168.1.253): online, CPU 3%
-CT 100 core-sys (192.168.1.10): running, CPU 7%
+    STATUS = """Host pve1 (192.0.2.253): online, CPU 3%
+CT 100 web (192.0.2.10): running, CPU 7%
 VM 106 test-debian: stopped
 Storage local: 20.1G used of 37.6G"""
 
     def test_listed_from_proxmox_status(self):
-        self.assertEqual(quick.ip_list(self.STATUS), "- Host servmox: 192.168.1.253\n- CT 100 core-sys: 192.168.1.10")
+        self.assertEqual(quick.ip_list(self.STATUS), "- Host pve1: 192.0.2.253\n- CT 100 web: 192.0.2.10")
         self.assertTrue(quick.asks_for_ips("what are all the IPs of my servers?"))
         self.assertFalse(quick.asks_for_ips("is my zip file ready"))
 
@@ -66,7 +66,7 @@ class CantDo(unittest.TestCase):
             self.assertIn("can't", quick.cant_do(text) or "", text)
 
     def test_things_arty_can_do_or_questions_are_left_alone(self):
-        for text in ["call me Drew from now on", "what's the best pizza in Cardiff", "how do I turn off my boiler",
+        for text in ["call me Sam from now on", "what's the best pizza in Cardiff", "how do I turn off my boiler",
                      "turn up the volume", "remind me to call my mum at 5pm", "who called it the Big Apple"]:
             self.assertIsNone(quick.cant_do(text), text)
 

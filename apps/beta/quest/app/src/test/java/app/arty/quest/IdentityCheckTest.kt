@@ -17,14 +17,14 @@ class IdentityCheckTest {
 
     @Test
     fun onlyPlainSocketsAreChecked() {
-        assertTrue(needsIdentityCheck("ws://192.168.1.16:8790/ws/headset"))
-        assertTrue(needsIdentityCheck("WS://192.168.1.16:8790/ws/headset"))
+        assertTrue(needsIdentityCheck("ws://192.168.1.60:8790/ws/headset"))
+        assertTrue(needsIdentityCheck("WS://192.168.1.60:8790/ws/headset"))
         assertFalse(needsIdentityCheck("wss://arty.example.com/ws/headset"))
     }
 
     @Test
     fun theCheckGoesToTheSameServerOverHttp() {
-        assertEquals("http://192.168.1.16:8790/identity?nonce=ab", identityUrlFrom("ws://192.168.1.16:8790/ws/headset", "ab"))
+        assertEquals("http://192.168.1.60:8790/identity?nonce=ab", identityUrlFrom("ws://192.168.1.60:8790/ws/headset", "ab"))
         assertEquals("http://[fe80::1]:8790/identity?nonce=ab", identityUrlFrom("ws://[fe80::1]:8790/ws/headset", "ab"))
         assertEquals("http://arty.local:8790/voice/identity?nonce=ab", identityUrlFrom("ws://arty.local:8790/voice/ws/headset", "ab"))
     }

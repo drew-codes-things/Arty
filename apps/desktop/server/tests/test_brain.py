@@ -76,8 +76,9 @@ def test_an_unreachable_brain_gives_a_plain_reason(monkeypatch):
         raise requests.ConnectionError("refused")
 
     monkeypatch.setattr(brain.requests, "post", refuse)
-    with pytest.raises(brain.BrainError, match="Can't reach Arty's brain"):
+    with pytest.raises(brain.BrainError, match="Can't reach Arty's brain") as raised:
         list(brain._stream([{"role": "user", "content": "hi"}], None))
+    assert "Is Arty's server on, and is this PC online?" in str(raised.value)
 
 
 def test_words_said_before_a_tool_runs_are_kept_apart_from_the_answer(fake):
@@ -171,7 +172,7 @@ def test_media_is_fetched_from_the_brain_by_its_download_path(monkeypatch):
 
     monkeypatch.setattr(brain.requests, "get", fetch)
     monkeypatch.setattr(brain.route, "base", lambda: "http://brain:8081/v1")
-    brain.media("https://192.168.1.13:8443/arty-files/abc123/tok_en-1/shot.png")
+    brain.media("https://192.0.2.13:8443/arty-files/abc123/tok_en-1/shot.png")
     assert asked["url"] == "http://brain:8081/arty-files/abc123/tok_en-1/shot.png"
 
 
@@ -221,3 +222,32 @@ def test_the_brain_is_told_the_desktop_app_is_asking(monkeypatch):
     monkeypatch.setattr(brain.requests, "post", record)
     list(brain._stream([{"role": "user", "content": "hi"}], None))
     assert sent["client"] == "desktop"
+
+
+class ModelList:
+    def __init__(self, ids):
+        self.ids = ids
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"data": [{"id": model_id} for model_id in self.ids]}
+
+
+def test_the_main_model_is_listed_as_arty(monkeypatch):
+    monkeypatch.setattr(brain.requests, "get", lambda *args, **kwargs: ModelList(["Arty", "arty/qwen3:14b"]))
+    assert [model["name"] for model in brain.list_models()] == ["Arty (main model)", "arty/qwen3:14b"]
+
+
+def test_choosing_the_main_model_by_its_old_name_picks_arty(monkeypatch):
+    monkeypatch.setattr(brain, "MODEL", brain.MODEL)
+    brain.set_model("assistant-core")
+    assert brain.current_model() == "Arty"
+    brain.set_model("arty/qwen3:14b")
+    assert brain.current_model() == "arty/qwen3:14b"
+
+
+def test_a_config_saved_with_the_old_name_starts_on_arty():
+    assert brain.as_current_name("assistant-core") == "Arty"
+    assert brain.as_current_name("arty/qwen3:14b") == "arty/qwen3:14b"

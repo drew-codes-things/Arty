@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "desktop-egress"
@@ -114,13 +115,12 @@ class OnABridge(unittest.TestCase):
     def test_the_desktop_reaches_the_internet_and_dns_but_not_the_home_network(self):
         rules = rendered(DESKTOP_DNS="192.168.50.53", DESKTOP_LAN_ALLOW="192.168.50.20:9000")
         self.assertEqual(rules.returncode, 0, rules.stderr)
-        rules_file = ROOT / ".claude" / "scratch" / "test-egress.nft"
-        rules_file.parent.mkdir(parents=True, exist_ok=True)
-        rules_file.write_text(rules.stdout)
-        env = {**os.environ, "LISTEN": LISTEN, "CONNECT": CONNECT, "NFT": NFT, "RULES": str(rules_file)}
-        done = subprocess.run(["unshare", "-rnm", "bash", "-c", NETWORK], env=env, capture_output=True, text=True,
-                              timeout=60)
-        rules_file.unlink()
+        with TemporaryDirectory(prefix="arty-egress-test-") as folder:
+            rules_file = Path(folder) / "test-egress.nft"
+            rules_file.write_text(rules.stdout)
+            env = {**os.environ, "LISTEN": LISTEN, "CONNECT": CONNECT, "NFT": NFT, "RULES": str(rules_file)}
+            done = subprocess.run(["unshare", "-rnm", "bash", "-c", NETWORK], env=env, capture_output=True, text=True,
+                                  timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
         expected = [
             "vm->203.0.113.5:80 open",

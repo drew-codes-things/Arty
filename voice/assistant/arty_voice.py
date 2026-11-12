@@ -10,8 +10,11 @@ import aiohttp
 from faster_whisper import WhisperModel
 
 from headset_commands import parse_volume
-from listening import WHISPER_RATE, Downsampler, UtteranceCollector, to_float
+from listening import WHISPER_RATE, Downsampler, Utterance, UtteranceCollector, to_float
+from live_text import LiveTextFailed
 from speaking import NOT_FOR_ME, SentenceBuffer, Voice, might_be_ignored, plain_speech
+from turn_end import load_listening
+from wake_spotter import WakeSpotter, wake_spotter_from_settings
 from wake import find_switch, find_wake, has_words, is_filler
 
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8780").rstrip("/")
@@ -64,6 +67,11 @@ class Senses:
         self.voice = Voice(VOICE_MODEL)
         self.model_locks = {id(self.wake_model): threading.Lock(), id(self.command_model): threading.Lock()}
         self.voice_lock = threading.Lock()
+        self.listening = load_listening(os.environ)
+        self.wake_spotter = wake_spotter_from_settings(os.environ)
+
+    def new_collector(self) -> UtteranceCollector:
+        return self.listening.new_collector()
 
     def transcribe(self, model: WhisperModel, audio: bytes, beam_size: int, primer: str | None = None) -> str:
         with self.model_locks[id(model)]:
@@ -94,11 +102,21 @@ class Conversation:
         self.last_turn = time.time()
 
 
+def is_live(utterance: bytes) -> bool:
+    return isinstance(utterance, Utterance) and utterance.live is not None
+
+
+def release(utterance: bytes) -> None:
+    if is_live(utterance):
+        utterance.live.cancel()
+
+
 class Assistant:
 
     def __init__(self, senses: Senses, output: Output, http: aiohttp.ClientSession, bare_wake: bool = False,
-                 act: Callable[[str], Awaitable[bool]] | None = None):
+                 act: Callable[[str], Awaitable[bool]] | None = None, wake_spotter: WakeSpotter | None = None):
         self.senses = senses
+        self.wake_spotter = wake_spotter
         self.output = output
         self.http = http
         self.bare_wake = bare_wake
@@ -115,7 +133,7 @@ class Assistant:
 
     def hear(self, utterance: bytes) -> None:
         if self.utterances.full():
-            self.utterances.get_nowait()
+            release(self.utterances.get_nowait())
         self.utterances.put_nowait(utterance)
 
     async def follow_wake_setting(self, enabled: bool) -> None:
@@ -130,6 +148,7 @@ class Assistant:
         while True:
             utterance = await self.utterances.get()
             if self.muted():
+                release(utterance)
                 continue
             try:
                 await self.handle_utterance(utterance)
@@ -145,6 +164,14 @@ class Assistant:
             log.warning("couldn't show the resting state after a failed turn: %r", error)
 
     async def handle_utterance(self, utterance: bytes) -> None:
+        try:
+            await self.handle_turn(utterance)
+        finally:
+            release(utterance)
+
+    async def handle_turn(self, utterance: bytes) -> None:
+        if await self.handled_by_spotter(utterance):
+            return
         opening = await asyncio.to_thread(self.senses.transcribe, self.senses.wake_model,
                                           utterance[:WAKE_CHECK_BYTES], 1, WAKE_PRIMER)
         switch_to = find_switch(opening)
@@ -156,6 +183,26 @@ class Assistant:
         command = await self.command_from(utterance, opening)
         if command is None:
             return
+        await self.carry_out(command)
+
+    async def handled_by_spotter(self, utterance: bytes) -> bool:
+        if self.wake_spotter is None or not is_live(utterance):
+            return False
+        if not await asyncio.to_thread(self.wake_spotter.heard, utterance[:WAKE_CHECK_BYTES]):
+            return False
+        text = await self.command_text(utterance)
+        switch_to = find_switch(text)
+        if switch_to is not None:
+            await self.switch(switch_to)
+            return True
+        woke, rest = find_wake(text, self.bare_wake)
+        if not woke or not self.wake_enabled:
+            return False
+        log.info("heard the wake word (spotter)")
+        await self.carry_out(rest)
+        return True
+
+    async def carry_out(self, command: str) -> None:
         if not has_words(command):
             self.listening_until = time.time() + LISTEN_AFTER_WAKE_SECONDS
             await self.say_all(["Yes?"])
@@ -164,6 +211,20 @@ class Assistant:
         if self.act and await self.act(command):
             return
         await self.answer(command)
+
+    async def command_text(self, utterance: bytes) -> str:
+        if is_live(utterance):
+            try:
+                text = await asyncio.to_thread(utterance.live.finish)
+            except LiveTextFailed as error:
+                log.warning("the live transcript failed, using whisper: %s", error)
+            else:
+                if text:
+                    return text
+        return await self.whisper_text(utterance)
+
+    async def whisper_text(self, utterance: bytes) -> str:
+        return await asyncio.to_thread(self.senses.transcribe, self.senses.command_model, utterance, 2)
 
     async def switch(self, enabled: bool) -> None:
         if not enabled and not self.wake_enabled:
@@ -176,7 +237,7 @@ class Assistant:
 
     async def command_from(self, utterance: bytes, opening: str) -> str | None:
         if time.time() < self.listening_until:
-            text = await asyncio.to_thread(self.senses.transcribe, self.senses.command_model, utterance, 2)
+            text = await self.command_text(utterance)
             woke, rest = find_wake(text, self.bare_wake)
             command = rest if woke else text
             if not woke and is_filler(command):
@@ -186,8 +247,10 @@ class Assistant:
         if not find_wake(opening, self.bare_wake)[0]:
             return None
         log.info("heard the wake word")
-        text = await asyncio.to_thread(self.senses.transcribe, self.senses.command_model, utterance, 2)
+        text = await self.command_text(utterance)
         woke, rest = find_wake(text, self.bare_wake)
+        if not woke and is_live(utterance):
+            woke, rest = find_wake(await self.whisper_text(utterance), self.bare_wake)
         if not woke:
             log.info("wake word not confirmed; ignoring")
             return None
@@ -253,7 +316,7 @@ class Assistant:
             spoken.put_nowait("One moment.")
 
     async def ask_brain(self, question: str):
-        body = {"model": "assistant-core", "stream": True, "client": CLIENT_NAME,
+        body = {"model": "Arty", "stream": True, "client": CLIENT_NAME,
                 "messages": [{"role": "system", "content": SPOKEN_STYLE}, *self.conversation.history(),
                              {"role": "user", "content": question}]}
         headers = {"Authorization": f"Bearer {BRAIN_KEY}"}
@@ -336,7 +399,7 @@ class HubLink:
         self.assistant = assistant
 
     async def listen(self) -> None:
-        downsampler, collector = Downsampler(), UtteranceCollector()
+        downsampler, collector = Downsampler(), self.assistant.senses.new_collector()
         headers = {"Authorization": f"Bearer {HUB_TOKEN}"}
         async with self.assistant.http.ws_connect(f"{HUB_URL}/ws/mic", headers=headers, heartbeat=20) as ws:
             log.info("listening to the server mic")
@@ -427,7 +490,7 @@ async def main() -> None:
     senses = Senses()
     async with aiohttp.ClientSession() as http:
         output = HubOutput(http)
-        server_room = Assistant(senses, output, http)
+        server_room = Assistant(senses, output, http, wake_spotter=senses.wake_spotter)
         server_room.act = lambda command: room_command(server_room, output, command)
         await asyncio.gather(keep_running("the server mic", HubLink(server_room).keep_listening),
                              keep_running("the room assistant", server_room.handle_utterances),

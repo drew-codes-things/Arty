@@ -107,7 +107,7 @@ def telegram(method: str, http_timeout: int = 30, **params):
 
 
 def ask_brain(messages: list[dict]) -> str:
-    body = json.dumps({"model": "assistant-core", "messages": messages, "client": CLIENT_NAME}).encode()
+    body = json.dumps({"model": "Arty", "messages": messages, "client": CLIENT_NAME}).encode()
     request = urllib.request.Request(BRAIN_URL, data=body, headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     try:
         with urllib.request.urlopen(request, timeout=BRAIN_TIMEOUT_SECONDS) as response:

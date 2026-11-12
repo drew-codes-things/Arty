@@ -8,6 +8,8 @@ const REQUEST_TIMEOUT_MS = 45000;
 const UPLOAD_TIMEOUT_MS = 300000;
 const ANNOUNCEMENT_GRACE_SECONDS = 15;
 const MAX_ANNOUNCEMENT_WAIT_SECONDS = 55;
+const MAX_REMOTE_WAIT_SECONDS = 20;
+const SESSION_ID = /^[0-9a-f]{16}$/;
 const BYTES_PER_MEGABYTE = 1024 * 1024;
 const NOT_FOUND = 404;
 const GONE = 410;
@@ -157,6 +159,37 @@ export class ArtyApi {
 
   async revokeDevice(id) {
     return this.request("DELETE", `/v1/devices/${encodeURIComponent(id)}`);
+  }
+
+  async setRemoteControl(id, allow) {
+    return this.request("POST", `/v1/devices/${encodeURIComponent(id)}/remote-control`, { allow: Boolean(allow) });
+  }
+
+  remotePath(sessionId, action) {
+    if (!SESSION_ID.test(String(sessionId ?? ""))) throw new ArtyError(-1, "That isn't an Arty CLI session.");
+    return `/v1/remote/sessions/${sessionId}/${action}`;
+  }
+
+  async remoteSessions() {
+    return (await this.request("GET", "/v1/remote/sessions")).sessions ?? [];
+  }
+
+  async remoteEvents(sessionId, after, waitSeconds = 0) {
+    const wait = Math.min(Math.max(Number(waitSeconds) || 0, 0), MAX_REMOTE_WAIT_SECONDS);
+    const path = `${this.remotePath(sessionId, "events")}?after=${Number(after) || 0}&wait=${wait}`;
+    return this.request("GET", path, undefined, (wait + ANNOUNCEMENT_GRACE_SECONDS) * 1000);
+  }
+
+  async remoteMessage(sessionId, text) {
+    return this.request("POST", this.remotePath(sessionId, "messages"), { text });
+  }
+
+  async remoteAnswer(sessionId, requestId, allow) {
+    return this.request("POST", this.remotePath(sessionId, "answers"), { request_id: requestId, allow: Boolean(allow) });
+  }
+
+  async remoteInterrupt(sessionId) {
+    return this.request("POST", this.remotePath(sessionId, "interrupt"), {});
   }
 
   async startChat(messages, model) {
