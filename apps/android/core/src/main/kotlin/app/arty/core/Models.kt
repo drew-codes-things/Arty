@@ -84,6 +84,7 @@ data class Announcement(
     val actions: List<String>,
     /** When it was sent, in Unix seconds. */
     val created: Double = 0.0,
+    val category: NotificationCategory = NotificationCategory.Other,
 )
 
 /** A page of the announcements feed; [last] is where to continue from. */

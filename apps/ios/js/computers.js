@@ -1,3 +1,4 @@
+import { answerGuard, flashNewQuestion } from "./answerguard.js";
 import { fill, h, sectionHead, showToast } from "./dom.js";
 import {
   COMPACTED_LINE, NO_SUMMARY_SHOWN, addedSince, sessionTitle,
@@ -157,8 +158,9 @@ function permissionCard(api, sessionId, request, answered, readUpTo) {
   problem.hidden = true;
   let sending = false;
   const buttons = [];
+  const guard = answerGuard();
   const answer = async (allow) => {
-    if (sending || answered.has(request.request_id)) return;
+    if (!guard.isReady() || sending || answered.has(request.request_id)) return;
     sending = true;
     buttons.forEach((button) => { button.disabled = true; });
     problem.hidden = true;
@@ -182,7 +184,7 @@ function permissionCard(api, sessionId, request, answered, readUpTo) {
   const card = h("article", { class: "card status-waiting remote-permission" }, h("div", { class: "card-title" }, heading),
     preview ? h("pre", { class: "remote-preview" }, previewNodes(preview)) : null,
     h("div", { class: "row remote-answers" }, ...buttons), problem);
-  return card;
+  return flashNewQuestion(card, buttons, guard);
 }
 
 function forgetAnswersAskedAgain(events, answered, cards) {

@@ -27,6 +27,15 @@ class Phone(unittest.TestCase):
                          {"kind": "text", "who": "Jake", "body": "Running 10 mins behind"})
         self.assertEqual(phone.from_request("text my mum that I'm on my way"), {"kind": "text", "who": "Mum", "body": "I'm on my way"})
 
+    def test_sending_a_text_to_someone_is_a_text(self):
+        self.assertEqual(phone.from_request("send a text to Sam saying I'm running late"),
+                         {"kind": "text", "who": "Sam", "body": "I'm running late"})
+        self.assertEqual(phone.from_request("send a message to my mum that I'm on my way"),
+                         {"kind": "text", "who": "Mum", "body": "I'm on my way"})
+        self.assertEqual(phone.from_request("can you send an sms to Jake: running 10 mins behind"),
+                         {"kind": "text", "who": "Jake", "body": "Running 10 mins behind"})
+        self.assertIsNone(phone.from_request("send a message to the api endpoint"))
+
     def test_other_requests_are_not_calls(self):
         for text in ["call me Sam", "remind me to call mum at 5", "what's a phone call in French", "who called it the Big Apple",
                      "any messages from college?"]:

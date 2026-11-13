@@ -9,13 +9,14 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 
 MAIN = {"model": "qwen3:14b", "keep_alive": -1}
 
 
 class JudgeModel(unittest.TestCase):
     def setUp(self):
-        patcher = unittest.mock.patch.object(brain, "load_config", return_value=MAIN)
+        patcher = unittest.mock.patch.object(connections, "load_config", return_value=MAIN)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -24,7 +25,7 @@ class JudgeModel(unittest.TestCase):
             verdict = {"kind": "A"} if body["messages"][0]["content"].startswith("The person said") else \
                 {"false_claims": [{"text": "Done.", "correction": ""}]}
             return {"message": {"content": brain.json.dumps(verdict)}}
-        with unittest.mock.patch.object(brain, "http_json", side_effect=judge) as call:
+        with unittest.mock.patch.object(connections, "http_json", side_effect=judge) as call:
             brain.be_honest("Done.", [], [], request="Turn the lights off.", **be_honest_options)
         return [(c.kwargs["body"]["model"], c.kwargs["body"]["keep_alive"]) for c in call.call_args_list]
 

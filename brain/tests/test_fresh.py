@@ -14,6 +14,7 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import steering  # noqa: E402
 import fresh  # noqa: E402
 
 
@@ -101,7 +102,7 @@ class Note(unittest.TestCase):
 class InTheChat(unittest.TestCase):
     def history_for(self, background):
         history = [{"role": "system", "content": "persona"}] + LOOPING + [{"role": "user", "content": "what now"}]
-        brain.steer_away_from_repeats(history, history[1:], "what now", background)
+        steering.steer_away_from_repeats(history, history[1:], "what now", background)
         return history
 
     def test_a_chat_gets_the_note_on_the_newest_message(self):

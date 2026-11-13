@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import brain
+import connections
 
 NEWEST_FIRST = [
     {"name": "qwen3.5:9b", "vision": True},
@@ -20,7 +21,7 @@ def installed_by_name(name):
 
 class VisionChoice(unittest.TestCase):
     def use(self, config):
-        replacements = ((brain, "load_config", lambda: config),
+        replacements = ((connections, "load_config", lambda: config),
                         (brain.models, "installed", lambda refresh=False: NEWEST_FIRST),
                         (brain.models, "find", installed_by_name),
                         (brain.models, "arty_models", lambda: []),

@@ -9,6 +9,9 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import memory_facts  # noqa: E402
+import prompting  # noqa: E402
 import memory_recall  # noqa: E402
 
 BUDGET = 4000
@@ -87,14 +90,52 @@ class PlainFactLines(unittest.TestCase):
 
 class BrainAsksForTheRequest(unittest.TestCase):
     def test_current_context_recalls_with_the_newest_request(self):
-        with unittest.mock.patch.object(brain, "http_json", return_value=big_graph()), \
-                unittest.mock.patch.object(brain, "recent_exchanges", return_value=""):
-            context = brain.current_context({"time_zone": "Europe/London"}, "what does my sister Sam do?")
+        with unittest.mock.patch.object(connections, "http_json", return_value=big_graph()), \
+                unittest.mock.patch.object(prompting, "recent_exchanges", return_value=""):
+            context = prompting.current_context({"time_zone": "Europe/London"}, "what does my sister Sam do?")
         self.assertIn("works as a vet in Leeds", context)
 
     def test_the_hub_being_down_means_no_memories(self):
-        with unittest.mock.patch.object(brain, "http_json", side_effect=TimeoutError("slow")):
-            self.assertEqual(brain.recalled_memories("tea"), "")
+        with unittest.mock.patch.object(connections, "http_json", side_effect=TimeoutError("slow")):
+            self.assertEqual(memory_facts.recalled_memories("tea"), "")
+
+
+HOMELAB_GRAPH = {"entities": [entity("Robin", "person", [
+    "Runs a homelab: a Proxmox server (homebox) hosting Nextcloud",
+    "19-year-old networking student at Riverside College",
+    "Visited the town hall on 7 October with a local councillor",
+    "His favourite snack is salt and vinegar crisps"])], "relations": []}
+
+
+class FactsForADraft(unittest.TestCase):
+    def test_only_facts_about_what_the_draft_is_about_are_offered(self):
+        known = memory_recall.matching_lines(HOMELAB_GRAPH, "write a LinkedIn post about getting my first homelab server", 6)
+        self.assertEqual(known, "- Runs a homelab: a Proxmox server (homebox) hosting Nextcloud")
+
+    def test_nothing_matching_gives_nothing(self):
+        self.assertEqual(memory_recall.matching_lines(HOMELAB_GRAPH, "write a cover letter for an apprenticeship", 6), "")
+
+    def test_the_draft_gets_the_matching_facts_from_memory(self):
+        with unittest.mock.patch.object(connections, "http_json", return_value=HOMELAB_GRAPH):
+            self.assertIn("homebox", memory_facts.draft_facts("write a LinkedIn post about my homelab"))
+
+    def test_memory_that_cannot_be_read_gives_no_facts(self):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=memory_facts.urllib.error.URLError("down")):
+            self.assertEqual(memory_facts.draft_facts("write a LinkedIn post about my homelab"), "")
+
+    def test_a_new_draft_is_written_with_the_facts_memory_has_about_it(self):
+        config = {"user_name": "Sam", "model": "main", "system_prompt": "", "persona": ""}
+        with unittest.mock.patch.object(connections, "load_config", return_value=config), \
+                unittest.mock.patch.object(brain, "draft_facts", return_value="- Runs a homelab"), \
+                unittest.mock.patch.object(brain, "archive_turn"), \
+                unittest.mock.patch.object(brain.style, "draft", return_value="drafted") as drafted:
+            reply, tools, _, _ = brain.run_turn([{"role": "user", "content": "write a LinkedIn post about my homelab"}])
+        self.assertEqual((reply, tools), ("drafted", ["draft"]))
+        self.assertEqual(drafted.call_args.kwargs.get("known"), "- Runs a homelab")
+
+    def test_a_persona_with_its_own_memory_never_gets_artys_facts_in_a_draft(self):
+        with unittest.mock.patch.object(brain, "draft_facts", side_effect=AssertionError("read Arty's memory")):
+            self.assertEqual(brain.facts_for_draft({"own_memories": "- Likes tea"}, "write a LinkedIn post"), "")
 
 
 if __name__ == "__main__":

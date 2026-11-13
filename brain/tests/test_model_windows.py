@@ -10,6 +10,7 @@ from test_any_model import downloaded  # noqa: E402
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 SHIPPED = Path(__file__).resolve().parents[1] / "brain.json"
@@ -66,7 +67,7 @@ class PerModelWindowInTheList(Server):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def listed_windows(self, config):
-        with unittest.mock.patch.object(brain, "load_config", return_value=config):
+        with unittest.mock.patch.object(connections, "load_config", return_value=config):
             status, body = self.request("GET", "/v1/models?all=1")
         self.assertEqual(status, 200)
         return {entry["model"]: entry["context_tokens"] for entry in json.loads(body)["data"]}

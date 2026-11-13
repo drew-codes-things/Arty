@@ -14,6 +14,8 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import model_choice  # noqa: E402
 import coding  # noqa: E402
 import models  # noqa: E402
 
@@ -128,14 +130,29 @@ class CodingRequestDetector(unittest.TestCase):
 
 class ChatModel(unittest.TestCase):
     def setUp(self):
-        patcher = unittest.mock.patch.object(models, "installed", return_value=INSTALLED)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("installed", INSTALLED), ("is_loaded", True)):
+            patcher = unittest.mock.patch.object(models, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_a_coding_question_for_the_main_entry_goes_to_the_coding_model(self):
         for requested in ("Arty", "assistant-core", ""):
             with self.subTest(requested=requested):
                 self.assertEqual(brain.chat_model(CONFIG, requested, "write a python function that reverses a string"), CODER)
+
+    def test_a_short_coding_question_stays_on_the_main_model_when_the_coding_model_is_not_loaded(self):
+        with unittest.mock.patch.object(models, "is_loaded", return_value=False) as loaded:
+            self.assertEqual(brain.chat_model(CONFIG, "Arty", "write a python function that reverses a string"), "Arty")
+        loaded.assert_called_once_with("coder:9b")
+
+    def test_a_big_coding_job_swaps_in_the_coding_model_even_when_it_is_not_loaded(self):
+        long_paste = "why does this crash?\n```python\n" + "\n".join(f"value_{n} = compute({n})" for n in range(40)) + "\n```"
+        with unittest.mock.patch.object(models, "is_loaded", return_value=False):
+            self.assertEqual(brain.chat_model(CONFIG, "Arty", long_paste), CODER)
+
+    def test_everyday_chat_never_asks_ollama_what_is_loaded(self):
+        with unittest.mock.patch.object(models, "is_loaded", side_effect=AssertionError("asked Ollama")):
+            self.assertEqual(brain.chat_model(CONFIG, "Arty", "what's the dress code for a wedding?"), "Arty")
 
     def test_everyday_chat_stays_on_the_main_model(self):
         self.assertEqual(brain.chat_model(CONFIG, "Arty", "what's the dress code for a wedding?"), "Arty")
@@ -187,23 +204,25 @@ def run_turns_offline(case):
     case.ollama = FakeOllama()
     case.make_room = unittest.mock.Mock(return_value=[])
     case.reload = unittest.mock.Mock()
+    case.loaded = unittest.mock.Mock(return_value=True)
     patches = [
-        unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(case.config)),
-        unittest.mock.patch.object(brain, "http_json", side_effect=case.ollama),
-        unittest.mock.patch.object(brain.hub, "refresh"),
-        unittest.mock.patch.object(brain.hub, "tools", []),
-        unittest.mock.patch.object(brain.hub, "routes", {}),
+        unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(case.config)),
+        unittest.mock.patch.object(connections, "http_json", side_effect=case.ollama),
+        unittest.mock.patch.object(connections.hub, "refresh"),
+        unittest.mock.patch.object(connections.hub, "tools", []),
+        unittest.mock.patch.object(connections.hub, "routes", {}),
         unittest.mock.patch.object(brain, "archive_turn"),
         unittest.mock.patch.object(brain, "extract_memories"),
         unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)),
         unittest.mock.patch.object(brain, "be_honest", side_effect=lambda answer, *_: answer),
-        unittest.mock.patch.object(brain, "schedule_main_reload", case.reload),
+        unittest.mock.patch.object(model_choice, "schedule_main_reload", case.reload),
         unittest.mock.patch.object(brain.style, "draft", side_effect=AssertionError("a coding request went to the drafter")),
         unittest.mock.patch.object(brain, "researched_answer", side_effect=AssertionError("a coding request went to web research")),
         unittest.mock.patch.object(models, "make_room", case.make_room),
         unittest.mock.patch.object(models, "find", side_effect=found),
         unittest.mock.patch.object(models, "installed", return_value=INSTALLED),
         unittest.mock.patch.object(models, "arty_models", return_value=["qwen3:14b", "coder:9b"]),
+        unittest.mock.patch.object(models, "is_loaded", case.loaded),
     ]
     for patch in patches:
         patch.start()
@@ -223,6 +242,13 @@ class RoutedTurns(unittest.TestCase):
         self.make_room.assert_called_once()
         self.assertEqual(self.make_room.call_args.args[0], "coder:9b")
         self.reload.assert_called_once()
+
+    def test_a_short_coding_question_with_the_coding_model_unloaded_is_answered_without_a_swap(self):
+        self.loaded.return_value = False
+        self.chat("write a python function that reverses a string")
+        self.assertEqual(self.ollama.bodies[0]["model"], "qwen3:14b")
+        self.make_room.assert_not_called()
+        self.reload.assert_not_called()
 
     def test_everyday_chat_is_answered_by_the_main_model(self):
         self.chat("tell me a fun fact about otters")

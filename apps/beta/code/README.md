@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-success?style=flat-square)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../../../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../../LICENSE)
 
 </div>
 

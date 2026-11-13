@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 from api_support import optional_int
@@ -88,3 +89,12 @@ def recall(config, query, limit=5):
     found = recall_records(config, query, limit)
     excerpts = [f"[{r['time'][:16].replace('T', ' ')}] User: {r['user'][:RECALL_EXCERPT_CHARS]}\n  Arty (you): {r['assistant'][:RECALL_EXCERPT_CHARS]}" for r in found]
     return "\n\n".join(excerpts) if excerpts else f"No past conversations mention: {query}"
+
+
+def archive_turn(config, user_text, answer, tools_used):
+    folder = Path(config["conversations_dir"])
+    folder.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()
+    record = {"time": now.isoformat(timespec="seconds"), "user": user_text, "assistant": answer, "tools": tools_used}
+    with open(folder / f"{now:%Y-%m}.jsonl", "a") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")

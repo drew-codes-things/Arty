@@ -14,7 +14,8 @@ WHO = r"(?P<who>[\w'+() -]{1,40}?)"
 CALL = re.compile(ASKING + r"(?:call|ring|phone|facetime)\s+(?!me\b|it\b|that\b|this\b|them\b|those\b|him\b|her\b)" + WHO +
                   r"(?:\s+(?:now|please|for me|back))*\W*$", re.IGNORECASE)
 # "text Sam saying I'll be late", "text my mum that I'm on my way", "message Jake: running late", "text Sam"
-TEXT = re.compile(ASKING + r"(?:text|sms|message)\s+(?!me\b|them\b|those\b|him\b|her\b)" + WHO +
+TEXT = re.compile(ASKING + r"(?:text|sms|message|send\s+(?:a\s+|an\s+)?(?:text|sms|message)\s+to)\s+(?!me\b|them\b|those\b|him\b|her\b)"
+                  + WHO +
                   r"(?:(?:\s+(?:saying|to say|and say|and tell (?:him|her|them)|that)\s*:?\s*|\s*[:,]\s*)(?P<body>.+?))?[\s.!]*$",
                   re.IGNORECASE | re.DOTALL)
 NOT_A_PERSON = re.compile(

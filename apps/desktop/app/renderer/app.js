@@ -165,29 +165,11 @@ function addActivity(text, fixedTag) {
 
 function addQuestion(id, text) {
   setState('asking', 'Waiting for your OK');
-  const card = document.createElement('div');
-  card.className = 'ask';
-  const question = document.createElement('p');
-  question.textContent = text;
-  const actions = document.createElement('div');
-  actions.className = 'actions';
-  const answer = async (ok) => {
-    card.classList.add('done');
-    actions.remove();
-    question.textContent += ok ? '  (allowed)' : '  (not allowed)';
+  log.append(stepQuestionCard(text, async (ok) => {
     setState('thinking', 'Working…');
     await api(`/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ok }) })
       .catch(() => add('error', 'Couldn’t send your answer to the local service.'));
-  };
-  for (const [label, ok] of [['Allow', true], ['Not now', false]]) {
-    const button = document.createElement('button');
-    button.textContent = label;
-    if (ok) button.className = 'allow';
-    button.addEventListener('click', () => answer(ok));
-    actions.append(button);
-  }
-  card.append(question, actions);
-  log.append(card);
+  }));
   scrollDown();
 }
 
@@ -612,35 +594,16 @@ $('read').addEventListener('click', () => {
   $('read').classList.toggle('on', readOn);
 });
 
-const TASK_LABELS = { approve: 'Approve', deny: 'Deny', done: 'Done', cancel: 'Cancel task' };
-
 /** Buttons for a paused background task, answered through the local service to Arty's brain. */
 function addTaskButtons(taskId, actions, container = log) {
-  const card = document.createElement('div');
-  card.className = 'ask';
-  const row = document.createElement('div');
-  row.className = 'actions';
-  for (const action of actions.filter((a) => TASK_LABELS[a])) {
-    const button = document.createElement('button');
-    button.textContent = TASK_LABELS[action];
-    if (action === 'approve' || action === 'done') button.className = 'allow';
-    button.addEventListener('click', async () => {
-      row.remove();
-      card.classList.add('done');
-      const result = document.createElement('p');
-      result.textContent = '…';
-      card.append(result);
-      try {
-        const answer = await (await api(`/task/${taskId}/${action}`, { method: 'POST' })).json();
-        result.textContent = answer.message || answer.error || 'Done.';
-      } catch {
-        result.textContent = 'Couldn’t reach the local service.';
-      }
-    });
-    row.append(button);
-  }
-  card.append(row);
-  container.append(card);
+  container.append(taskAnswerCard(actions, async (action, result) => {
+    try {
+      const answer = await (await api(`/task/${taskId}/${action}`, { method: 'POST' })).json();
+      result.textContent = answer.message || answer.error || 'Done.';
+    } catch {
+      result.textContent = 'Couldn’t reach the local service.';
+    }
+  }));
   if (container === log) scrollDown();
 }
 

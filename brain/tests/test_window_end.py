@@ -12,6 +12,8 @@ from test_round_timings import asked  # noqa: E402
 from test_window_overflow import WINDOW, with_window  # noqa: E402
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import connections  # noqa: E402
 
 REPLY_CAP_NOTE = "I hit my reply length limit"
 CUT_TEXT = "Here is the first part of the answer"
@@ -30,7 +32,7 @@ class CutOllama:
 
 
 def cut_turn(counts, agent=False):
-    with unittest.mock.patch.object(brain, "http_json", side_effect=CutOllama(counts)):
+    with unittest.mock.patch.object(connections, "http_json", side_effect=CutOllama(counts)):
         return brain.run_turn(asked("explain the whole codebase"), "Arty", client_tools=[READ_FILE], agent=agent)[0]
 
 
@@ -41,12 +43,12 @@ class ChatReplies(unittest.TestCase):
     def test_a_reply_that_reached_the_reply_cap_says_so(self):
         answer = cut_turn(AT_REPLY_CAP)
         self.assertIn(REPLY_CAP_NOTE, answer)
-        self.assertNotIn(brain.WINDOW_END_NOTE.strip(), answer)
+        self.assertNotIn(agent_loop.WINDOW_END_NOTE.strip(), answer)
 
     def test_a_reply_that_ran_into_the_end_of_the_window_says_that_instead(self):
         answer = cut_turn(AT_WINDOW_END)
         self.assertTrue(answer.startswith(CUT_TEXT))
-        self.assertIn(brain.WINDOW_END_NOTE.strip(), answer)
+        self.assertIn(agent_loop.WINDOW_END_NOTE.strip(), answer)
         self.assertNotIn(REPLY_CAP_NOTE, answer)
 
     def test_without_ollamas_counts_it_stays_the_reply_cap(self):
@@ -76,7 +78,7 @@ class AgentRepliesOverHttp(Server):
 
     def test_unstreamed_it_is_a_413(self):
         body = {"model": "Arty", "messages": asked("explain the whole codebase"), "tools": [READ_FILE]}
-        with unittest.mock.patch.object(brain, "http_json", side_effect=CutOllama(AT_WINDOW_END)):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=CutOllama(AT_WINDOW_END)):
             status, raw = self.request("POST", "/v1/chat/completions", headers=AGENT_HEADERS, body=body)
         self.assertEqual((status, json.loads(raw)["error"]["type"]), (413, "context_length_exceeded"))
 
@@ -88,8 +90,8 @@ class AgentRepliesOverHttp(Server):
             reply = ollama(f"{brain.OLLAMA_URL}/api/chat", chat_body)
             on_text(reply["message"]["content"])
             return reply
-        with unittest.mock.patch.object(brain, "stream_chat", side_effect=stream), \
-                unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "stream_chat", side_effect=stream), \
+                unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             status, raw = self.request("POST", "/v1/chat/completions", headers=AGENT_HEADERS, body=body)
         chunks = [json.loads(line[6:]) for line in raw.decode().split("\n\n") if line.startswith("data: {")]
         said = "".join(chunk["choices"][0]["delta"].get("content", "") for chunk in chunks)

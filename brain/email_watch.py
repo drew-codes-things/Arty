@@ -16,6 +16,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import notify
+
 STATE_FILE = Path(os.environ.get("EMAIL_WATCH_STATE", "/srv/ai/brain/state/email-watch.json"))
 # Gmail's Primary tab leaves out promotions, social and most automatic updates; recent mail only.
 QUERY = "in:inbox is:unread category:primary newer_than:3d"
@@ -269,7 +271,7 @@ def check_new(call_tool, complete, send):
         _save(notified + [key(email) for email in new])
         if important:
             title = "📧 Important email" if len(important) == 1 else f"📧 {len(important)} important emails"
-            send(title, bullets(important, bold=False))
+            send(title, bullets(important, bold=False), category=notify.EMAIL)
             log.info("email watch: sent %d important of %d new", len(important), len(new))
     finally:
         _checking.release()

@@ -1,7 +1,10 @@
 """Desktop research: search, read the pages, note each, write one sourced answer. Tools and model faked.
 Run from brain/: python3 -m unittest discover tests"""
 import sys
+import threading
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -232,6 +235,143 @@ class Research(unittest.TestCase):
         answer, _ = research.run("research this properly: cake", no_pages, fake_model([]))
         self.assertNotIn("**Sources**", answer)
         self.assertTrue(answer)
+
+
+MANY = "\n".join(f"{n}. Result {n}\n   https://site{n}.example/page\n   Snippet {n}." for n in range(1, 7))
+
+
+def many_pages(calls, slow_urls=(), opened=None):
+    def call_tool(name, arguments):
+        calls.append((name, arguments))
+        if name == "research__web_search":
+            return MANY
+        if name == "workspace__browser_open":
+            if opened is not None:
+                opened.set()
+            if arguments["url"] in slow_urls:
+                time.sleep(0.5)
+        return f"Title: page\n\nPage text:\n{LONG}"
+    return call_tool
+
+
+def split_model(quick_prompts, full_prompts, verdict="FINE", note_pause=None):
+    def classify(prompt):
+        quick_prompts.append(prompt)
+        if "Page text:" in prompt:
+            if note_pause:
+                note_pause()
+            return "- Boil for 6 to 7 minutes"
+        return verdict
+
+    def complete(prompt):
+        full_prompts.append(prompt)
+        return "About 6 to 7 minutes for a soft yolk [1][2]."
+    return classify, complete
+
+
+def page_notes(prompts):
+    return [prompt for prompt in prompts if "Page text:" in prompt]
+
+
+def premise_checks(prompts):
+    return [prompt for prompt in prompts if "check the notes against the question" in prompt]
+
+
+class FasterDesktopResearch(unittest.TestCase):
+    def test_page_notes_are_written_without_thinking_and_the_answer_with_it(self):
+        quick, full = [], []
+        classify, complete = split_model(quick, full)
+        research.run("use your desktop to find out the best way to clean a cast iron pan", many_pages([]), complete, classify=classify)
+        self.assertEqual(len(page_notes(quick)), research.PAGES)
+        self.assertEqual(page_notes(full), [])
+        self.assertIn("Write the answer for the user", full[-1])
+
+    def test_a_fact_question_stops_reading_once_two_sources_answer_it(self):
+        calls, quick, full = [], [], []
+        classify, complete = split_model(quick, full)
+        answer, _ = research.run("use your desktop to find out how long to boil an egg", many_pages(calls), complete, classify=classify)
+        self.assertEqual(len(page_notes(quick)), research.ENOUGH_SOURCES)
+        self.assertEqual(len(premise_checks(quick + full)), 1)
+        self.assertIn("2. https://site2.example/page", answer)
+        self.assertNotIn("3. https://site3.example/page", answer)
+
+    def test_a_fact_question_keeps_reading_while_the_notes_do_not_answer_it(self):
+        quick, full = [], []
+        classify, complete = split_model(quick, full, verdict="MISSING")
+        research.run("use your desktop to find out how long to boil an egg", many_pages([]), lambda prompt: (
+            "boiled eggs" if "What is this question about?" in prompt else complete(prompt)), classify=classify)
+        self.assertGreaterEqual(len(page_notes(quick)), research.PAGES)
+
+    def test_how_to_and_best_questions_read_every_page(self):
+        quick, full = [], []
+        classify, complete = split_model(quick, full)
+        research.run("use your desktop to find out the best way to clean a cast iron pan", many_pages([]), complete, classify=classify)
+        self.assertEqual(len(page_notes(quick)), research.PAGES)
+
+    def test_the_next_page_opens_while_the_model_writes_notes(self):
+        second_page_opening = threading.Event()
+        opened_pages = []
+
+        def call_tool(name, arguments):
+            if name == "workspace__browser_open":
+                opened_pages.append(arguments["url"])
+                if len(opened_pages) == 2:
+                    second_page_opening.set()
+            return many_pages([])(name, arguments)
+        overlapped = []
+
+        def wait_for_the_next_page():
+            if not overlapped:
+                overlapped.append(second_page_opening.wait(timeout=2))
+        classify, complete = split_model([], [], note_pause=wait_for_the_next_page)
+        research.run("use your desktop to find out the best way to clean a cast iron pan", call_tool, complete, classify=classify)
+        self.assertEqual(overlapped, [True])
+
+    def test_a_closed_reader_never_starts_a_browser_open(self):
+        calls = []
+        reader = research.PageReader(["https://site1.example/page"], many_pages(calls), browser=True)
+        with research.BROWSER:
+            reader.open_ahead(0)
+            reader.close()
+        reader.opener.shutdown(wait=True)
+        self.assertNotIn("workspace__browser_open", [name for name, _ in calls])
+
+    def test_only_one_page_is_open_in_the_browser_at_a_time_across_readers(self):
+        release_the_hung_page = threading.Event()
+        opening, most_at_once, calls = [], [], []
+
+        def call_tool(name, arguments):
+            calls.append((name, arguments))
+            if name != "workspace__browser_open":
+                return f"Title: page\n\nPage text:\n{LONG}"
+            opening.append(arguments["url"])
+            most_at_once.append(len(opening))
+            if arguments["url"].endswith("hung"):
+                release_the_hung_page.wait(timeout=2)
+            opening.remove(arguments["url"])
+            return f"Title: page\n\nPage text:\n{LONG}"
+        with unittest.mock.patch.object(research, "PAGE_SECONDS", 0.1):
+            first = research.PageReader(["https://site1.example/hung"], call_tool, browser=True)
+            self.assertIn("Cream the butter", first.text(0, look_ahead=False))
+            first.close()
+            second = research.PageReader(["https://site2.example/page"], call_tool, browser=True)
+            self.assertIn("Cream the butter", second.text(0, look_ahead=False))
+            second.close()
+        release_the_hung_page.set()
+        second.opener.shutdown(wait=True)
+        first.opener.shutdown(wait=True)
+        self.assertEqual(max(most_at_once), 1)
+        self.assertIn(("fetch__fetch", {"url": "https://site2.example/page", "max_length": research.PAGE_CHARS}), calls)
+
+    def test_a_page_the_browser_is_slow_to_open_is_fetched_plainly_instead(self):
+        calls = []
+        classify, complete = split_model([], [])
+        with unittest.mock.patch.object(research, "PAGE_SECONDS", 0.1):
+            answer, _ = research.run("use your desktop to find out the best way to clean a cast iron pan",
+                                     many_pages(calls, slow_urls={"https://site1.example/page"}), complete, classify=classify)
+        fetched = [args["url"] for name, args in calls if name == "fetch__fetch"]
+        self.assertIn("https://site1.example/page", fetched)
+        self.assertIn("1. https://site1.example/page", answer)
 
 
 if __name__ == "__main__":

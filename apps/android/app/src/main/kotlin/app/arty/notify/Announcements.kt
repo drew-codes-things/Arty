@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -25,9 +26,12 @@ import app.arty.MainActivity
 import app.arty.R
 import app.arty.ui.speakableText
 import app.arty.core.Announcement
+import app.arty.core.AnswerGuard
 import app.arty.core.ArtyClient
 import app.arty.core.ArtyException
+import app.arty.core.LegacyChannels
 import app.arty.core.LockScreen
+import app.arty.core.NotificationCategory
 import app.arty.Connection
 import app.arty.newArtyClient
 import app.arty.widget.ArtyWidget
@@ -42,8 +46,7 @@ import kotlin.concurrent.thread
  */
 object Announcements {
     private const val TAG = "Arty"
-    private const val CHANNEL = "arty"
-    private const val ALERT_CHANNEL = "arty-alerts"
+    private const val CHANNEL = LegacyChannels.UPDATES
     private const val PREFS = "announcements"
     private const val LAST_SHOWN = "lastShown"
     private const val WORK = "arty-announcements"
@@ -60,11 +63,18 @@ object Announcements {
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "Arty updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = "Reminders, briefings and results from Arty"
-        })
-        manager.createNotificationChannel(NotificationChannel(ALERT_CHANNEL, "Arty updates: approvals and alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "When Arty needs your OK, or something on the homelab goes down"
+        NotificationCategory.entries.filter { manager.getNotificationChannel(it.channelId) == null }.forEach { category ->
+            val defaultImportance = if (category.urgent) NotificationManager.IMPORTANCE_HIGH else NotificationManager.IMPORTANCE_DEFAULT
+            val replacedImportance = manager.getNotificationChannel(LegacyChannels.sourceOf(category))?.importance
+            manager.createNotificationChannel(
+                NotificationChannel(category.channelId, category.title, LegacyChannels.importanceFor(replacedImportance, defaultImportance)).apply {
+                    description = category.description
+                },
+            )
+        }
+        manager.deleteNotificationChannel(LegacyChannels.ALERTS)
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, "Chat replies", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "Arty's replies while the app is closed, and what happened to an answer you gave from a notification"
         })
     }
 
@@ -90,7 +100,9 @@ object Announcements {
                 return
             }
             val fresh = feed.announcements.filter { it.id > shown }
-            fresh.forEach { show(context, it) }
+            val notifiable = NotificationCategory.notifiable(fresh) { NotificationSwitches.isOn(context, it) }
+            if (notifiable.isNotEmpty()) ensureChannels(context)
+            notifiable.forEach { show(context, it) }
             if (fresh.isNotEmpty()) onFresh?.invoke(fresh)
             fresh.lastOrNull()?.let { ArtyWidget.setLatest(context, "${it.title}: ${it.message}") }
             prefs.edit().putLong(LAST_SHOWN, maxOf(shown, feed.last)).apply()
@@ -108,7 +120,7 @@ object Announcements {
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val channel = if (urgent) ALERT_CHANNEL else CHANNEL
+        val channel = item.category.channelId
         val builder = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(item.title)
@@ -128,9 +140,10 @@ object Announcements {
         }
         val taskId = item.taskId
         if (taskId != null && LockScreen.allowsActions(Build.VERSION.SDK_INT)) {
+            val postedAt = SystemClock.elapsedRealtime()
             item.actions.filter { it in DecisionReceiver.ACTIONS }.forEach { action ->
                 builder.addAction(
-                    NotificationCompat.Action.Builder(0, action.replaceFirstChar { it.uppercase() }, DecisionReceiver.intent(context, item.id.toInt(), taskId, action))
+                    NotificationCompat.Action.Builder(0, action.replaceFirstChar { it.uppercase() }, DecisionReceiver.intent(context, item.id.toInt(), taskId, action, postedAt))
                         .setAuthenticationRequired(true)
                         .build(),
                 )
@@ -212,6 +225,8 @@ class DecisionReceiver : BroadcastReceiver() {
         val action = intent.getStringExtra(EXTRA_ACTION) ?: return
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION, 0)
         if (taskId < 0 || action !in ACTIONS) return
+        val postedAt = intent.getLongExtra(EXTRA_POSTED, AnswerGuard.POSTED_UNKNOWN)
+        if (!AnswerGuard.acceptsNotificationAnswer(postedAt, SystemClock.elapsedRealtime())) return
         val pending = goAsync()
         thread {
             val outcome = try {
@@ -229,12 +244,14 @@ class DecisionReceiver : BroadcastReceiver() {
         private const val EXTRA_TASK = "task"
         private const val EXTRA_ACTION = "action"
         private const val EXTRA_NOTIFICATION = "notification"
+        private const val EXTRA_POSTED = "posted"
 
-        fun intent(context: Context, notificationId: Int, taskId: Long, action: String): PendingIntent =
+        fun intent(context: Context, notificationId: Int, taskId: Long, action: String, postedAt: Long): PendingIntent =
             PendingIntent.getBroadcast(
                 context, notificationId * 8 + ACTIONS.indexOf(action),
                 Intent(context, DecisionReceiver::class.java)
-                    .putExtra(EXTRA_TASK, taskId).putExtra(EXTRA_ACTION, action).putExtra(EXTRA_NOTIFICATION, notificationId),
+                    .putExtra(EXTRA_TASK, taskId).putExtra(EXTRA_ACTION, action).putExtra(EXTRA_NOTIFICATION, notificationId)
+                    .putExtra(EXTRA_POSTED, postedAt),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
     }

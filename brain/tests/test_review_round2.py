@@ -17,6 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import background_tasks  # noqa: E402
+import connections  # noqa: E402
+import native_calls  # noqa: E402
 import calendar_feed  # noqa: E402
 import email_watch  # noqa: E402
 import expiry  # noqa: E402
@@ -95,9 +98,9 @@ class LongNotes(Server):
         self.assertLess(len(found), personal.NOTE_RESULTS * (personal.NOTE_SEARCH_CHARS + 100))
 
     def test_native_tool_results_are_capped(self):
-        with unittest.mock.patch.object(brain, "run_native", return_value=("y" * 50_000, None)):
-            result, _ = brain.run_native_safely("note_search", {}, {}, False, None)
-        self.assertLessEqual(len(result), brain.TOOL_RESULT_CHARS + 200)
+        with unittest.mock.patch.object(native_calls, "run_native", return_value=("y" * 50_000, None)):
+            result, _ = native_calls.run_native_safely("note_search", {}, {}, False, None)
+        self.assertLessEqual(len(result), connections.TOOL_RESULT_CHARS + 200)
         self.assertIn("cut", result[-80:])
 
 
@@ -188,7 +191,7 @@ class EmailRepeats(unittest.TestCase):
     def check(self):
         listing = "1. 10:42: Bank <alerts@bank.example>: New sign-in to your account | A new device signed in."
         email_watch.check_new(lambda name, arguments: listing, lambda prompt: '{"important": [1]}',
-                              lambda title, message: self.sent.append(message))
+                              lambda title, message, **options: self.sent.append(message))
 
     def test_the_same_alert_a_week_later_is_judged_again(self):
         self.check()
@@ -347,13 +350,13 @@ class ApplyingMarker(unittest.TestCase):
     def run_task(self, kind, decision):
         task = {"id": 3, "history": None, "title": "t", "instructions": "i", "tools_used": [],
                 "waiting": {"kind": kind, "decision": decision, "call": {"name": "workspace__browser_click"}}}
-        with unittest.mock.patch.object(brain, "load_config", return_value={}), \
+        with unittest.mock.patch.object(connections, "load_config", return_value={}), \
                 unittest.mock.patch.object(brain.store, "update_task") as update, \
                 unittest.mock.patch.object(brain.store, "get_task", return_value={"status": "cancelled"}), \
-                unittest.mock.patch.object(brain, "apply_decision"), \
-                unittest.mock.patch.object(brain.hub, "refresh"), \
-                unittest.mock.patch.object(brain, "run_agent", return_value={"status": "cancelled", "tools_used": []}):
-            brain.process_task(task)
+                unittest.mock.patch.object(background_tasks, "apply_decision"), \
+                unittest.mock.patch.object(connections.hub, "refresh"), \
+                unittest.mock.patch.object(background_tasks, "run_agent", return_value={"status": "cancelled", "tools_used": []}):
+            background_tasks.process_task(task)
         return any((call.kwargs.get("waiting") or {}).get("applying") for call in update.call_args_list)
 
     def test_only_an_approval_being_carried_out_is_marked(self):

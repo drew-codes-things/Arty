@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 CONFIG = {"model": "qwen3:14b", "persona": "You are Arty.", "system_prompt": "Use your tools.", "options": {},
@@ -46,11 +47,11 @@ class AgentTurns(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         config = {**CONFIG, "conversations_dir": folder.name}
         patches = [
-            unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(config)),
-            unittest.mock.patch.object(brain.hub, "refresh"),
-            unittest.mock.patch.object(brain.hub, "tools", [WEB_SEARCH]),
-            unittest.mock.patch.object(brain.hub, "routes", {"research__web_search": "research"}),
-            unittest.mock.patch.object(brain.hub, "call", side_effect=AssertionError("the brain ran a tool itself")),
+            unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(config)),
+            unittest.mock.patch.object(connections.hub, "refresh"),
+            unittest.mock.patch.object(connections.hub, "tools", [WEB_SEARCH]),
+            unittest.mock.patch.object(connections.hub, "routes", {"research__web_search": "research"}),
+            unittest.mock.patch.object(connections.hub, "call", side_effect=AssertionError("the brain ran a tool itself")),
             unittest.mock.patch.object(brain, "archive_turn"),
             unittest.mock.patch.object(brain, "extract_memories"),
             unittest.mock.patch.object(models, "find", return_value={"name": "qwen3:14b", "billions": 14.8, "tools": True, "vision": False,
@@ -62,7 +63,7 @@ class AgentTurns(unittest.TestCase):
 
     def run_agent_turn(self, text, *replies):
         self.ollama = FakeOllama(*replies)
-        with unittest.mock.patch.object(brain, "http_json", side_effect=self.ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=self.ollama):
             return brain.run_turn(conversation(text), "Arty", client_tools=[READ_FILE], agent=True)
 
     def sent_tool_names(self, index=0):
@@ -108,7 +109,7 @@ class AgentTurns(unittest.TestCase):
 
     def test_ordinary_chat_still_offers_arty_s_own_tools(self):
         self.ollama = FakeOllama({"role": "assistant", "content": "It prints hello."})
-        with unittest.mock.patch.object(brain, "http_json", side_effect=self.ollama), \
+        with unittest.mock.patch.object(connections, "http_json", side_effect=self.ollama), \
                 unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)), \
                 unittest.mock.patch.object(brain, "be_honest", side_effect=lambda answer, *_: answer):
             brain.run_turn(conversation("what does main.py do?"), "Arty", client_tools=[READ_FILE])
@@ -178,7 +179,7 @@ class AgentHonesty(unittest.TestCase):
 
     def finish(self, conversation_so_far):
         judge = JudgeThatFlagsEveryReport(FINAL_REPORT)
-        with unittest.mock.patch.object(brain, "http_json", side_effect=judge):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=judge):
             reply, _, _, calls = brain.run_turn(conversation_so_far, "Arty", client_tools=[READ_FILE], agent=True)
         self.assertIsNone(calls)
         return reply, judge

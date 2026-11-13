@@ -11,7 +11,7 @@
 [![Kotlin](https://img.shields.io/badge/kotlin-android-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Electron](https://img.shields.io/badge/electron-desktop-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Proxmox](https://img.shields.io/badge/proxmox-VE%209-E57000?style=flat-square&logo=proxmox&logoColor=white)](https://www.proxmox.com/)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 </div>
 
@@ -151,9 +151,9 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.5.1-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.5.1.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.5.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-1.5.2-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.5.2.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.5.2.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
 | `Arty-Browser-Extension-1.5.1.zip` | [Arty for Chrome](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
 | `Arty-Browser-Extension-1.5.1.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
 
@@ -162,7 +162,7 @@ Everything to install is on the [Releases](../../releases) page:
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (below).
 
-What changed lately: [release notes for 1.5.1](docs/release-notes-2026-11-13-1.5.1.md), and before that [1.5.0](docs/release-notes-2026-11-13.md).
+What changed lately: [release notes for 1.5.2](docs/release-notes-2026-11-13-1.5.2.md), and before that [1.5.1](docs/release-notes-2026-11-13-1.5.1.md).
 
 ---
 
@@ -298,7 +298,7 @@ Follow [arty-pc/README.md](arty-pc/README.md) to sign Arty's browser in to the s
 | App | First start |
 |---|---|
 | [Arty Desktop](apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](apps/android/README.md) | Install `Arty-1.5.0.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](apps/android/README.md) | Install `Arty-1.5.2.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |
@@ -355,7 +355,11 @@ Restart with `systemctl restart tool-hub brain` after changing them.
   in `arty_models` in `brain.json` are accepted. Only models that can use tools can run Arty, unless you run
   `ai-toolless on`. Hugging Face GGUFs work too: `ai-pull hf.co/<user>/<repo>:Q4_K_M`.
 - **Pictures**: `vision_model` in `brain.json` names the model that looks at pictures (`mimo-v2.6:9b`). If it isn't
-  downloaded, the first downloaded Arty model that can see is used (never a solo model).
+  downloaded, the first downloaded Arty model that can see is used (never a solo model). The main model and the vision
+  model don't fit on the 12 GB card together, so with `route_picture_chats` (on by default) a chat with plain `Arty`
+  that brings a new picture is answered by the vision model too, when it can use tools, instead of swapping the main
+  model back in for the answer. A picture uploaded through the apps starts the vision model loading while you type.
+  Set it to `false` to keep picture answers on the main model.
 - **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (`mimo-v2.6:9b`). For anything else the
   main model can hand a job to another model in `arty_models` with `ask_other_model`; `model_strengths` says what each
   one is best at. A model that isn't downloaded is never picked: Arty falls back to the coding model in agent
@@ -363,7 +367,8 @@ Restart with `systemctl restart tool-hub brain` after changing them.
 - **Coding questions in chat**: `route_coding_chats` in `brain.json` (on by default when `coding_model` is set) sends a
   chat to `coding_model` when it picks plain `Arty` and is clearly about code: a fenced code block, a pasted traceback or
   compiler error, or asking to write, fix, debug, refactor, review or explain code, a script, a regex, a SQL query or a
-  shell command. Every app gets it with no update, the reply still comes from Arty, and the main model is loaded again
+  shell command. A short question only moves when the coding model is already loaded; a long paste, a whole app or a
+  change across a project always does, so a quick question doesn't cost two model swaps. Every app gets it with no update, the reply still comes from Arty, and the main model is loaded again
   200 seconds later. A model picked by name, solo models and the private add-on are never moved; if the coding model
   isn't downloaded, the main model answers and the brain logs it. Set it to `false` to keep every chat on the main model.
 - **Models on their own**: anything listed in `solo_models` in `brain.json` shows up in the apps' model pickers as a
@@ -487,11 +492,9 @@ Each app's README has its own.
 
 ## License
 
-[PolyForm Strict 1.0.0](https://polyformproject.org/licenses/strict/1.0.0) - see [LICENSE](LICENSE). You can
-download, keep and use Arty for yourself or any other noncommercial purpose; sharing it, changing it, building on it or
-using it commercially needs permission.
-
-To ask for permission, open an issue on this repository.
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](LICENSE) and [NOTICE](NOTICE). You
+can use, change and share Arty, including commercially; if you share it or anything built from it, keep the LICENSE and
+NOTICE files, which credit Arty's author, and say what you changed.
 
 The parts of Arty Desktop adapted from MIT-licensed projects stay under MIT, see
 [apps/desktop/NOTICE](apps/desktop/NOTICE).

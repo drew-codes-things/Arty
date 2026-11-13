@@ -11,8 +11,11 @@ import sqlite3
 import threading
 import time
 
+import notify
+
 DB_FILE = os.environ.get("BRAIN_DB", "/srv/ai/brain/state/arty.db")
 TASK_STATES = ("queued", "running", "waiting", "done", "failed", "cancelled")
+REBUILT_EACH_RUN = ("prefix", "rounds")
 write_lock = threading.Lock()
 
 SCHEMA = """
@@ -40,7 +43,8 @@ CREATE TABLE IF NOT EXISTS announcements (
   message TEXT NOT NULL,
   task_id INTEGER,
   actions TEXT,
-  created REAL NOT NULL
+  created REAL NOT NULL,
+  category TEXT NOT NULL DEFAULT 'other'
 );
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
@@ -110,6 +114,9 @@ def init():
         device_columns = {row["name"] for row in connection.execute("PRAGMA table_info(approved_devices)")}
         if "remote_control" not in device_columns:
             connection.execute("ALTER TABLE approved_devices ADD COLUMN remote_control INTEGER NOT NULL DEFAULT 0")
+        announcement_columns = {row["name"] for row in connection.execute("PRAGMA table_info(announcements)")}
+        if "category" not in announcement_columns:
+            connection.execute(f"ALTER TABLE announcements ADD COLUMN category TEXT NOT NULL DEFAULT '{notify.OTHER}'")
         # A task interrupted by a restart goes back in the queue rather than hanging as "running".
         connection.execute("UPDATE tasks SET status = 'queued', updated = ? WHERE status = 'running'", (time.time(),))
 
@@ -120,7 +127,14 @@ def _task(row) -> dict | None:
     task = dict(row)
     for key in ("history", "waiting", "tools_used"):
         task[key] = json.loads(task[key]) if task[key] else None
+    task["history"] = history_to_keep(task["history"])
     return task
+
+
+def history_to_keep(history: dict | None) -> dict | None:
+    if not isinstance(history, dict):
+        return history
+    return {key: value for key, value in history.items() if key not in REBUILT_EACH_RUN}
 
 
 def create_task(title: str, instructions: str, source: str, schedule_id: int | None = None) -> dict:
@@ -152,6 +166,8 @@ def list_tasks(status: str = "", limit: int = 30) -> list[dict]:
 def update_task(task_id: int, **fields):
     if not fields:
         return
+    if "history" in fields:
+        fields["history"] = history_to_keep(fields["history"])
     for key in ("history", "waiting", "tools_used"):
         if key in fields and fields[key] is not None:
             fields[key] = json.dumps(fields[key], ensure_ascii=False)
@@ -174,12 +190,14 @@ def claim_next_task() -> dict | None:
 ANNOUNCEMENTS_KEPT = 500
 
 
-def add_announcement(kind: str, title: str, message: str, task_id: int | None = None, actions: list[str] | None = None) -> int:
+def add_announcement(kind: str, title: str, message: str, task_id: int | None = None, actions: list[str] | None = None,
+                     category: str = notify.OTHER) -> int:
     """Records something Arty told the user (reminder, task result, alert), for the apps' feeds."""
     with write_lock, connect() as connection:
         cursor = connection.execute(
-            "INSERT INTO announcements (kind, title, message, task_id, actions, created) VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, title[:200], message[:4000], task_id, json.dumps(actions) if actions else None, time.time()),
+            "INSERT INTO announcements (kind, title, message, task_id, actions, created, category) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (kind, title[:200], message[:4000], task_id, json.dumps(actions) if actions else None, time.time(),
+             notify.known_category(category)),
         )
         connection.execute("DELETE FROM announcements WHERE id <= ?", (cursor.lastrowid - ANNOUNCEMENTS_KEPT,))
         return cursor.lastrowid

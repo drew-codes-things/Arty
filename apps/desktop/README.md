@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Linux](https://img.shields.io/badge/linux-KDE%20Plasma-1D99F3?style=flat-square&logo=kde&logoColor=white)](https://kde.org/plasma-desktop/)
 [![Windows](https://img.shields.io/badge/windows-10%20and%2011-0078D4?style=flat-square&logo=windows&logoColor=white)](https://www.microsoft.com/windows)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
 
 </div>
 
@@ -45,7 +45,9 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
 - **Hands** - off until you turn **HANDS** on. Then Arty can look at the screen, open apps, click, type, press keys,
   scroll, run commands and read or write files. The first click or key press in each reply, programs that aren't
   installed apps, changes to startup files (`~/.bashrc`, autostart, `~/.local/bin`) and anything risky - deleting,
-  sending, installing, overwriting - show an Allow / Not now card first. Passwords, keys, browser profiles, `.env`
+  sending, installing, overwriting - show an Allow / Not now card first. A new card flashes **New question** and
+  ignores clicks, Enter and Space for its first second on screen, so keys or a click meant for something else
+  cannot answer it. Passwords, keys, browser profiles, `.env`
   files and Arty's own settings are off limits.
   Before clicking, typing, pressing keys or scrolling, Arty checks that a password manager isn't the window in
   front. That check needs to know which window is in front: Windows and X11 always say, KDE on Wayland only with
@@ -85,8 +87,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.5.1-x86_64.AppImage
-./Arty-1.5.1-x86_64.AppImage
+chmod +x Arty-1.5.2-x86_64.AppImage
+./Arty-1.5.2-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -97,7 +99,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.5.1.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.5.2.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.
@@ -163,8 +165,8 @@ microphone, speakers, Wi-Fi, Bluetooth, a screen with brightness control and a W
 
 ## License
 
-[PolyForm Strict 1.0.0](https://polyformproject.org/licenses/strict/1.0.0) - see [LICENSE](../../LICENSE). You can download, keep and use Arty for yourself or any other
-noncommercial purpose; sharing it, changing it, building on it or using it commercially needs permission.
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.
 
 The voice and computer-control plumbing is adapted from MIT-licensed projects and stays under MIT; see
 [NOTICE](NOTICE).

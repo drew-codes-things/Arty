@@ -76,3 +76,21 @@ def asks_for_code_work(text: str) -> bool:
 def is_request(text: str | None) -> bool:
     text = text or ""
     return has_pasted_code(text) or reports_a_code_problem(text) or asks_for_code_work(text)
+
+
+BIG_PASTE_LINES = 30
+BIG_MESSAGE_CHARS = 1500
+BUILD_JOB = re.compile(
+    r"\b(?:build|create|make|write|code|develop|scaffold|set up)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+|my\s+)?(?:[\w-]+\s+){0,3}?"
+    r"(?:app|application|bot|website|web ?site|site|program|game|extension|server|api|dashboard|project|cli|library|package|"
+    r"plugin|backend|frontend)s?\b", re.IGNORECASE)
+WIDE_JOB = re.compile(
+    r"\b(?:refactor|restructure|port|migrate)\b[^.?!\n]{0,60}\b(?:project|app|codebase|code ?base|repo|module|modules|files)\b|"
+    r"\b(?:several|multiple|many|all (?:the|my)) (?:files|modules|classes)\b|\bwhole (?:project|codebase|repo|app)\b|"
+    r"\bcode ?base\b|\bend[- ]to[- ]end\b", re.IGNORECASE)
+
+
+def is_big_job(text: str | None) -> bool:
+    text = text or ""
+    is_long = len(text) >= BIG_MESSAGE_CHARS or len(text.splitlines()) >= BIG_PASTE_LINES
+    return is_long or bool(BUILD_JOB.search(text)) or bool(WIDE_JOB.search(text))

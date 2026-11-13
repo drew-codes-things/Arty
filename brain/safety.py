@@ -40,6 +40,26 @@ BOT_CHECK = re.compile(
     r"hcaptchas?|bot[- ]checks?|human (?:check|verification)|cloudflare (?:check|challenge))\b",
     re.IGNORECASE)
 
+WRITE = r"\b(?:write|draft|make|create|compose|craft|generate|build|design|set up|code)\b"
+PRODUCE = (r"\b(?:write|draft|make|create|compose|craft|generate|build|design|set up|code|produce|prepare|put together|"
+           r"come up with|mock up|whip up|give me|send me|need|want)\b")
+GUARDING = (r"(?:awareness|training|warnings?|alerts?|rules?|detect\w*|protection|prevention|scanners?|folders?|"
+            r"(?:block|filter|report|check|stop|flag)\w*)")
+SCAM_KIND = (r"(?:e-?mails?|texts?|messages?|sms|pages?|sites?|websites?|calls?|scripts?|links?|campaigns?|kits?)")
+SCAM_ITEM = (r"\b(?:phishing|scam)\s+(?:(?!" + GUARDING + r"\b)\w+\s+)?" + SCAM_KIND + r"\b(?!\s+" + GUARDING + r"\b)|"
+             r"\bfake\s+(?:\w+\s+){0,2}(?:log-?in|sign-?in)\s+(?:pages?|forms?|screens?|sites?)\b")
+OBJECT_BREAKS = (r"(?:to|for|about|on|of|against|from|with|at|in|into|by|that|this|which|who|what|saying|telling|warning|"
+                 r"asking|explaining|and|or|but|so|because|if|when|her|him|them|it|is|are|was|were|be|i|you|we|they)")
+MADE_THING = r"(?:\s+(?:me|us))?(?:\s+(?:that|this|these|those))?(?:\s+(?!" + OBJECT_BREAKS + r"\b)[\w'-]+){0,4}?\s+"
+POSING = r"\b(?:pretend(?:ing)? to be|claiming to be|posing as|impersonat\w*|as if (?:it'?s|it is|it were) from)\b"
+WANTS_SECRETS = (r"\b(?:ask(?:s|ing)?|get|gets|getting|collect\w*|steal\w*|harvest\w*|grab\w*|trick\w*)\b[^.?!]{0,40}?"
+                 r"\b(?:card (?:details|numbers?)|bank details|passwords?|log-?in details|credentials|pin|security codes?|cvv|"
+                 r"account details|redelivery fee|fee)\b")
+SCAM_MESSAGE = re.compile(PRODUCE + MADE_THING + r"(?:" + SCAM_ITEM + r")", re.IGNORECASE)
+POSING_FOR_SECRETS = re.compile(WRITE + r"[^.?!]{0,60}?" + POSING + r"[^.?!]{0,60}?" + WANTS_SECRETS, re.IGNORECASE)
+SCAM_REPLY = ("I won't write that: a message or page made to trick people into handing over card details, passwords or money "
+              "is fraud. If you're learning to defend against it, I can go through the warning signs phishing messages share "
+              "and how they get caught.")
 BOT_CHECK_REPLY = ("I won't get past CAPTCHAs or bot checks, even for you: they're there to make sure a person is at the "
                    "keyboard. If you open that page on my desktop and pass the check yourself, I'll carry on from there.")
 WEAPONS_REPLY = ("I can't help with making weapons or explosives. I'm happy to talk about the history or the general "
@@ -53,7 +73,11 @@ def self_harm_reply(crisis_help: str | None = None) -> str:
             f"with it on your own: {crisis_help or DEFAULT_CRISIS_HELP} I'm here if you want to talk.")
 
 
-ALL_CHECKS = ("self_harm", "weapons", "bot_check")
+def asks_for_a_scam(text: str) -> bool:
+    return bool(SCAM_MESSAGE.search(text) or POSING_FOR_SECRETS.search(text))
+
+
+ALL_CHECKS = ("self_harm", "weapons", "bot_check", "scam")
 
 
 def check(text: str, crisis_help: str | None = None, kinds: tuple[str, ...] = ALL_CHECKS) -> tuple[str, str] | None:
@@ -65,6 +89,8 @@ def check(text: str, crisis_help: str | None = None, kinds: tuple[str, ...] = AL
         return "weapons", WEAPONS_REPLY
     if "bot_check" in kinds and BOT_CHECK.search(text):
         return "bot_check", BOT_CHECK_REPLY
+    if "scam" in kinds and asks_for_a_scam(text):
+        return "scam", SCAM_REPLY
     return None
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import brain
+import connections
 
 
 class OverheardTest(unittest.TestCase):
@@ -20,7 +21,7 @@ class AddressedTest(unittest.TestCase):
     CONFIG = {"model": "qwen3:14b"}
 
     def reply(self, content):
-        return unittest.mock.patch.object(brain, "http_json", return_value={"message": {"content": content}})
+        return unittest.mock.patch.object(connections, "http_json", return_value={"message": {"content": content}})
 
     def test_overheard_and_addressed(self):
         with self.reply('{"for_arty": false}') as call:
@@ -33,7 +34,7 @@ class AddressedTest(unittest.TestCase):
     def test_unsure_or_failed_checks_answer(self):
         with self.reply("not json"):
             self.assertTrue(brain.addressed_to_arty(self.CONFIG, "what time is it", []))
-        with unittest.mock.patch.object(brain, "http_json", side_effect=OSError("ollama down")):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("ollama down")):
             self.assertTrue(brain.addressed_to_arty(self.CONFIG, "what time is it", []))
 
 

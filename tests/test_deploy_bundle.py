@@ -63,6 +63,13 @@ class DeployBundle(unittest.TestCase):
         self.assertIn("services/tool-hub.service", members)
         self.assertFalse([name for name in members if name.startswith("hub/tests") or "mcpo" in name], members)
 
+    def test_every_brain_module_is_shipped(self):
+        self.assertEqual(self.run_result.returncode, 0, self.run_result.stderr)
+        members = set(self.bundle_members())
+        modules = {f"brain/{path.name}" for path in (ROOT / "brain").glob("*.py")}
+        self.assertIn("brain/agent_loop.py", modules)
+        self.assertEqual(modules - members, set())
+
     def test_the_bundle_goes_to_a_fresh_temporary_path_on_the_host(self):
         self.assertEqual(self.run_result.returncode, 0, self.run_result.stderr)
         first_destination = (self.logs / "scp.log").read_text().splitlines()[0]

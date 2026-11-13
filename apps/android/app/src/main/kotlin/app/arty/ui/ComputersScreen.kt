@@ -459,13 +459,17 @@ private fun Preview(text: String) {
 @Composable
 private fun PermissionCard(request: PermissionRequest, modifier: Modifier, sending: Boolean, problem: String, onAllow: () -> Unit, onDeny: () -> Unit) {
     val prompt = RemoteView.permissionPrompt(request)
-    Card(ArtyColors.Signal, modifier) {
-        Text(prompt.heading, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-        if (prompt.preview.isNotBlank()) Preview(prompt.preview)
-        if (problem.isNotBlank()) Text(problem, style = MaterialTheme.typography.bodySmall, color = ArtyColors.Caution, modifier = Modifier.padding(top = 4.dp))
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ArtyButton(onClick = onAllow, enabled = !sending, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Allow") }
-            ArtyOutlinedButton(onClick = onDeny, enabled = !sending, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Deny") }
+    val hold = rememberAnswerHold(request.requestId)
+    val answerable = !sending && hold.ready
+    HeldQuestion(hold, modifier) {
+        Card(ArtyColors.Signal) {
+            Text(prompt.heading, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            if (prompt.preview.isNotBlank()) Preview(prompt.preview)
+            if (problem.isNotBlank()) Text(problem, style = MaterialTheme.typography.bodySmall, color = ArtyColors.Caution, modifier = Modifier.padding(top = 4.dp))
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ArtyButton(onClick = onAllow, enabled = answerable, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Allow") }
+                ArtyOutlinedButton(onClick = onDeny, enabled = answerable, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Deny") }
+            }
         }
     }
 }

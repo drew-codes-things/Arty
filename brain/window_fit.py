@@ -7,6 +7,8 @@ MESSAGE_OVERHEAD_TOKENS = 8
 IMAGE_TOKENS = 768
 WINDOW_MARGIN_TOKENS = 512
 LEFT_OUT_NOTE = "(Some earlier messages in this conversation were left out to fit the context window.)"
+LEFT_OUT_ASK = ("\n\n(Earlier parts of this conversation were left out to fit. If the answer to this was in them, say you can "
+                "no longer see that part of the conversation; don't guess.)")
 
 
 def text_tokens(text: str) -> int:
@@ -59,6 +61,13 @@ def latest_user_block(blocks: list[list[dict]]) -> int:
     return max((index for index, block in enumerate(blocks) if block[0].get("role") == "user"), default=len(blocks) - 1)
 
 
+def with_left_out_ask(block: list[dict]) -> list[dict]:
+    request = block[0]
+    if not isinstance(request.get("content"), str):
+        return block
+    return [{**request, "content": request["content"] + LEFT_OUT_ASK}, *block[1:]]
+
+
 def fitted_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
     pinned = [message for message in messages if message.get("role") == "system"]
     blocks = turn_blocks([message for message in messages if message.get("role") != "system"])
@@ -69,7 +78,7 @@ def fitted_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]
     room = budget - blocks_tokens([pinned, [note], blocks[anchor]])
     newer = newest_that_fit(blocks[anchor + 1:], room)
     older = newest_that_fit(blocks[:anchor], room - blocks_tokens(newer))
-    kept = older + [blocks[anchor]] + newer
+    kept = older + [with_left_out_ask(blocks[anchor])] + newer
     left_out = sum(len(block) for block in blocks) - sum(len(block) for block in kept)
     if not left_out:
         return messages, 0

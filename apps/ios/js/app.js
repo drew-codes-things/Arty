@@ -2,6 +2,7 @@ import { ChatView } from "./chat.js";
 import { renderComputers } from "./computers.js";
 import { formatMoment, h, sectionHead, twoStepButton } from "./dom.js";
 import { renderCalendar, renderDevices, renderLectures, renderMemory, renderSchedules, renderTasks } from "./manage.js";
+import { renderNotificationSwitches } from "./notifications.js";
 import { renderSetup } from "./setup.js";
 import { approveElsewhereLink, readAuthoriseCode, renderApproveElsewhere, renderAuthorise, setupHint, withoutAuthoriseCode } from "./authorise.js";
 import { ArtyApi, approvePage } from "./api.js";
@@ -43,6 +44,7 @@ function renderMore(container) {
       page("devices", "Approved devices"), page("computers", "Computers")),
     h("h3", { class: "kicker" }, "This iPhone"),
     h("label", { class: "toggle" }, h("span", {}, "Read Arty's replies aloud"), readAloud),
+    ...renderNotificationSwitches(storage),
     h("p", { class: "notice" }, settings?.accessId ? "Connected with the app key and the Cloudflare access token." : "Connected with the app key only (home network)."),
     twoStepButton("Forget the keys on this iPhone", "Tap again to forget them", async () => {
       forgetSettings(storage);

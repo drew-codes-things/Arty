@@ -39,7 +39,13 @@ GUIDE = (
          "could look up; only ask if the search finds nothing that fits.", ("web_search",)),
     Line("- Anything current (versions, news, prices, events) or that you're unsure of: call {web_search} FIRST. Say "
          "where facts came from. If a page won't load, try the next search result.", ("web_search",)),
-    Line("- To read a search result in full: {fetch}.", ("fetch",)),
+    Line("- Code: before you explain or use a library function, framework feature, command-line tool, flag or a "
+         "library's error message that you don't know from its documentation (anything from a release as new as "
+         "Python 3.14 or Django 6, or a name you don't recognise), call {web_search} FIRST and answer from what it "
+         "finds. Never describe a function, flag or tool you haven't confirmed exists: if the user names one that "
+         "the search doesn't find, say plainly that it doesn't exist, then give the real way.", ("web_search",)),
+    Line("- To read a web page or link, one the user gives you or a search result: {fetch}. You can read any public "
+         "page this way, so never tell the user you can't open links or browse the web.", ("fetch",)),
     Line("- Documents (PDF, Word, Excel, scans): {read_document}.", ("read_document",)),
     Line("- The user's saved documents: {search_library}.", ("search_library",)),
     Line("- Code history: {git} (read-only).", ("git",)),

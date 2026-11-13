@@ -6,7 +6,7 @@
 
 [![JavaScript](https://img.shields.io/badge/javascript-no%20build-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
 ![iOS](https://img.shields.io/badge/iOS-15.4%2B-000000?style=flat-square&logo=apple&logoColor=white)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
 
 </div>
 
@@ -25,8 +25,12 @@ Store.
 | Updates | Reminders, briefings, task results and alerts as they happen, with Approve / Deny |
 | Tasks | Background tasks: start one, approve, deny, mark done or cancel |
 | Calendar | The next 30 days from Arty and Google; add events in plain words, remove Arty's own |
-| More | Schedules, lectures (record or add a recording; read the notes), memory search, read-aloud, the keys, **Approved devices** (every computer you approved, with a two-tap **Turn off** and a **Can control Arty CLI** switch), and **Computers** (follow Arty CLI on a computer that ran `/remote`: its transcript, Allow / Deny for its questions, a message box and Stop) |
+| More | Schedules, lectures (record or add a recording; read the notes), memory search, read-aloud, **Notifications** (a switch per kind: email, server, tasks, approvals, reminders, calendar, lectures, Arty's own notices, other; a switched-off kind doesn't pop up or count on the badge but stays in Updates), the keys, **Approved devices** (every computer you approved, with a two-tap **Turn off** and a **Can control Arty CLI** switch), and **Computers** (follow Arty CLI on a computer that ran `/remote`: its transcript, Allow / Deny for its questions, a message box and Stop) |
 | Approve a computer | Opened by the link a computer shows when it asks to join (`/ios/?authorise=CODE`): type the code it shows, then Approve or Deny. A failed approve has **Try again**. In a browser with no Arty key it shows the code with a link and a QR code to starfire's Arty devices page (when the brain has `BRAIN_STARFIRE_URL`), or **Paste an API key instead** |
+
+A new question (an approval in Updates or Tasks, or a computer's Allow / Deny) shows a short **New question** flash, and
+its buttons ignore taps, clicks, Enter and Space until it has been on screen for one second, so a tap aimed at
+something that just moved cannot answer it.
 
 It talks to the brain with the same API as the Android app ([docs/API.md](../../docs/API.md)), as client `ios`.
 
@@ -63,6 +67,7 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
 | `js/api.js` | The brain API: keys on every request, chat jobs with polling, uploads, downloads, announcements |
 | `js/chat.js`, `js/conversations.js` | Chat screen and the chats saved on the phone (same history window as Android) |
 | `js/manage.js`, `js/updates.js`, `js/tasks.js` | Tasks, calendar, schedules, lectures, memory, approved devices and Updates |
+| `js/answerguard.js` | The one-second hold and "New question" flash on approval cards |
 | `js/authorise.js` | The "approve this computer" sheet, and the starfire link and QR code when this browser has no key |
 | `js/qr.js`, `js/vendor/qrcode-generator.js` | Draws QR codes as SVG (qrcode-generator 2.0.4, MIT, see `js/vendor/LICENSE-qrcode-generator.txt`) |
 | `js/setup.js`, `js/setupcode.js`, `js/scanner.js` | First start: scan the setup QR code or type the keys |

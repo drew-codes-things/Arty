@@ -127,6 +127,13 @@ server:
 search:
   safe_search: 0
   formats: [html, json]
+engines:
+  - name: bing
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: startpage
+    disabled: false
 EOF
   chmod 644 /srv/ai/searxng/settings.yml
 fi

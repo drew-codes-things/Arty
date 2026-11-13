@@ -274,6 +274,16 @@ class ArtyClientTest {
         val item = feed.announcements.single()
         assertEquals(9L, item.taskId)
         assertEquals(listOf("approve", "deny"), item.actions)
+        assertEquals(NotificationCategory.Approvals, item.category)
+    }
+
+    @Test
+    fun `reads each announcement's category, and falls back to its kind for an older brain`() {
+        routes["GET /v1/announcements?after=0&wait=0"] = 200 to
+            """{"announcements":[{"id":6,"kind":"message","category":"email","title":"Important email","message":"Sam","task_id":null,"actions":[],"created":1},
+            {"id":7,"kind":"reminder","title":"Reminder","message":"Bins","task_id":null,"actions":[],"created":2}],"last":7}"""
+        val feed = client.announcements(0)
+        assertEquals(listOf(NotificationCategory.Email, NotificationCategory.Reminders), feed.announcements.map { it.category })
     }
 
     @Test

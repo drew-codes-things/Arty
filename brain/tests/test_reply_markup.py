@@ -16,6 +16,8 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import honesty  # noqa: E402
 import written_calls  # noqa: E402
 from test_agent_mode import READ_FILE  # noqa: E402
 import test_review_tonight  # noqa: E402
@@ -75,15 +77,15 @@ class TheTurnFallsBackWhenOnlyMarkupIsLeft(unittest.TestCase):
 
     def test_markup_twice_gives_the_brains_own_fallback(self):
         ollama = TimedOllama(answer(MARKUP["mistral style call"]), answer(MARKUP["broken call fragment"]))
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             reply = brain.run_turn(asked("tell me about lofi"), "Arty", client_tools=[READ_FILE])[0]
-        self.assertEqual(reply, brain.LOST_TRAIN_OF_THOUGHT)
+        self.assertEqual(reply, honesty.LOST_TRAIN_OF_THOUGHT)
 
     def test_streamed_pieces_never_carry_markup(self):
         sent = []
         ollama = TimedOllama(answer(f"{CALL}\nMore words here.\n"), answer("Lofi is calm music."))
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama), \
-                unittest.mock.patch.object(brain, "stream_chat", side_effect=ollama.streamed):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+                unittest.mock.patch.object(connections, "stream_chat", side_effect=ollama.streamed):
             reply = brain.run_turn(asked("tell me about lofi"), "Arty", client_tools=[READ_FILE], on_text=sent.append)[0]
         streamed = "".join(sent)
         self.assertIsNone(written_calls.CALL_MARKUP.search(streamed), streamed)

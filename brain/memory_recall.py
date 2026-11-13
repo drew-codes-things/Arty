@@ -101,3 +101,9 @@ def fact_lines(facts: list[str], request: str, budget: int) -> str:
 def memory_lines(graph, request: str, budget: int) -> str:
     facts = graph_facts(graph)
     return render(chosen_facts(facts, request, budget))
+
+
+def matching_lines(graph, request: str, limit: int) -> str:
+    facts = graph_facts(graph)
+    matching = sorted(relevant_positions(facts, request)[:limit])
+    return "\n".join(PLAIN_LINE_START + facts[position].text for position in matching)

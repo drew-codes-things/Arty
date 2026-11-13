@@ -16,6 +16,8 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import memory_facts  # noqa: E402
 import owner  # noqa: E402
 
 RELEASE_BUILDER = Path(__file__).resolve().parents[2] / "downloads" / "build_release.py"
@@ -53,12 +55,12 @@ class ConfiguredName(unittest.TestCase):
 class NameInPrompts(unittest.TestCase):
     def test_prompts_name_the_configured_owner(self):
         self.assertEqual(owner.fill("OWNER said hi; OWNER's dog", "Sam"), "Sam said hi; Sam's dog")
-        self.assertNotIn(owner.OWNER_TOKEN, brain.EXTRACT_PROMPT)
-        self.assertIn(f"{brain.USER_NAME} said:", brain.EXTRACT_PROMPT)
+        self.assertNotIn(owner.OWNER_TOKEN, memory_facts.EXTRACT_PROMPT)
+        self.assertIn(f"{connections.USER_NAME} said:", memory_facts.EXTRACT_PROMPT)
 
     @unittest.skipUnless(RELEASE_BUILDER.is_file(), "the release builder, which lists the owner's details, is not in this copy")
     def test_no_owner_detail_is_written_into_the_prompt(self):
-        prompt = brain.EXTRACT_PROMPT.replace(brain.USER_NAME, "")
+        prompt = memory_facts.EXTRACT_PROMPT.replace(connections.USER_NAME, "")
         self.assertEqual([name for name, pattern in owner_details() if pattern.search(prompt)], [])
 
     def test_greetings_by_the_configured_name_are_tidied(self):

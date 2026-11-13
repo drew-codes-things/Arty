@@ -11,6 +11,9 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import connections  # noqa: E402
+import prompting  # noqa: E402
 import tool_guide  # noqa: E402
 from native_tools import NATIVE_TOOLS  # noqa: E402
 
@@ -68,14 +71,14 @@ def run_turn(replies, request, hub_names=(), client_names=(), client_system="", 
     ollama = FakeOllama(replies)
     state = {"messages": [{"role": "user", "content": request}], "context": {}}
     config = {"model": "m", "persona": "", "system_prompt": SHIPPED_PROMPT}
-    with unittest.mock.patch.object(brain, "hub", FakeHub(hub_names)), \
-            unittest.mock.patch.object(brain, "http_json", side_effect=ollama), \
+    with unittest.mock.patch.object(connections, "hub", FakeHub(hub_names)), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
             unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
-            unittest.mock.patch.object(brain, "NATIVE_TOOLS", {}), \
-            unittest.mock.patch.object(brain, "current_context", return_value=""):
-        outcome = brain.run_agent(config, state, client_tools=[tool(name) for name in client_names],
-                                  client_system=client_system, agent=agent)
+            unittest.mock.patch.object(agent_loop, "NATIVE_TOOLS", {}), \
+            unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
+        outcome = brain.run_agent(config, state, run=brain.AgentRun(client_tools=[tool(name) for name in client_names],
+                                                                    client_system=client_system, agent=agent))
     return outcome, ollama.bodies
 
 
@@ -102,10 +105,10 @@ class TheShippedTextNamesNoTools(unittest.TestCase):
         self.assertEqual(names_in(SHIPPED_PROMPT), [])
 
     def test_background_instructions_name_no_tool(self):
-        self.assertEqual(names_in(brain.BACKGROUND_INSTRUCTIONS), [])
+        self.assertEqual(names_in(prompting.BACKGROUND_INSTRUCTIONS), [])
 
     def test_the_time_line_names_no_tool(self):
-        self.assertEqual(names_in(brain.time_line({})), [])
+        self.assertEqual(names_in(prompting.time_line({})), [])
 
 
 class TheDesktopBrowserRequest(unittest.TestCase):

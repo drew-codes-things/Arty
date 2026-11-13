@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ANSWER_PAUSE_MS } from "../js/answerguard.js";
 
 class FakeElement {
   constructor(tag) {
@@ -15,6 +16,8 @@ class FakeElement {
     this.dataset = {};
   }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  remove() {}
   addEventListener(type, listener) { this.listeners[type] = listener; }
   append(child) { this.children.push(child); }
   replaceChildren(...children) { this.children = children; }
@@ -33,14 +36,23 @@ function fakePage() {
   return made;
 }
 
+function stopTheClock(t) {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+}
+
+function waitOutTheQuestionPause(t) {
+  t.mock.timers.tick(ANSWER_PAUSE_MS);
+}
+
 function texts(element) {
   return element.children.flatMap((child) => (typeof child === "string" ? [child] : [element.textContent, ...texts(child)]));
 }
 
 const SESSION = "0123456789abcdef";
 
-test("following a computer shows its lines, lets a waiting request be allowed and stops when it ends", async () => {
+test("following a computer shows its lines, lets a waiting request be allowed and stops when it ends", async (t) => {
   const made = fakePage();
+  stopTheClock(t);
   const { followComputer } = await import("../js/computers.js");
   const answers = [];
   const reads = [
@@ -60,6 +72,7 @@ test("following a computer shows its lines, lets a waiting request be allowed an
   const page = new FakeElement("div");
   await followComputer(page, api, SESSION, () => {});
   assert.ok(allowDuringRun, "an Allow button was shown for the waiting request");
+  waitOutTheQuestionPause(t);
   await allowDuringRun.listeners.click();
   assert.deepEqual(answers, [[SESSION, "r1", true]]);
   const shown = texts(page).join(" ");
@@ -169,8 +182,9 @@ function settle() {
 
 const ASKING = sessionRead({ events: [{ seq: 1, type: "permission", request_id: "r1", tool: "bash", text: "pytest" }], next: 1 });
 
-test("an answer from the phone is sent once and its card goes as soon as it is accepted", async () => {
+test("an answer from the phone is sent once and its card goes as soon as it is accepted", async (t) => {
   fakePage();
+  stopTheClock(t);
   const { followComputer } = await import("../js/computers.js");
   const page = new FakeElement("div");
   const answers = [];
@@ -184,6 +198,7 @@ test("an answer from the phone is sent once and its card goes as soon as it is a
     },
     remoteEvents: async () => {
       if (reads.length === 2) {
+        waitOutTheQuestionPause(t);
         const allow = findButton(page.children[3], "Allow");
         allow.listeners.click();
         allow.listeners.click();
@@ -204,8 +219,9 @@ test("an answer from the phone is sent once and its card goes as soon as it is a
   assert.equal(state.cardsAfterNextPoll, 0);
 });
 
-test("a failed answer leaves the card usable and says why", async () => {
+test("a failed answer leaves the card usable and says why", async (t) => {
   fakePage();
+  stopTheClock(t);
   const { followComputer } = await import("../js/computers.js");
   const page = new FakeElement("div");
   let tries = 0;
@@ -218,6 +234,7 @@ test("a failed answer leaves the card usable and says why", async () => {
     },
     remoteEvents: async () => {
       if (reads.length === 2) {
+        waitOutTheQuestionPause(t);
         await findButton(page.children[3], "Allow").listeners.click();
         state.cardText = allText(page.children[3]);
       }
@@ -237,8 +254,9 @@ test("a failed answer leaves the card usable and says why", async () => {
   assert.equal(tries, 2);
 });
 
-async function answerThenRead(laterRead) {
+async function answerThenRead(t, laterRead) {
   fakePage();
+  stopTheClock(t);
   const { followComputer } = await import("../js/computers.js");
   const page = new FakeElement("div");
   const sent = [];
@@ -247,8 +265,12 @@ async function answerThenRead(laterRead) {
   const api = {
     remoteAnswer: async (session, requestId, allow) => { sent.push([requestId, allow]); },
     remoteEvents: async () => {
-      if (reads.length === 3) await findButton(page.children[3], "Allow").listeners.click();
+      if (reads.length === 3) {
+        waitOutTheQuestionPause(t);
+        await findButton(page.children[3], "Allow").listeners.click();
+      }
       if (reads.length === 1) {
+        waitOutTheQuestionPause(t);
         state.cards = shownCards(page).map((card) => allText(card));
         const allow = findButton(page.children[3], "Allow");
         if (allow) await allow.listeners.click();
@@ -260,15 +282,15 @@ async function answerThenRead(laterRead) {
   return { sent, cards: state.cards };
 }
 
-test("a request the computer asks again under the same id gets a fresh card", async () => {
-  const { sent, cards } = await answerThenRead(sessionRead({ events: [{ seq: 2, type: "permission", request_id: "r1", tool: "bash", text: "again" }], next: 2 }));
+test("a request the computer asks again under the same id gets a fresh card", async (t) => {
+  const { sent, cards } = await answerThenRead(t, sessionRead({ events: [{ seq: 2, type: "permission", request_id: "r1", tool: "bash", text: "again" }], next: 2 }));
   assert.equal(cards.length, 1);
   assert.match(cards[0], /again/);
   assert.deepEqual(sent, [["r1", true], ["r1", true]]);
 });
 
-test("a reload after missed lines does not bring back a request already answered", async () => {
-  const { sent, cards } = await answerThenRead(sessionRead({ missed: true, events: [{ seq: 1, type: "permission", request_id: "r1", tool: "bash", text: "pytest" }], next: 1 }));
+test("a reload after missed lines does not bring back a request already answered", async (t) => {
+  const { sent, cards } = await answerThenRead(t, sessionRead({ missed: true, events: [{ seq: 1, type: "permission", request_id: "r1", tool: "bash", text: "pytest" }], next: 1 }));
   assert.equal(cards.length, 0);
   assert.deepEqual(sent, [["r1", true]]);
 });

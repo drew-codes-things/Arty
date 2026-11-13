@@ -11,6 +11,9 @@ from test_agent_options import CLIENT_FOLLOW_UPS, HARD_REQUEST, nudged_mid_task 
 
 import agent_sessions  # noqa: E402
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import agent_turns  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 PLAIN_JOB = "fix the typo in the README title"
@@ -50,15 +53,16 @@ class ThinkingPerSession(unittest.TestCase):
         self.config = {**CONFIG, "think": "auto", "conversations_dir": folder.name}
         self.clock = Clock()
         patches = [
-            unittest.mock.patch.object(brain, "agent_sessions", agent_sessions.AgentSessions(self.clock)),
-            unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(self.config)),
-            unittest.mock.patch.object(brain.hub, "refresh"),
-            unittest.mock.patch.object(brain.hub, "tools", [WEB_SEARCH]),
-            unittest.mock.patch.object(brain.hub, "routes", {"research__web_search": "research"}),
+            unittest.mock.patch.object(agent_loop, "agent_sessions", agent_sessions.AgentSessions(self.clock)),
+            unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(self.config)),
+            unittest.mock.patch.object(connections.hub, "refresh"),
+            unittest.mock.patch.object(connections.hub, "tools", [WEB_SEARCH]),
+            unittest.mock.patch.object(connections.hub, "routes", {"research__web_search": "research"}),
             unittest.mock.patch.object(brain, "archive_turn"),
             unittest.mock.patch.object(brain, "extract_memories"),
             unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)),
             unittest.mock.patch.object(brain, "be_honest", side_effect=lambda answer, *_: answer),
+            unittest.mock.patch.object(agent_turns, "be_honest", side_effect=lambda answer, *_: answer),
             unittest.mock.patch.object(models, "find", return_value={"name": "qwen3:14b", "billions": 14.8, "tools": True,
                                                                         "vision": False, "embedding": False, "thinking": True}),
         ]
@@ -68,7 +72,7 @@ class ThinkingPerSession(unittest.TestCase):
 
     def thinks(self, messages):
         ollama = FakeOllama({"role": "assistant", "content": "Done."})
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=True)
         return ollama.bodies[0]["think"]
 
@@ -112,7 +116,7 @@ class ThinkingPerSession(unittest.TestCase):
 
     def test_chat_turns_still_decide_from_their_own_message(self):
         ollama = FakeOllama({"role": "assistant", "content": "Done."})
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             brain.run_turn([{"role": "user", "content": PLAIN_JOB}, {"role": "assistant", "content": "ok"},
                             {"role": "user", "content": HARD_REQUEST}], "Arty")
         self.assertTrue(ollama.bodies[0]["think"])

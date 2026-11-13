@@ -17,6 +17,8 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import native_calls  # noqa: E402
 
 SHIPPED_CONFIG = json.loads((BRAIN_FOLDER / "brain.json").read_text(encoding="utf-8"))
 PAGE_QUESTIONS = (
@@ -37,8 +39,8 @@ def lookups_run_for(said):
         ran.append(name)
         return "nothing", None
 
-    with unittest.mock.patch.object(brain, "run_native", record), \
-            unittest.mock.patch.object(brain.hub, "call", lambda name, arguments: record(name)[0]):
+    with unittest.mock.patch.object(native_calls, "run_native", record), \
+            unittest.mock.patch.object(connections.hub, "call", lambda name, arguments: record(name)[0]):
         brain.look_up_first(SHIPPED_CONFIG, said)
     return ran
 

@@ -7,7 +7,7 @@
 [![Debian](https://img.shields.io/badge/debian-13-A81D33?style=flat-square&logo=debian&logoColor=white)](https://www.debian.org/)
 [![XFCE](https://img.shields.io/badge/xfce-4.20-2284F2?style=flat-square&logo=xfce&logoColor=white)](https://xfce.org/)
 [![Python](https://img.shields.io/badge/python-3.13-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../LICENSE)
 
 </div>
 
@@ -76,5 +76,5 @@ ImageMagick 7.1.
 
 ## License
 
-[PolyForm Strict 1.0.0](https://polyformproject.org/licenses/strict/1.0.0) - see [LICENSE](../LICENSE). You can download, keep and use Arty for yourself or any other
-noncommercial purpose; sharing it, changing it, building on it or using it commercially needs permission.
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../LICENSE) and [NOTICE](../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.

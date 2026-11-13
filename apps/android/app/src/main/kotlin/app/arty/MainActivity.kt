@@ -74,6 +74,7 @@ import app.arty.ui.LecturesScreen
 import app.arty.ui.ChatScreen
 import app.arty.ui.ComputersScreen
 import app.arty.ui.MemoryScreen
+import app.arty.ui.NotificationsScreen
 import app.arty.ui.SchedulesScreen
 import app.arty.ui.TasksScreen
 import app.arty.ui.UpdatesScreen
@@ -96,6 +97,7 @@ private enum class Tab(val label: String, val icon: ImageVector, val inBar: Bool
     Schedules("Schedules", ArtyIcons.Clock, inBar = false),
     Memory("Memory", ArtyIcons.Brain, inBar = false),
     Computers("Computers", ArtyIcons.Computer, inBar = false),
+    Notifications("Notifications", ArtyIcons.Bell, inBar = false),
 }
 
 class MainActivity : ComponentActivity() {
@@ -256,6 +258,7 @@ private fun ArtyApp(vm: ArtyViewModel) {
                 Tab.Schedules -> SchedulesScreen(vm)
                 Tab.Memory -> MemoryScreen(vm)
                 Tab.Computers -> ComputersScreen()
+                Tab.Notifications -> NotificationsScreen()
             }
         }
     }

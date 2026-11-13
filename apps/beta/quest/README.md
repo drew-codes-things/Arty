@@ -8,7 +8,7 @@
 
 [![Kotlin](https://img.shields.io/badge/kotlin-2.1-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Meta Spatial SDK](https://img.shields.io/badge/meta%20spatial%20sdk-0.14-0467DF?style=flat-square&logo=meta&logoColor=white)](https://developers.meta.com/horizon/develop/spatial-sdk)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../../../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../../LICENSE)
 
 </div>
 

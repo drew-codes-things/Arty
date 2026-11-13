@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 
 import media
+import notify
 import personal
 import store
 
@@ -232,6 +233,6 @@ def worker(complete, announce):
         if outcome["status"] == "done":
             announce(f"📝 Lecture notes ready: {lecture['title']}",
                      f"Notes saved, and {outcome['cards']} revision cards added. Open Lectures in the app to read them, "
-                     f"or say \"quiz me on {lecture['title'].lower()}\".")
+                     f"or say \"quiz me on {lecture['title'].lower()}\".", category=notify.LECTURES)
         else:
-            announce(f"📝 Couldn't do the lecture notes: {lecture['title']}", outcome["error"])
+            announce(f"📝 Couldn't do the lecture notes: {lecture['title']}", outcome["error"], category=notify.LECTURES)

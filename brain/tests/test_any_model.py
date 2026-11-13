@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import model_choice  # noqa: E402
 import models  # noqa: E402
 
 DOWNLOADED = [
@@ -56,13 +58,13 @@ class ChosenModel(unittest.TestCase):
 
     def test_another_model_is_loaded_briefly_and_the_main_one_comes_back(self):
         config = {"model": "qwen3:14b", "keep_alive": -1}
-        with unittest.mock.patch.object(brain, "schedule_main_reload") as reload:
+        with unittest.mock.patch.object(model_choice, "schedule_main_reload") as reload:
             other = brain.use_requested_model(config, "arty/qwen2.5:72b", any_installed=True)
         self.assertTrue(other)
-        self.assertEqual((config["model"], config["keep_alive"]), ("qwen2.5:72b", brain.OTHER_MODEL_KEEP_ALIVE))
+        self.assertEqual((config["model"], config["keep_alive"]), ("qwen2.5:72b", model_choice.OTHER_MODEL_KEEP_ALIVE))
         reload.assert_called_once()
         config = {"model": "qwen3:14b", "keep_alive": -1}
-        with unittest.mock.patch.object(brain, "schedule_main_reload") as reload:
+        with unittest.mock.patch.object(model_choice, "schedule_main_reload") as reload:
             self.assertFalse(brain.use_requested_model(config, "arty/qwen3:14b", any_installed=True))
         self.assertEqual(config["keep_alive"], -1)
         reload.assert_not_called()
@@ -84,14 +86,14 @@ class ListingEverything(Server):
         return [entry["id"] for entry in json.loads(body)["data"]]
 
     def test_the_usual_list_is_unchanged(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value={"model": "qwen3:14b"}), \
+        with unittest.mock.patch.object(connections, "load_config", return_value={"model": "qwen3:14b"}), \
                 unittest.mock.patch.object(models, "solo_models", return_value=[]):
             listed = self.ids("/v1/models")
         self.assertIn("arty/qwen3:14b", listed)
         self.assertNotIn("arty/qwen2.5:72b", listed)
 
     def test_asking_for_all_lists_every_downloaded_chat_model(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value={"coding_model": "qwen2.5:72b"}):
+        with unittest.mock.patch.object(connections, "load_config", return_value={"coding_model": "qwen2.5:72b"}):
             status, body = self.request("GET", "/v1/models?all=1")
         listed = {entry["id"]: entry for entry in json.loads(body)["data"]}
         self.assertEqual(status, 200)
@@ -101,14 +103,14 @@ class ListingEverything(Server):
         self.assertTrue(listed["arty/qwen2.5:72b"]["coding"])
 
     def test_the_full_list_says_how_much_context_each_model_gets(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value={"options": {"num_ctx": 24576}}):
+        with unittest.mock.patch.object(connections, "load_config", return_value={"options": {"num_ctx": 24576}}):
             status, body = self.request("GET", "/v1/models?all=1")
         self.assertEqual(status, 200)
         self.assertEqual({entry["context_tokens"] for entry in json.loads(body)["data"]}, {24576})
 
     def test_the_full_list_says_how_long_an_agent_reply_can_be(self):
         config = {"options": {"num_ctx": 24576, "num_predict": 2048}, "agent_options": {"num_predict": 4096}}
-        with unittest.mock.patch.object(brain, "load_config", return_value=config):
+        with unittest.mock.patch.object(connections, "load_config", return_value=config):
             status, body = self.request("GET", "/v1/models?all=1")
         self.assertEqual(status, 200)
         self.assertEqual({entry["reply_tokens"] for entry in json.loads(body)["data"]}, {4096})

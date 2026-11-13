@@ -16,6 +16,8 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import background_tasks  # noqa: E402
+import connections  # noqa: E402
 import policy  # noqa: E402
 
 RESTART = "restarting CT 103 games"
@@ -82,8 +84,8 @@ class SelfHealApprovals(unittest.TestCase):
             return diagnose_result if name == "homelab__diagnose" else "Restarted CT 103."
 
         state = {"messages": [], "context": {}}
-        with unittest.mock.patch.object(brain.hub, "call", call):
-            brain.apply_decision(state, SELF_HEAL, "approve", "")
+        with unittest.mock.patch.object(connections.hub, "call", call):
+            background_tasks.apply_decision(state, SELF_HEAL, "approve", "")
         return calls, state["messages"][-1]["content"]
 
     def test_still_broken_runs_the_approved_fix(self):
@@ -111,8 +113,8 @@ class SelfHealApprovals(unittest.TestCase):
         calls = []
         state = {"messages": [], "context": {}}
         waiting = {key: value for key, value in SELF_HEAL.items() if key != "recheck"}
-        with unittest.mock.patch.object(brain.hub, "call", lambda name, arguments: calls.append(name) or "done"):
-            brain.apply_decision(state, waiting, "approve", "")
+        with unittest.mock.patch.object(connections.hub, "call", lambda name, arguments: calls.append(name) or "done"):
+            background_tasks.apply_decision(state, waiting, "approve", "")
         self.assertEqual(calls, ["homelab__restart_guest"])
 
 

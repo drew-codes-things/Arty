@@ -23,7 +23,7 @@ class ChosenChecks(unittest.TestCase):
         self.assertEqual(safety.check(WEAPON, kinds=("weapons",))[0], "weapons")
 
     def test_the_default_list_names_every_check_in_order(self):
-        self.assertEqual(safety.ALL_CHECKS, ("self_harm", "weapons", "bot_check"))
+        self.assertEqual(safety.ALL_CHECKS, ("self_harm", "weapons", "bot_check", "scam"))
 
 
 if __name__ == "__main__":

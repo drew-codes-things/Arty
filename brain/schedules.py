@@ -70,9 +70,85 @@ def set_reminder(parts: tuple[str, str], asked_for_a_chat_app: bool = False) -> 
             f"It'll come to Updates on your phone and the desktop app.{elsewhere}")
 
 
+CANCEL_REMINDER = re.compile(
+    r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:(?:please|can you|could you|would you)\s+)*"
+    r"(?:cancel|delete|remove|stop|turn off|get rid of|scrap|drop)\s+(?:the\s+|my\s+|that\s+|this\s+)?(?:(?P<before>.+?)\s+)?"
+    r"(?P<kind>reminders?|alarms?|scheduled (?:jobs?|tasks?))(?:\s+(?:to|about|for)\s+(?P<after>.+?))?\W*$",
+    re.IGNORECASE | re.DOTALL)
+EVERY_ONE = {"all", "every", "everything"}
+NAME_FILLER = {"the", "my", "a", "an", "to", "about", "for", "that", "this", "one", "me", "i", "set", "please", "of", "them",
+               "those", "these", "any", "your", "us", "it", "send", "sending", "give", "giving", "keep", "again", "anymore",
+               "now"} | EVERY_ONE
+
+
+def schedule_line(row: dict) -> str:
+    return f"#{row['id']} {row['title']} ({row['description']})"
+
+
+def active_listing(rows: list[dict]) -> str:
+    return "; ".join(schedule_line(row) for row in rows) if rows else "nothing is scheduled"
+
+
+def name_words(text: str) -> set[str]:
+    return {word for word in re.findall(r"[a-z0-9']+", text.lower()) if word not in NAME_FILLER}
+
+
+def is_reminder(row: dict) -> bool:
+    return bool(row.get("message"))
+
+
+def schedule_words(row: dict) -> set[str]:
+    return name_words(" ".join(str(row.get(key) or "") for key in ("title", "message", "instructions")))
+
+
+def named_in_full(row: dict, wanted: set[str]) -> bool:
+    title_words = name_words(str(row.get("title") or ""))
+    return bool(title_words) and title_words <= wanted
+
+
+def cancellable(active: list[dict], asked_for_reminders: bool, wanted: set[str]) -> list[dict]:
+    if not asked_for_reminders:
+        return active
+    return [row for row in active if is_reminder(row) or named_in_full(row, wanted)]
+
+
+def cancel_by_name(said: str) -> str | None:
+    asked = CANCEL_REMINDER.match(said or "")
+    if not asked:
+        return None
+    named = " ".join(part for part in (asked.group("before"), asked.group("after")) if part)
+    wanted = name_words(named)
+    asks_for_every_one = bool(EVERY_ONE & set(re.findall(r"[a-z0-9']+", named.lower())))
+    if not wanted and not asks_for_every_one:
+        return None
+    active = store.list_schedules()
+    asked_for_reminders = not asked.group("kind").lower().startswith("scheduled")
+    matching = [row for row in cancellable(active, asked_for_reminders, wanted) if wanted <= schedule_words(row)]
+    if not matching and not wanted:
+        return f"There are no active reminders to cancel. Active: {active_listing(active)}."
+    if not matching:
+        return f"I couldn't find an active reminder about {named.strip()}, so nothing was cancelled. Active: {active_listing(active)}."
+    if asks_for_every_one:
+        return f"Which ones? These match: {active_listing(matching)}. Tell me which to cancel."
+    if len(matching) > 1:
+        return f"Which one? These match: {active_listing(matching)}. Tell me which to cancel."
+    row = matching[0]
+    store.update_schedule(row["id"], enabled=0, next_run=None)
+    log.info("cancelled schedule %s by name", row["id"])
+    return f"Cancelled: {row['title']} ({row['description']})."
+
+
+def cancel_active(schedule_id: int) -> str:
+    active = store.list_schedules()
+    if not any(row["id"] == schedule_id for row in active):
+        return f"No active scheduled job #{schedule_id}, so nothing was cancelled. Active: {active_listing(active)}."
+    store.update_schedule(schedule_id, enabled=0, next_run=None)
+    return "Cancelled."
+
+
 def send_reminder(schedule: dict, now: datetime):
     try:
-        notify.send("⏰ Reminder", reminder_wording(schedule["message"]))
+        notify.send("⏰ Reminder", reminder_wording(schedule["message"]), category=notify.REMINDERS)
     except Exception:
         attempts = (schedule.get("attempts") or 0) + 1
         if schedule["cron"] or attempts >= REMINDER_MAX_ATTEMPTS:
@@ -99,6 +175,6 @@ def due_schedules_now(now: datetime) -> list[dict]:
 
 def send_calendar_and_deadline_reminders():
     for event in calendar_feed.due_reminders():
-        notify.send("📅 Coming up", calendar_feed.reminder_text(event))
+        notify.send("📅 Coming up", calendar_feed.reminder_text(event), category=notify.CALENDAR)
     for message in personal.due_deadline_reminders():
-        notify.send("⏰ Deadline", message)
+        notify.send("⏰ Deadline", message, category=notify.REMINDERS)

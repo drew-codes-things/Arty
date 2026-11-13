@@ -1,6 +1,6 @@
 {
   "name": "arty",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Arty on your desktop: talk to it, and let it use your computer",
   "main": "main.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "appimage": "electron-builder --linux AppImage",
     "installer": "electron-builder --win nsis --x64"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {},
   "devDependencies": {
     "electron": "^44.2.0",

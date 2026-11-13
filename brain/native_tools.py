@@ -86,8 +86,10 @@ NATIVE_TOOLS = {
         ["event_id"]),
     "weather": _tool(
         "weather",
-        "The weather for the user's home town (set in brain.json): now, today, or the next few days.",
-        {"days": {"type": "integer", "description": "1 = today (default), up to 7"}},
+        "The weather forecast for the user's home town (set in brain.json), or for another town or city: now, today, or the "
+        "next few days.",
+        {"days": {"type": "integer", "description": "1 = today (default), up to 7"},
+         "place": {"type": "string", "description": "a town or city other than the user's home; leave out for home"}},
         []),
     "week_recap": _tool(
         "week_recap",

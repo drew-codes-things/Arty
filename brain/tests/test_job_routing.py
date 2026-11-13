@@ -10,6 +10,8 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import model_choice  # noqa: E402
 import models  # noqa: E402
 from native_tools import NATIVE_TOOLS  # noqa: E402
 
@@ -72,34 +74,34 @@ class AgentModel(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_an_agent_asking_for_arty_gets_the_coding_model(self):
-        self.assertEqual(brain.agent_model(CONFIG, "Arty"), "arty/coder:9b")
-        self.assertEqual(brain.agent_model(CONFIG, ""), "arty/coder:9b")
+        self.assertEqual(model_choice.agent_model(CONFIG, "Arty"), "arty/coder:9b")
+        self.assertEqual(model_choice.agent_model(CONFIG, ""), "arty/coder:9b")
 
     def test_a_coding_model_that_is_not_downloaded_falls_back_to_the_main_model_and_says_so(self):
         with unittest.mock.patch.object(models, "installed", return_value=installed_named("qwen3:14b")), \
                 self.assertLogs("brain", level="WARNING") as logged:
-            self.assertEqual(brain.agent_model(CONFIG, "Arty"), "Arty")
+            self.assertEqual(model_choice.agent_model(CONFIG, "Arty"), "Arty")
         self.assertIn("coder:9b", "\n".join(logged.output))
 
     def test_an_agent_naming_a_model_that_is_gone_gets_the_coding_model_and_a_warning(self):
         with self.assertLogs("brain", level="WARNING") as logged:
-            self.assertEqual(brain.agent_model(CONFIG, "arty/qwen2.5-coder:14b"), "arty/coder:9b")
+            self.assertEqual(model_choice.agent_model(CONFIG, "arty/qwen2.5-coder:14b"), "arty/coder:9b")
         self.assertIn("qwen2.5-coder:14b", "\n".join(logged.output))
 
     def test_an_agent_naming_a_gone_model_with_no_coding_model_gets_the_main_model(self):
         with self.assertLogs("brain", level="WARNING"):
-            self.assertEqual(brain.agent_model({"model": "qwen3:14b"}, "arty/qwen2.5-coder:14b"), "Arty")
+            self.assertEqual(model_choice.agent_model({"model": "qwen3:14b"}, "arty/qwen2.5-coder:14b"), "Arty")
 
     def test_an_unreachable_ollama_falls_back_to_the_main_model(self):
         with unittest.mock.patch.object(models, "installed", side_effect=urllib.error.URLError("refused")), \
                 self.assertLogs("brain", level="WARNING"):
-            self.assertEqual(brain.agent_model(CONFIG, "Arty"), "Arty")
+            self.assertEqual(model_choice.agent_model(CONFIG, "Arty"), "Arty")
 
     def test_an_agent_that_names_a_model_keeps_it(self):
-        self.assertEqual(brain.agent_model(CONFIG, "arty/qwen3:14b"), "arty/qwen3:14b")
+        self.assertEqual(model_choice.agent_model(CONFIG, "arty/qwen3:14b"), "arty/qwen3:14b")
 
     def test_without_a_coding_model_the_request_is_unchanged(self):
-        self.assertEqual(brain.agent_model({"model": "qwen3:14b"}, "Arty"), "Arty")
+        self.assertEqual(model_choice.agent_model({"model": "qwen3:14b"}, "Arty"), "Arty")
 
 
 class VisionFallback(unittest.TestCase):
@@ -107,7 +109,7 @@ class VisionFallback(unittest.TestCase):
         with unittest.mock.patch.object(models, "installed", return_value=installed), \
                 unittest.mock.patch.object(models, "arty_models", return_value=["qwen3:14b", "twin:9b"]), \
                 unittest.mock.patch.object(models, "solo_models", return_value=["other:9b"]), \
-                unittest.mock.patch.object(brain, "load_config", return_value={"vision_model": configured}):
+                unittest.mock.patch.object(connections, "load_config", return_value={"vision_model": configured}):
             return brain.vision_model()["name"]
 
     def test_a_missing_vision_model_falls_back_only_to_an_arty_model(self):

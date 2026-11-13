@@ -17,6 +17,9 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import connections  # noqa: E402
+import honesty  # noqa: E402
 import reply_rules  # noqa: E402
 import tool_guide  # noqa: E402
 import written_calls  # noqa: E402
@@ -86,14 +89,14 @@ class FakeOllama:
 def run_agent(ollama, messages, hub=None, client_tools=()):
     hub = hub or FakeHub()
     state = {"messages": messages, "context": {}}
-    with unittest.mock.patch.object(brain, "hub", hub), \
-            unittest.mock.patch.object(brain, "http_json", side_effect=ollama), \
+    with unittest.mock.patch.object(connections, "hub", hub), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
             unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
-            unittest.mock.patch.object(brain, "system_prompt", return_value=""), \
-            unittest.mock.patch.object(brain, "current_context", return_value=""), \
+            unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
+            unittest.mock.patch.object(agent_loop, "current_context", return_value=""), \
             unittest.mock.patch.object(brain.policy, "select_tools", side_effect=lambda tools, *args, **kwargs: tools):
-        outcome = brain.run_agent({"model": "m", "approval": RULES}, state, client_tools=list(client_tools))
+        outcome = brain.run_agent({"model": "m", "approval": RULES}, state, run=brain.AgentRun(client_tools=list(client_tools)))
     return outcome, hub
 
 
@@ -197,18 +200,18 @@ class ReadOnlyStepsDoNotBackAClaim(unittest.TestCase):
     def test_the_claim_check_runs_after_only_look_only_steps(self):
         for used in (["chrome_read"], ["chrome_tabs"], ["read_clipboard"], ["chrome_find", "chrome_scroll"],
                      ["computer_look"], ["use_tools", "chrome_look"]):
-            with unittest.mock.patch.object(brain, "false_claims", return_value=[]) as checked:
+            with unittest.mock.patch.object(honesty, "false_claims", return_value=[]) as checked:
                 brain.be_honest(CLAIM, used, [], request="play lofi on youtube")
             checked.assert_called_once()
 
     def test_an_acting_step_still_backs_the_reply(self):
-        with unittest.mock.patch.object(brain, "false_claims", return_value=[]) as checked:
+        with unittest.mock.patch.object(honesty, "false_claims", return_value=[]) as checked:
             brain.be_honest(CLAIM, ["chrome_tabs", "chrome_open"], [], request="play lofi on youtube")
         checked.assert_not_called()
 
     def test_an_unbacked_claim_after_a_tab_list_is_corrected(self):
         claim = [{"text": CLAIM, "correction": "I haven't opened YouTube yet."}]
-        with unittest.mock.patch.object(brain, "false_claims", return_value=claim):
+        with unittest.mock.patch.object(honesty, "false_claims", return_value=claim):
             self.assertEqual(brain.be_honest(CLAIM, ["chrome_tabs"], [], request="play lofi on youtube"),
                              "I haven't opened YouTube yet.")
 
@@ -221,9 +224,9 @@ class AClaimAfterOnlyATabList(unittest.TestCase):
         conversation = [*asked("search YouTube for lofi and play the first result"),
                         *client_step("chrome_tabs", "Browser tabs (* is the one in front):\n* tab 3: News")]
         claim = [{"text": CLAIM, "correction": "I haven't opened YouTube yet."}]
-        with unittest.mock.patch.object(brain, "http_json", side_effect=TimedOllama(answer(CLAIM))), \
+        with unittest.mock.patch.object(connections, "http_json", side_effect=TimedOllama(answer(CLAIM))), \
                 unittest.mock.patch.object(brain, "be_honest", side_effect=CHECK_CLAIMS), \
-                unittest.mock.patch.object(brain, "false_claims", return_value=claim):
+                unittest.mock.patch.object(honesty, "false_claims", return_value=claim):
             reply = brain.run_turn(conversation, "Arty", client_tools=[tool("chrome_tabs")])[0]
         self.assertEqual(reply, "I haven't opened YouTube yet.")
 
@@ -233,7 +236,7 @@ class TheFallbackSkipIsOnlyForTheBrainsOwnWords(unittest.TestCase):
                 "old drafts.")
 
     def test_a_model_reply_with_the_fallbacks_first_words_is_still_checked(self):
-        with unittest.mock.patch.object(brain, "false_claims", return_value=[]) as checked:
+        with unittest.mock.patch.object(honesty, "false_claims", return_value=[]) as checked:
             brain.be_honest(self.PREFIXED, [], [], request="email my landlord")
         checked.assert_called_once()
 
@@ -284,7 +287,7 @@ class ClientNotesOnTheUsersMessage(unittest.TestCase):
     def declined_kind(self, text, client=""):
         with unittest.mock.patch.object(brain, "archive_turn"), \
                 unittest.mock.patch.object(brain, "local_addon", None), \
-                unittest.mock.patch.object(brain, "load_config", return_value={"model": "m"}), \
+                unittest.mock.patch.object(connections, "load_config", return_value={"model": "m"}), \
                 unittest.mock.patch.object(brain, "use_requested_model"), \
                 unittest.mock.patch.object(brain.desktop_look, "user_active"):
             _, used, _, _ = brain.run_turn([{"role": "user", "content": text}], client=client)

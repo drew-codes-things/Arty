@@ -12,6 +12,8 @@ from test_any_model import downloaded  # noqa: E402
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import agent_turns  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 SHIPPED = Path(__file__).resolve().parents[1] / "brain.json"
@@ -87,14 +89,15 @@ class SamplingOnTurns(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.config = {**CONFIG, **turn_config(QWEN), "conversations_dir": folder.name}
         patches = [
-            unittest.mock.patch.object(brain, "load_config", side_effect=lambda: json.loads(json.dumps(self.config))),
-            unittest.mock.patch.object(brain.hub, "refresh"),
-            unittest.mock.patch.object(brain.hub, "tools", []),
-            unittest.mock.patch.object(brain.hub, "routes", {}),
+            unittest.mock.patch.object(connections, "load_config", side_effect=lambda: json.loads(json.dumps(self.config))),
+            unittest.mock.patch.object(connections.hub, "refresh"),
+            unittest.mock.patch.object(connections.hub, "tools", []),
+            unittest.mock.patch.object(connections.hub, "routes", {}),
             unittest.mock.patch.object(brain, "archive_turn"),
             unittest.mock.patch.object(brain, "extract_memories"),
             unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)),
             unittest.mock.patch.object(brain, "be_honest", side_effect=lambda text, *_: text),
+            unittest.mock.patch.object(agent_turns, "be_honest", side_effect=lambda text, *_: text),
             unittest.mock.patch.object(models, "find", return_value={"name": QWEN, "billions": 14.8, "tools": True,
                                                                         "vision": False, "embedding": False, "thinking": True}),
         ]
@@ -105,7 +108,7 @@ class SamplingOnTurns(unittest.TestCase):
     def options(self, text, agent=True):
         ollama = FakeOllama()
         messages = [{"role": "system", "content": CLIENT_SYSTEM}, {"role": "user", "content": text}]
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=agent)
         return ollama.bodies[0]["options"]
 
@@ -129,7 +132,7 @@ class SamplingInTheModelList(Server):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def test_each_model_lists_the_sampling_agent_turns_use(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value=turn_config(QWEN)):
+        with unittest.mock.patch.object(connections, "load_config", return_value=turn_config(QWEN)):
             status, body = self.request("GET", "/v1/models?all=1")
         self.assertEqual(status, 200)
         listed = {entry["model"]: entry["agent_sampling"] for entry in json.loads(body)["data"]}

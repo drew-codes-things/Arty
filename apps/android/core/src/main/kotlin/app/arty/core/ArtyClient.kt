@@ -91,14 +91,16 @@ class ArtyClient(
     fun announcements(after: Long, waitSeconds: Int = 0): AnnouncementFeed {
         val json = exchangeJson("GET", "/v1/announcements?after=$after&wait=$waitSeconds", (waitSeconds + 15) * 1000)
         val items = json.optJSONArray("announcements")?.objects().orEmpty().map {
+            val kind = it.optString("kind", "message")
             Announcement(
                 id = it.getLong("id"),
-                kind = it.optString("kind", "message"),
+                kind = kind,
                 title = it.optString("title"),
                 message = it.optString("message"),
                 taskId = if (it.isNull("task_id")) null else it.optLong("task_id"),
                 actions = it.optJSONArray("actions")?.strings().orEmpty(),
                 created = it.optDouble("created", 0.0),
+                category = NotificationCategory.fromWire(if (it.isNull("category")) null else it.optString("category"), kind),
             )
         }
         return AnnouncementFeed(items, json.optLong("last", after))

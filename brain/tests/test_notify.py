@@ -14,8 +14,8 @@ class Notify(unittest.TestCase):
     def test_every_notification_goes_to_the_apps_feed(self):
         received = []
         with mock.patch.object(notify, "listeners", [lambda *item: received.append(item)]):
-            result = notify.send("⏰ Reminder", "Stretch.", urgent=True)
-        self.assertEqual(received, [("⏰ Reminder", "Stretch.", [], True)])
+            result = notify.send("⏰ Reminder", "Stretch.", urgent=True, category=notify.REMINDERS)
+        self.assertEqual(received, [("⏰ Reminder", "Stretch.", [], True, "reminders")])
         self.assertEqual(result, "sent to Updates in the phone and desktop apps")
 
     def test_nothing_is_sent_anywhere_else(self):

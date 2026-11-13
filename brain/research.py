@@ -9,6 +9,9 @@ never got round.
 """
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as PageTimeout
 from urllib.parse import urlparse
 
 import quick
@@ -18,6 +21,11 @@ PAGE_CHARS = 5000         # enough for the substance of a page; more only slows 
 MIN_PAGE_CHARS = 400      # less than this is a cookie wall, an error page or a bot check
 SEARCH_RESULTS = 8
 NOTHING = "NOTHING RELEVANT"
+ENOUGH_SOURCES = 2
+PAGE_SECONDS = 25
+FACT_QUESTION = re.compile(r"^\W*(?:who|when|where|what year|which year|what date|how (?:long|much|many|old|far|big|tall|heavy|hot)|"
+                           r"(?:what|which) (?:is|was|are|were) the (?:name|date|price|cost|population|capital|height|length|"
+                           r"distance|weight|temperature|time))\b", re.IGNORECASE)
 
 # "use your desktop to find out ...", "on your computer, look up ...", "research this properly".
 REQUEST = re.compile(
@@ -245,28 +253,83 @@ def keep_real_citations(answer: str, sources: int) -> str:
     return CITATION.sub(lambda mark: mark.group(0) if 1 <= int(mark.group(1)) <= sources else "", answer)
 
 
-def gather(query: str, call_tool, complete, pages: int, browser: bool) -> tuple[str, list[str], list[str]]:
-    """(the search results, the sources read, a note on each) for one search."""
+def asks_a_plain_fact(query: str) -> bool:
+    return bool(FACT_QUESTION.search(query))
+
+
+BROWSER = threading.Lock()
+
+
+class PageReader:
+    def __init__(self, urls: list[str], call_tool, browser: bool):
+        self.urls, self.call_tool, self.browser = urls, call_tool, browser
+        self.opener = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research-pages")
+        self.ahead = {}
+        self.closed = threading.Event()
+
+    def open_in_browser(self, url: str) -> str:
+        with BROWSER:
+            if self.closed.is_set():
+                return ""
+            return read_page(url, self.call_tool, True)
+
+    def open_ahead(self, index: int):
+        if self.browser and index < len(self.urls) and index not in self.ahead:
+            self.ahead[index] = self.opener.submit(self.open_in_browser, self.urls[index])
+
+    def text(self, index: int, look_ahead: bool) -> str:
+        url = self.urls[index]
+        if not self.browser:
+            return read_page(url, self.call_tool, False)
+        self.open_ahead(index)
+        try:
+            text = self.ahead.pop(index).result(timeout=PAGE_SECONDS)
+        except PageTimeout:
+            log.warning("the browser took over %s s to open %s; reading the rest without it", PAGE_SECONDS, url)
+            self.browser = False
+            return read_page(url, self.call_tool, False)
+        if look_ahead:
+            self.open_ahead(index + 1)
+        return text
+
+    def close(self):
+        self.closed.set()
+        self.opener.shutdown(wait=False, cancel_futures=True)
+
+
+def gather(query: str, call_tool, complete, pages: int, browser: bool, quick_complete=None) -> tuple[str, list[str], list[str], str]:
+    quick_complete = quick_complete or complete
     search = call_tool("research__web_search", {"query": query, "results": SEARCH_RESULTS})
-    sources, notes = [], []
-    for url in result_urls(search):
-        if len(sources) >= pages:
-            break
-        text = read_page(url, call_tool, browser)
-        if not text:
-            continue
-        if not browser:  # quick: the excerpt itself is the note, so there's one model call in all
+    sources, notes, verdict = [], [], ""
+    reader = PageReader(result_urls(search), call_tool, browser)
+    stops_early = browser and asks_a_plain_fact(query)
+    try:
+        for index, url in enumerate(reader.urls):
+            if len(sources) >= pages:
+                break
+            text = reader.text(index, look_ahead=len(sources) + 1 < pages)
+            if not text:
+                continue
+            if not browser:  # quick: the excerpt itself is the note, so there's one model call in all
+                sources.append(url)
+                notes.append(f"[{len(sources)}] ({url})\n{relevant_excerpt(text, query, QUICK_PAGE_CHARS)}")
+                continue
+            noted = quick_complete(PAGE_PROMPT.format(question=query, url=url, text=text, nothing=NOTHING)).strip()
+            if not noted or NOTHING in noted[:len(NOTHING) + 5]:
+                continue
             sources.append(url)
-            notes.append(f"[{len(sources)}] ({url})\n{relevant_excerpt(text, query, QUICK_PAGE_CHARS)}")
-            continue
-        noted = complete(PAGE_PROMPT.format(question=query, url=url, text=text, nothing=NOTHING)).strip()
-        if not noted or NOTHING in noted[:len(NOTHING) + 5]:
-            continue
-        sources.append(url)
-        notes.append(f"[{len(sources)}] ({url})\n{noted}")
+            notes.append(f"[{len(sources)}] ({url})\n{noted}")
+            if stops_early and len(sources) >= ENOUGH_SOURCES and len(sources) < pages:
+                checked, correction = check_premise(query, "\n\n".join(notes), quick_complete)
+                if checked == "fine":
+                    log.info("%d sources answer %r; not reading more", len(sources), query[:80])
+                    verdict = checked
+                    break
+    finally:
+        reader.close()
     if notes and not browser:  # the result snippets often hold the newest facts (a headline, a date)
         notes.append(f"(search result snippets)\n{search[:SNIPPET_CHARS]}")
-    return search, sources, notes
+    return search, sources, notes, verdict
 
 
 def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = True, classify=None) -> tuple[str, list[str]]:
@@ -277,15 +340,15 @@ def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = 
     classify = classify or complete
     query = query_from(question)
     used = ["research__web_search"]
-    search, sources, notes = gather(query, call_tool, complete, pages, browser)
+    search, sources, notes, verdict = gather(query, call_tool, complete, pages, browser, classify)
     if not notes:  # nothing readable: answer from the search results themselves
         if search.startswith(("search is unavailable", "No results")):
             return f"I couldn't research that: {search}", used
         notes = [f"[1] (search results)\n{search}"]
-    verdict, correction = check_premise(query, "\n\n".join(notes), classify)
+    verdict, correction = (verdict, "") if verdict else check_premise(query, "\n\n".join(notes), classify)
     if verdict == "missing" and (subject := subject_of(query, complete)):
         log.info("nothing answered %r; searching for its subject: %s", query[:80], subject)
-        _, more_sources, more_notes = gather(subject, call_tool, complete, pages, browser)
+        _, more_sources, more_notes, _ = gather(subject, call_tool, complete, pages, browser, classify)
         if more_notes:
             sources, notes = more_sources, more_notes
             verdict, correction = check_premise(query, "\n\n".join(notes), complete)

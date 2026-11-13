@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 import safety  # noqa: E402
 import store  # noqa: E402
@@ -20,7 +21,7 @@ CONFIG = {"model": "qwen3:14b"}
 class TasksAndSchedulesOverTheApi(Server):
     def setUp(self):
         super().setUp()
-        patcher = unittest.mock.patch.object(brain, "load_config", lambda: CONFIG)
+        patcher = unittest.mock.patch.object(connections, "load_config", lambda: CONFIG)
         patcher.start()
         self.addCleanup(patcher.stop)
 

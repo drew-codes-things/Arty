@@ -12,6 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_agent_mode import CLIENT_SYSTEM, READ_FILE, FakeOllama  # noqa: E402
 
 import brain  # noqa: E402
+import agent_turns  # noqa: E402
+import attachments  # noqa: E402
+import connections  # noqa: E402
+import honesty  # noqa: E402
+import model_choice  # noqa: E402
 import models  # noqa: E402
 
 WINDOW = 24576
@@ -47,21 +52,21 @@ class Residency(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.config = {**CONFIG, "conversations_dir": folder.name}
-        self.main_return = brain.MainModelReturn()
+        self.main_return = model_choice.MainModelReturn()
         self.reload = unittest.mock.Mock()
         self.ollama = FakeOllama()
         patches = [
-            unittest.mock.patch.object(brain, "load_config", side_effect=lambda: json.loads(json.dumps(self.config))),
-            unittest.mock.patch.object(brain, "main_model_return", self.main_return),
-            unittest.mock.patch.object(brain, "reload_main_model", self.reload),
-            unittest.mock.patch.object(brain, "http_json", side_effect=self.ollama),
-            unittest.mock.patch.object(brain.hub, "refresh"),
-            unittest.mock.patch.object(brain.hub, "tools", []),
-            unittest.mock.patch.object(brain.hub, "routes", {}),
+            unittest.mock.patch.object(connections, "load_config", side_effect=lambda: json.loads(json.dumps(self.config))),
+            unittest.mock.patch.object(model_choice, "main_model_return", self.main_return),
+            unittest.mock.patch.object(model_choice, "reload_main_model", self.reload),
+            unittest.mock.patch.object(connections, "http_json", side_effect=self.ollama),
+            unittest.mock.patch.object(connections.hub, "refresh"),
+            unittest.mock.patch.object(connections.hub, "tools", []),
+            unittest.mock.patch.object(connections.hub, "routes", {}),
             unittest.mock.patch.object(brain, "archive_turn"),
             unittest.mock.patch.object(brain, "extract_memories"),
             unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)),
-            unittest.mock.patch.object(brain, "be_honest", side_effect=lambda text, *_: text),
+            unittest.mock.patch.object(agent_turns, "be_honest", side_effect=lambda text, *_: text),
             unittest.mock.patch.object(models, "make_room", return_value=[]),
             unittest.mock.patch.object(models, "find", side_effect=found),
             unittest.mock.patch.object(models, "installed", return_value=INSTALLED),
@@ -82,16 +87,16 @@ class Residency(unittest.TestCase):
     def test_an_agent_step_keeps_the_coding_model_for_the_session(self):
         self.agent_step()
         self.assertEqual(self.ollama.bodies[0]["model"], CODER)
-        self.assertEqual(self.ollama.bodies[0]["keep_alive"], brain.AGENT_KEEP_ALIVE)
+        self.assertEqual(self.ollama.bodies[0]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_the_main_model_comes_back_only_after_the_session_goes_quiet(self):
         self.agent_step()
-        self.assertGreater(self.seconds_until_main_returns(), brain.AGENT_QUIET_SECONDS - 5)
+        self.assertGreater(self.seconds_until_main_returns(), model_choice.AGENT_QUIET_SECONDS - 5)
         self.assertIsNotNone(self.main_return.timer)
         self.reload.assert_not_called()
 
     def test_ollama_never_drops_the_coding_model_before_the_brain_brings_the_main_one_back(self):
-        self.assertGreater(keep_alive_minutes(brain.AGENT_KEEP_ALIVE) * 60, brain.AGENT_QUIET_SECONDS)
+        self.assertGreater(keep_alive_minutes(model_choice.AGENT_KEEP_ALIVE) * 60, model_choice.AGENT_QUIET_SECONDS)
 
     def test_each_new_step_pushes_the_return_back(self):
         self.agent_step()
@@ -101,7 +106,7 @@ class Residency(unittest.TestCase):
         self.assertGreater(self.main_return.due, first)
 
     def test_a_step_that_fails_still_lets_the_main_model_come_back(self):
-        with unittest.mock.patch.object(brain, "http_json", side_effect=OSError("runner gone")):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("runner gone")):
             with self.assertRaises(OSError):
                 self.agent_step()
         self.assertEqual(self.main_return.running, 0)
@@ -118,21 +123,21 @@ class Residency(unittest.TestCase):
 
     def test_a_shorter_return_never_cuts_a_session_short(self):
         self.main_return.hold(CODER)
-        self.main_return.release(self.config, brain.AGENT_QUIET_SECONDS)
+        self.main_return.release(self.config, model_choice.AGENT_QUIET_SECONDS)
         self.main_return.schedule(self.config, brain.VISION_MAIN_RETURN_SECONDS)
-        self.assertGreater(self.seconds_until_main_returns(), brain.AGENT_QUIET_SECONDS - 5)
+        self.assertGreater(self.seconds_until_main_returns(), model_choice.AGENT_QUIET_SECONDS - 5)
 
     def test_a_coding_chat_on_the_session_model_keeps_its_session_keep_alive(self):
         self.main_return.hold(CODER)
-        self.main_return.release(self.config, brain.AGENT_QUIET_SECONDS)
+        self.main_return.release(self.config, model_choice.AGENT_QUIET_SECONDS)
         config = dict(self.config)
         brain.use_requested_model(config, f"arty/{CODER}", False)
-        self.assertEqual(config["keep_alive"], brain.AGENT_KEEP_ALIVE)
+        self.assertEqual(config["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_a_coding_chat_without_a_session_still_lets_the_model_go_soon(self):
         config = dict(self.config)
         brain.use_requested_model(config, f"arty/{CODER}", False)
-        self.assertEqual(config["keep_alive"], brain.OTHER_MODEL_KEEP_ALIVE)
+        self.assertEqual(config["keep_alive"], model_choice.OTHER_MODEL_KEEP_ALIVE)
 
     def direct_vision(self):
         handler = object.__new__(brain.Handler)
@@ -141,10 +146,10 @@ class Residency(unittest.TestCase):
 
     def test_a_direct_picture_during_a_session_keeps_the_session_keep_alive(self):
         self.main_return.hold(CODER)
-        self.main_return.release(self.config, brain.AGENT_QUIET_SECONDS)
+        self.main_return.release(self.config, model_choice.AGENT_QUIET_SECONDS)
         self.direct_vision()
-        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], brain.AGENT_KEEP_ALIVE)
-        self.assertGreater(self.seconds_until_main_returns(), brain.AGENT_QUIET_SECONDS - 5)
+        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
+        self.assertGreater(self.seconds_until_main_returns(), model_choice.AGENT_QUIET_SECONDS - 5)
 
     def test_a_direct_picture_without_a_session_keeps_its_short_keep_alive(self):
         self.direct_vision()
@@ -152,15 +157,15 @@ class Residency(unittest.TestCase):
 
     def test_looking_at_an_attachment_during_a_session_does_not_unload_the_model(self):
         self.main_return.hold(CODER)
-        brain.look(["aW1n"], "what is it?")
-        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], brain.AGENT_KEEP_ALIVE)
+        attachments.look(["aW1n"], "what is it?")
+        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_handing_a_job_to_the_session_model_does_not_unload_it(self):
         self.main_return.hold(CODER)
         sent = []
         with unittest.mock.patch.object(models, "_ollama", side_effect=lambda path, body, timeout=30: sent.append(body) or {}):
             brain.run_native("ask_other_model", {"model": CODER, "prompt": "write a function"}, self.config, False, None)
-        self.assertEqual(sent[0]["keep_alive"], brain.AGENT_KEEP_ALIVE)
+        self.assertEqual(sent[0]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_handing_a_job_to_another_model_still_unloads_it_after(self):
         sent = []
@@ -174,8 +179,8 @@ class OneContextSize(unittest.TestCase):
         self.config = dict(CONFIG)
         self.bodies = []
         patches = [
-            unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(self.config)),
-            unittest.mock.patch.object(brain, "http_json", side_effect=self.record),
+            unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(self.config)),
+            unittest.mock.patch.object(connections, "http_json", side_effect=self.record),
             unittest.mock.patch.object(models, "make_room", return_value=[]),
             unittest.mock.patch.object(models, "find", side_effect=found),
             unittest.mock.patch.object(models, "installed", return_value=INSTALLED),
@@ -194,13 +199,13 @@ class OneContextSize(unittest.TestCase):
         return self.bodies[-1]["options"]["num_ctx"]
 
     def test_bringing_the_main_model_back_loads_it_at_the_chat_window(self):
-        brain.reload_main_model(self.config).join(5)
+        model_choice.reload_main_model(self.config).join(5)
         self.assertEqual(self.window_of_last_call(), WINDOW)
 
     def test_every_model_call_uses_the_same_window(self):
         calls = {
-            "look": lambda: brain.look(["aW1n"], "what is it?"),
-            "judge": lambda: brain.ask_judge("check", 20, CODER, brain.AGENT_KEEP_ALIVE),
+            "look": lambda: attachments.look(["aW1n"], "what is it?"),
+            "judge": lambda: honesty.ask_judge("check", 20, CODER, model_choice.AGENT_KEEP_ALIVE),
             "quiz": lambda: brain.judge_answer(self.config, "q", "a", "a"),
             "complete": lambda: brain.complete_text("write", json_mode=True),
             "addressed": lambda: brain.addressed_to_arty(self.config, "hello", []),
@@ -214,8 +219,8 @@ class OneContextSize(unittest.TestCase):
 
 class ReturnTimer(unittest.TestCase):
     def test_the_return_runs_once_after_the_last_hold_is_released(self):
-        main_return = brain.MainModelReturn()
-        with unittest.mock.patch.object(brain, "reload_main_model") as reload:
+        main_return = model_choice.MainModelReturn()
+        with unittest.mock.patch.object(model_choice, "reload_main_model") as reload:
             main_return.hold(CODER)
             main_return.hold(CODER)
             main_return.release(CONFIG, 0.05)
@@ -227,8 +232,8 @@ class ReturnTimer(unittest.TestCase):
         self.assertFalse(main_return.keeps(CODER))
 
     def test_holds_from_two_threads_are_counted(self):
-        main_return = brain.MainModelReturn()
-        with unittest.mock.patch.object(brain, "reload_main_model"):
+        main_return = model_choice.MainModelReturn()
+        with unittest.mock.patch.object(model_choice, "reload_main_model"):
             workers = [threading.Thread(target=lambda: (main_return.hold(CODER), main_return.release(CONFIG, 60)))
                        for _ in range(20)]
             for worker in workers:

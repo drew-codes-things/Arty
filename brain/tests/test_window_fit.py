@@ -9,6 +9,7 @@ from test_agent_mode import READ_FILE, FakeOllama  # noqa: E402
 from test_round_timings import offline_turns  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import window_fit  # noqa: E402
 
 WINDOW = 24576
@@ -53,10 +54,22 @@ class FittingMessages(unittest.TestCase):
         self.assertGreater(left_out, 0)
         self.assertEqual(sent[0], {"role": "system", "content": "be kind"})
         self.assertEqual(sent[1], {"role": "user", "content": window_fit.LEFT_OUT_NOTE})
-        self.assertEqual(sent[-1]["content"], "what should I cook tonight?")
+        self.assertTrue(sent[-1]["content"].startswith("what should I cook tonight?"))
         self.assertTrue(contains(sent, "reply 119:"))
         self.assertFalse(contains(sent, "question 0:"))
         self.assertEqual(len(sent), len(body["messages"]) - left_out + 1)
+
+    def test_the_newest_request_says_not_to_guess_at_what_was_left_out(self):
+        body = self.body([{"role": "system", "content": "be kind"}] + long_chat(120, newest="what was my locker number?"))
+        sent = window_fit.fit_to_window(CONFIG, body)[0]["messages"]
+        self.assertEqual(sent[-1]["content"], "what was my locker number?" + window_fit.LEFT_OUT_ASK)
+        self.assertIn("don't guess", window_fit.LEFT_OUT_ASK)
+        self.assertEqual(body["messages"][-1]["content"], "what was my locker number?")
+
+    def test_a_chat_that_fits_gets_no_left_out_note(self):
+        body = self.body(long_chat(2, newest="what was my locker number?"))
+        sent = window_fit.fit_to_window(CONFIG, body)[0]["messages"]
+        self.assertEqual(sent[-1]["content"], "what was my locker number?")
 
     def test_what_is_sent_leaves_the_reply_its_room(self):
         body = self.body([{"role": "system", "content": "be kind"}] + long_chat(120), num_predict=6144, tools=[READ_FILE])
@@ -75,7 +88,7 @@ class FittingMessages(unittest.TestCase):
         rounds = [message for index in range(80) for message in tool_round(index)]
         body = self.body([{"role": "system", "content": "work alone"}, {"role": "user", "content": "tidy the files"}] + rounds)
         sent = window_fit.fit_to_window(CONFIG, body)[0]["messages"]
-        self.assertEqual(sent[2]["content"], "tidy the files")
+        self.assertEqual(sent[2]["content"], "tidy the files" + window_fit.LEFT_OUT_ASK)
         for index, message in enumerate(sent):
             if message["role"] == "tool":
                 self.assertTrue(sent[index - 1].get("tool_calls") or sent[index - 1]["role"] == "tool")
@@ -86,7 +99,7 @@ class FittingMessages(unittest.TestCase):
         huge = "word " * 60000
         body = self.body([{"role": "system", "content": "be kind"}] + long_chat(2, newest=huge))
         sent = window_fit.fit_to_window(CONFIG, body)[0]["messages"]
-        self.assertEqual(sent[-1]["content"], huge)
+        self.assertEqual(sent[-1]["content"], huge + window_fit.LEFT_OUT_ASK)
         self.assertFalse(contains(sent, "question 0:"))
 
     def test_pictures_count_by_their_token_cost_not_their_encoded_size(self):
@@ -97,12 +110,12 @@ class FittingMessages(unittest.TestCase):
 class ChatTurnsFitTheWindow(unittest.TestCase):
     def setUp(self):
         offline_turns(self)
-        patched = {**brain.load_config(), "options": {"num_ctx": WINDOW, "num_predict": 2048}}
-        unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(patched)).start()
+        patched = {**connections.load_config(), "options": {"num_ctx": WINDOW, "num_predict": 2048}}
+        unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(patched)).start()
 
     def sent(self, messages, **turn):
         ollama = FakeOllama()
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             brain.run_turn(messages, "Arty", **turn)
         return ollama.bodies[0]
 

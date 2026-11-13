@@ -10,6 +10,7 @@ import devices  # noqa: E402
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import api_keys  # noqa: E402
 import store  # noqa: E402
 
 APP_KEY = "app-key-for-test"
@@ -73,7 +74,7 @@ class DeviceAdminNeedsTheMainKey(Server):
 
     def test_the_app_key_approves_and_revokes_too(self):
         app = {"Authorization": f"Bearer {APP_KEY}"}
-        with unittest.mock.patch.object(brain, "APP_KEY", APP_KEY):
+        with unittest.mock.patch.object(api_keys, "APP_KEY", APP_KEY):
             self.assertEqual(self.approve(self.started("phone")["user_code"], app, authorised=False), 200)
             self.device_key("laptop")
             status, _ = self.request("DELETE", f"/v1/devices/{self.device_id('laptop')}", headers=app, authorised=False)

@@ -165,11 +165,11 @@ class RunningHub(unittest.TestCase):
         os.environ["MCPO_API_KEY"] = KEY
         os.environ["HUB_URL"] = f"http://127.0.0.1:{self.port}"
         sys.path.insert(0, str(REPO / "brain"))
-        import brain
-        brain.HUB_URL = os.environ["HUB_URL"]
-        brain.HUB_KEY = KEY
-        brain.SERVERS = ["fake"]
-        hub = brain.ToolHub()
+        import connections
+        connections.HUB_URL = os.environ["HUB_URL"]
+        connections.HUB_KEY = KEY
+        connections.SERVERS = ["fake"]
+        hub = connections.ToolHub()
         hub.refresh()
         names = {tool["function"]["name"] for tool in hub.tools}
         self.assertIn("fake__stock", names)

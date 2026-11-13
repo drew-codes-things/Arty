@@ -11,6 +11,8 @@ from test_agent_mode import AGENT_HEADERS, CLIENT_SYSTEM, CONFIG, READ_FILE  # n
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import agent_turns  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 WARM = {"load_duration": 4_000_000, "prompt_eval_count": 9000, "prompt_eval_duration": 3_000_000_000,
@@ -52,14 +54,15 @@ def offline_turns(case):
     case.addCleanup(folder.cleanup)
     config = {**CONFIG, "conversations_dir": folder.name}
     patches = [
-        unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(config)),
-        unittest.mock.patch.object(brain.hub, "refresh"),
-        unittest.mock.patch.object(brain.hub, "tools", []),
-        unittest.mock.patch.object(brain.hub, "routes", {}),
+        unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(config)),
+        unittest.mock.patch.object(connections.hub, "refresh"),
+        unittest.mock.patch.object(connections.hub, "tools", []),
+        unittest.mock.patch.object(connections.hub, "routes", {}),
         unittest.mock.patch.object(brain, "archive_turn"),
         unittest.mock.patch.object(brain, "extract_memories"),
         unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)),
         unittest.mock.patch.object(brain, "be_honest", side_effect=lambda text, *_: text),
+        unittest.mock.patch.object(agent_turns, "be_honest", side_effect=lambda text, *_: text),
         unittest.mock.patch.object(models, "find", return_value=QWEN),
     ]
     for patch in patches:
@@ -73,7 +76,7 @@ class RoundTimings(unittest.TestCase):
 
     def rounds(self, *replies, agent=True):
         ollama = TimedOllama(*replies)
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             _, _, raw, _ = brain.run_turn(asked("what does main.py do?"), "Arty", client_tools=[READ_FILE], agent=agent)
         return brain.turn_rounds(raw)
 
@@ -81,7 +84,30 @@ class RoundTimings(unittest.TestCase):
         rounds = self.rounds(answer("It prints hello."))
         self.assertEqual(rounds, [{"model": "qwen3:14b", "load_duration": 4_000_000, "prompt_eval_count": 9000,
                                    "prompt_eval_duration": 3_000_000_000, "eval_count": 120,
-                                   "eval_duration": 2_500_000_000, "loaded_fresh": False}])
+                                   "eval_duration": 2_500_000_000, "loaded_fresh": False, "think": False}])
+
+    def test_each_round_says_whether_the_brain_asked_the_model_to_think(self):
+        for decided in (True, False):
+            with self.subTest(decided=decided), unittest.mock.patch("agent_loop.thinking_for", return_value=decided):
+                self.assertEqual([entry["think"] for entry in self.rounds(answer("", COLD), answer("It prints hello."))],
+                                 [decided, decided])
+
+    def test_the_thinking_decision_stays_with_the_job_after_command_output_and_after_compaction(self):
+        job = "Debug why the parser drops the last token, step by step."
+        shapes = ([job], [job, "(I ran `pytest -q` myself. Output:)\nwhy does this fail\n1 failed"],
+                  [f"The conversation was squeezed, so here is where it stands.\n\nSummary: read two files.\n\nThe request:\n{job}"])
+        decisions = []
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        thinking_config = {**CONFIG, "think": "auto", "conversations_dir": folder.name}
+        for texts in shapes:
+            ollama = TimedOllama(answer("Found it."))
+            messages = [{"role": "system", "content": CLIENT_SYSTEM}] + [{"role": "user", "content": text} for text in texts]
+            with unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+                    unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(thinking_config)):
+                _, _, raw, _ = brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=True)
+            decisions.append(brain.turn_rounds(raw)[0]["think"])
+        self.assertEqual(decisions, [True, True, True])
 
     def test_a_round_that_waited_for_a_load_is_marked_fresh(self):
         self.assertTrue(self.rounds(answer("It prints hello.", COLD))[0]["loaded_fresh"])
@@ -109,8 +135,8 @@ class RoundTimingsOverHttp(Server):
     def usage(self, headers, stream=False):
         ollama = TimedOllama(answer("", COLD), answer("It prints hello."))
         body = {"model": "Arty", "stream": stream, "messages": asked("what does main.py do?"), "tools": [READ_FILE]}
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama), \
-                unittest.mock.patch.object(brain, "stream_chat", side_effect=ollama.streamed):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+                unittest.mock.patch.object(connections, "stream_chat", side_effect=ollama.streamed):
             status, raw = self.request("POST", "/v1/chat/completions", headers=headers, body=body)
         self.assertEqual(status, 200)
         if not stream:

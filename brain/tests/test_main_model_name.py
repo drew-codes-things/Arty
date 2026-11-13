@@ -9,12 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 
 class TheMainModelIsCalledArty(Server):
     def test_the_model_list_names_the_main_model_arty(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value={"model": "qwen3:14b"}), \
+        with unittest.mock.patch.object(connections, "load_config", return_value={"model": "qwen3:14b"}), \
                 unittest.mock.patch.object(models, "find", return_value=None), \
                 unittest.mock.patch.object(models, "chat_models", return_value=[]), \
                 unittest.mock.patch.object(models, "solo_entries", return_value=[]):
@@ -25,7 +26,7 @@ class TheMainModelIsCalledArty(Server):
 
     def listed_arty(self, config):
         main = {"name": "qwen3:14b", "billions": 14.8, "thinking": True, "tools": True, "vision": False}
-        with unittest.mock.patch.object(brain, "load_config", return_value=config), \
+        with unittest.mock.patch.object(connections, "load_config", return_value=config), \
                 unittest.mock.patch.object(models, "find", return_value=main), \
                 unittest.mock.patch.object(models, "chat_models", return_value=[]), \
                 unittest.mock.patch.object(models, "solo_entries", return_value=[]):

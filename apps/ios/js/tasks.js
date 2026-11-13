@@ -1,8 +1,12 @@
 export const RESULT_PREVIEW_CHARS = 160;
 const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
+export function isWaitingForAnswer(task) {
+  return task.status === "waiting" && Boolean(task.waiting?.message);
+}
+
 export function taskActions(task) {
-  if (task.status === "waiting" && task.waiting?.message) {
+  if (isWaitingForAnswer(task)) {
     const answers = task.waiting.kind === "approval"
       ? [{ action: "approve", label: "Approve", primary: true }, { action: "deny", label: "Deny", primary: false }]
       : [{ action: "done", label: "Done", primary: true }];

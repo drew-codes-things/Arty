@@ -61,6 +61,7 @@
 
   --dur: .16s;
   --dur-rise: .24s;
+  --dur-question: 1s;
   --ease: cubic-bezier(.2, .7, .3, 1);
   --rise: 8px;
   --press-scale: .97;
@@ -353,6 +354,14 @@ h2 { letter-spacing: -.015em; font-weight: 600; }
 .ask button.allow { border-color: transparent; background: var(--accent-fill); color: var(--on-accent); }
 .ask button.allow:hover { background: var(--accent-fill-hover); }
 .ask.done { opacity: .55; }
+.ask.answer-waiting { position: relative; outline: 2px solid var(--accent); outline-offset: -1px; }
+.new-question {
+  position: absolute; top: var(--s-2); right: var(--s-2); padding: 2px var(--s-2); border-radius: var(--r-pill);
+  background: var(--accent-fill); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 600; pointer-events: none;
+  animation: new-question-flash var(--dur-question) var(--ease) both;
+}
+.ask button[aria-disabled="true"] { opacity: .45; cursor: default; }
+@keyframes new-question-flash { from { opacity: 0; transform: scale(.9); } 25% { opacity: 1; transform: none; } }
 
 .empty { margin: auto; padding: 0 var(--s-3); color: var(--faint); font-size: var(--fs-sm); text-align: center; animation: fade-in var(--dur-rise) var(--ease); }
 

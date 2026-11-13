@@ -13,6 +13,8 @@ from test_review_brain import Server  # noqa: E402
 from test_round_timings import asked, offline_turns  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import model_choice  # noqa: E402
 import keepalive  # noqa: E402
 import models  # noqa: E402
 
@@ -29,8 +31,8 @@ def ollama_refusal(message, status=400):
 
 def with_window(case):
     offline_turns(case)
-    patched = {**brain.load_config(), "options": {"num_ctx": WINDOW}}
-    unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(patched)).start()
+    patched = {**connections.load_config(), "options": {"num_ctx": WINDOW}}
+    unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(patched)).start()
 
 
 class RequestFields(unittest.TestCase):
@@ -39,7 +41,7 @@ class RequestFields(unittest.TestCase):
 
     def first_body(self, agent):
         ollama = FakeOllama()
-        with unittest.mock.patch.object(brain, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
             brain.run_turn(asked("what does main.py do?"), "Arty", client_tools=[READ_FILE], agent=agent)
         return ollama.bodies[0]
 
@@ -56,14 +58,14 @@ class RequestFields(unittest.TestCase):
     def test_every_load_asks_for_the_same_shift_setting_so_ollama_never_reloads_for_it(self):
         self.assertIs(models.for_runner({"options": {"num_ctx": WINDOW}}, {"model": "qwen3:14b"})["shift"], False)
         sent = []
-        with unittest.mock.patch.object(brain, "http_json", side_effect=lambda url, body=None, **_: sent.append(body) or {}), \
+        with unittest.mock.patch.object(connections, "http_json", side_effect=lambda url, body=None, **_: sent.append(body) or {}), \
                 unittest.mock.patch.object(models, "make_room", return_value=[]):
-            brain.reload_main_model(brain.load_config()).join(5)
+            model_choice.reload_main_model(connections.load_config()).join(5)
         self.assertIs(sent[0]["shift"], False)
 
     def test_a_solo_model_is_loaded_with_the_same_window_and_shift(self):
         sent = []
-        with unittest.mock.patch.object(brain, "http_json",
+        with unittest.mock.patch.object(connections, "http_json",
                                         side_effect=lambda url, body=None, **_: sent.append(body) or {"message": {"content": "hi"}}):
             answer = brain.solo_turn("solo-model:7b", [{"role": "user", "content": "hello"}])[0]
         self.assertEqual(answer, "hi")
@@ -78,7 +80,7 @@ class OverflowOverHttp(Server):
     def post(self, error, headers=AGENT_HEADERS, stream=False):
         body = {"model": "Arty", "stream": stream, "messages": asked("what does main.py do?"), "tools": [READ_FILE]}
         refuse = unittest.mock.Mock(side_effect=error)
-        with unittest.mock.patch.object(brain, "http_json", refuse), unittest.mock.patch.object(brain, "stream_chat", refuse):
+        with unittest.mock.patch.object(connections, "http_json", refuse), unittest.mock.patch.object(connections, "stream_chat", refuse):
             return self.request("POST", "/v1/chat/completions", headers=headers, body=body)
 
     def test_an_agent_conversation_longer_than_the_window_is_a_413_naming_the_window(self):

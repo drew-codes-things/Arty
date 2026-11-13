@@ -10,7 +10,7 @@ from reply_rules import TOOL_FAILED
 # Tools the brain may run by itself before the model answers (see look_up_first): read-only ones only.
 LOOKUP_TOOLS = {"homelab__proxmox_status", "homelab__service_status", "weather", "calendar_events", "deadlines_show",
                 "list_show", "quiz_progress", "week_recap", "research__web_search", "workspace__gmail_unread", "date_facts", "place_time",
-                "currency_facts", "workspace__look_at_desktop", "homelab__pufferpanel_servers"}
+                "currency_facts", "workspace__look_at_desktop", "homelab__pufferpanel_servers", "list_scheduled"}
 # In a lookup rule's arguments, this stands for the user's message (e.g. the web search query).
 MESSAGE_PLACEHOLDER = "{message}"
 # Polite padding that only makes a search query worse.
@@ -34,6 +34,25 @@ RUN_TOOLS = {"workspace__run_command", "workspace__read_terminal", "workspace__l
              "workspace__write_file", "workspace__edit_file"}
 WRITE_ONLY_NOTE = "\n\n(Reply with the code itself. Don't run anything or look around your computer for this.)"
 WRITE_AND_RUN_NOTE = "\n\n(Write it, then run it on your computer with run_command and show what it printed.)"
+HOW_TO_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:(?:please |can you |could you |would you )?(?:tell me |show me |explain )?"
+                            r"how (?:do|can|could|would|should) (?:i|we|one)|(?:(?:please |can you |could you |would you )?"
+                            r"(?:tell me |show me |explain )?)how to|what'?s the (?:best )?(?:command|way) to)\b", re.I)
+RUN_IT_FOR_ME = re.compile(r"\b(?:on your (?:computer|desktop|pc|vm)|try (?:it|this|that)|(?:run|execute|test) it|"
+                           r"check (?:it|that) works)\b", re.I)
+HOW_TO_NOTE = ("\n\n(They asked how to do it: explain how, with any commands in a code block. Don't run anything on your "
+               "computer for this.)")
+GIVEN_LINK = re.compile(r"https?://\S+", re.I)
+READ_LINK_REQUEST = re.compile(r"\b(read|summari[sz]e|summary|tl;?dr|what (?:is|does|'s)|tell me|explain|about|says?|key points)\b",
+                               re.I)
+READ_LINK_NOTE = "\n\n(The user gave a link: read it with {tool} before answering.)"
+
+
+def asks_how_to(text: str) -> bool:
+    return bool(HOW_TO_REQUEST.search(text)) and not RUN_IT_FOR_ME.search(text)
+
+
+def asks_to_read_a_link(text: str) -> bool:
+    return bool(GIVEN_LINK.search(text)) and bool(READ_LINK_REQUEST.search(GIVEN_LINK.sub(" ", text)))
 
 
 def thinking_for(config, request_text="", writing_job=False) -> bool:

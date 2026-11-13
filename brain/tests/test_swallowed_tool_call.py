@@ -10,6 +10,8 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import connections  # noqa: E402
 import written_calls  # noqa: E402
 
 CHROME_OPEN = {"type": "function", "function": {"name": "chrome_open", "description": "Open a page in the user's browser.",
@@ -73,13 +75,13 @@ OPEN_YOUTUBE = calls("chrome_open", {"url": "https://www.youtube.com/results?sea
 def run_turn(ollama, hub=None, client_tools=(CHROME_OPEN,), request=PLAY_REQUEST, steps_taken=()):
     hub = hub or FakeHub()
     state = {"messages": [{"role": "user", "content": request}, *steps_taken], "context": {}}
-    with unittest.mock.patch.object(brain, "hub", hub), \
-            unittest.mock.patch.object(brain, "http_json", side_effect=ollama), \
+    with unittest.mock.patch.object(connections, "hub", hub), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
             unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
-            unittest.mock.patch.object(brain, "system_prompt", return_value=""), \
-            unittest.mock.patch.object(brain, "current_context", return_value=""):
-        outcome = brain.run_agent({"model": "m"}, state, client_tools=list(client_tools))
+            unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
+            unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
+        outcome = brain.run_agent({"model": "m"}, state, run=brain.AgentRun(client_tools=list(client_tools)))
     return outcome, hub
 
 

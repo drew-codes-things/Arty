@@ -1,7 +1,7 @@
 # Who Can Run Arty's Tools
 
 This page says who the brain trusts, what a caller can make it do, and what it checks anyway. It describes the code in
-`brain/brain.py` as it is now.
+`brain/` (`brain.py`, `api_keys.py`, `agent_loop.py` and `policy.py`) as it is now.
 
 ## The Short Version
 

@@ -70,6 +70,7 @@
 
   --dur: .16s;
   --dur-rise: .24s;
+  --dur-question: 1s;
   --ease: cubic-bezier(.2, .7, .3, 1);
   --rise: rise-in var(--dur-rise) var(--ease);
   --press-scale: .97;
@@ -312,6 +313,14 @@ input:disabled, textarea:disabled { opacity: .5; }
 .card .toggle { margin-top: var(--s-2); border-top: 1px solid var(--line); border-bottom: 0; padding-bottom: var(--s-1); }
 .card .row .link-button { margin-left: calc(-1 * var(--s-3)); }
 .waiting-message { margin-top: var(--s-1); color: var(--warn); }
+.card.answer-waiting { position: relative; outline: 2px solid var(--accent-edge); outline-offset: -1px; }
+.new-question {
+  position: absolute; top: var(--s-2); right: var(--s-2); padding: 2px var(--s-2); border-radius: var(--r-pill);
+  background: var(--accent-fill); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 600; pointer-events: none;
+  animation: new-question-flash var(--dur-question) var(--ease) both;
+}
+.answer-waiting .button[aria-disabled="true"] { opacity: .45; cursor: default; }
+@keyframes new-question-flash { from { opacity: 0; transform: scale(.9); } 25% { opacity: 1; transform: none; } }
 .form { display: grid; gap: var(--s-3); margin-bottom: var(--s-4); padding: var(--s-4); border: 1px solid var(--line); border-radius: var(--r-lg); }
 .form label { display: grid; gap: var(--s-2); color: var(--text); font-size: var(--fs-sm); font-weight: 500; }
 .notice { margin: var(--s-2) 0 var(--s-4); color: var(--muted); font-size: var(--fs-md); }
@@ -340,6 +349,12 @@ input:disabled, textarea:disabled { opacity: .5; }
 .toggle input:focus { box-shadow: none; }
 .toggle input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .toggle input:disabled { opacity: .45; }
+.toggle.described { align-items: flex-start; }
+.toggle.described input { margin-top: 2px; }
+.toggle-text { display: grid; gap: 2px; min-width: 0; }
+.toggle-text small { color: var(--muted); font-size: var(--fs-sm); }
+.toggle-text .switch-warning { color: var(--warn); }
+.toggle-text .switch-warning[hidden] { display: none; }
 .view > .button { width: 100%; margin-bottom: var(--s-2); }
 .memory-entity h3 { font-size: var(--fs-lg); }
 .memory-entity ul { margin: var(--s-2) 0 0; padding-left: 1.25em; color: var(--muted); font-size: var(--fs-md); }

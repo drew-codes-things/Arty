@@ -12,6 +12,8 @@ from test_agent_mode import AGENT_HEADERS, CLIENT_SYSTEM, CONFIG, READ_FILE, WEB
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import agent_turns  # noqa: E402
+import connections  # noqa: E402
 import keepalive  # noqa: E402
 import models  # noqa: E402
 
@@ -40,7 +42,7 @@ class ReadingTheModel(unittest.TestCase):
                                       {"content": "hello."}))
         thought, written = [], []
         with unittest.mock.patch.object(brain.urllib.request, "urlopen", side_effect=model):
-            raw = brain.stream_chat({"model": "m", "messages": []}, written.append, on_thinking=thought.append)
+            raw = connections.stream_chat({"model": "m", "messages": []}, written.append, on_thinking=thought.append)
         self.assertEqual(thought, ["The user ", "wants a file."])
         self.assertEqual(written, ["It prints ", "hello."])
         self.assertEqual(raw["message"], {"role": "assistant", "content": "It prints hello.", "tool_calls": []})
@@ -49,7 +51,7 @@ class ReadingTheModel(unittest.TestCase):
         model = FakeModel(model_lines({"thinking": "hidden"}, {"content": "hello"}))
         written = []
         with unittest.mock.patch.object(brain.urllib.request, "urlopen", side_effect=model):
-            raw = brain.stream_chat({"model": "m", "messages": []}, written.append)
+            raw = connections.stream_chat({"model": "m", "messages": []}, written.append)
         self.assertEqual(written, ["hello"])
         self.assertNotIn("hidden", json.dumps(raw))
 
@@ -61,13 +63,13 @@ class AgentTurnsThatThink(unittest.TestCase):
         config = {**CONFIG, "conversations_dir": folder.name}
         found = {"name": "qwen3:14b", "billions": 14.8, "tools": True, "vision": False, "embedding": False, "thinking": True}
         for patch in [
-            unittest.mock.patch.object(brain, "load_config", side_effect=lambda: dict(config)),
-            unittest.mock.patch.object(brain.hub, "refresh"),
-            unittest.mock.patch.object(brain.hub, "tools", [WEB_SEARCH]),
-            unittest.mock.patch.object(brain.hub, "routes", {"research__web_search": "research"}),
+            unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(config)),
+            unittest.mock.patch.object(connections.hub, "refresh"),
+            unittest.mock.patch.object(connections.hub, "tools", [WEB_SEARCH]),
+            unittest.mock.patch.object(connections.hub, "routes", {"research__web_search": "research"}),
             unittest.mock.patch.object(brain, "archive_turn"),
             unittest.mock.patch.object(brain, "extract_memories"),
-            unittest.mock.patch.object(brain, "be_honest", side_effect=lambda answer, *rest: answer),
+            unittest.mock.patch.object(agent_turns, "be_honest", side_effect=lambda answer, *rest: answer),
             unittest.mock.patch.object(models, "find", return_value=found),
         ]:
             patch.start()

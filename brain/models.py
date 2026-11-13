@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
+import notify
 from settings import CONFIG_FILE, OLLAMA_URL
 
 CACHE_SECONDS = 60
@@ -331,15 +332,15 @@ def _pull_then_switch(name: str, previous: str, notify_send):
         _ollama("/api/pull", {"model": name, "stream": False}, timeout=PULL_TIMEOUT_SECONDS)
         model = find(name) or (installed(refresh=True) and find(name))
         if not model:
-            notify_send("Arty: model download failed", f"{name} didn't install.")
+            notify_send("Arty: model download failed", f"{name} didn't install.", category=notify.ARTY)
         elif not usable(model):
-            notify_send("Arty: model not usable", f"{name} downloaded, but I'm staying on {previous}: " + TOOLLESS_REFUSAL.format(name=name))
+            notify_send("Arty: model not usable", f"{name} downloaded, but I'm staying on {previous}: " + TOOLLESS_REFUSAL.format(name=name), category=notify.ARTY)
         else:
             _write_main_model(model["name"])
-            notify_send("Arty: model switched", f"Now running on {describe(model)} (was {previous}).")
+            notify_send("Arty: model switched", f"Now running on {describe(model)} (was {previous}).", category=notify.ARTY)
     except (urllib.error.URLError, TimeoutError) as error:
         log.error("pull of %s failed: %s", name, error)
-        notify_send("Arty: model download failed", f"{name}: {error}")
+        notify_send("Arty: model download failed", f"{name}: {error}", category=notify.ARTY)
     finally:
         _pulls.discard(name)
 
@@ -361,6 +362,16 @@ def vram_budget(config: dict) -> int:
 def _size_on_card(name: str, budget_bytes: int) -> int:
     found = next((m for m in installed() if m["name"] == name), None)
     return int(found["bytes"] * LOAD_OVERHEAD) if found and found.get("bytes") else budget_bytes
+
+
+def is_loaded(name: str) -> bool:
+    try:
+        running = _ollama("/api/ps").get("models", [])
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        log.warning("couldn't ask Ollama which models are loaded: %s", error)
+        return False
+    wanted = {name, f"{name}:latest"}
+    return any(model.get("name") in wanted or model.get("model") in wanted for model in running)
 
 
 def _wait_until_gone(names: list[str]) -> None:

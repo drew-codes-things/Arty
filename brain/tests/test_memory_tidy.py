@@ -12,6 +12,9 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import connections  # noqa: E402
+import memory_facts  # noqa: E402
+import scheduler  # noqa: E402
 import memory_tidy  # noqa: E402
 
 NIGHT = datetime(2026, 11, 12, 4, 10).timestamp()
@@ -172,33 +175,33 @@ class BrainWiring(unittest.TestCase):
         with unittest.mock.patch.object(memory_tidy, "restore_last_run", return_value="put back") as restore:
             self.assertEqual(brain.restore_memory_reply("undo the memory tidy-up"), "put back")
             self.assertIsNone(brain.restore_memory_reply("undo that"))
-        restore.assert_called_once_with(brain.memory_hub)
+        restore.assert_called_once_with(memory_facts.memory_hub)
 
     def test_the_memory_hub_calls_the_memory_server_with_the_key(self):
-        with unittest.mock.patch.object(brain, "http_json", return_value={}) as sent:
-            brain.memory_hub("read_graph", {})
+        with unittest.mock.patch.object(connections, "http_json", return_value={}) as sent:
+            memory_facts.memory_hub("read_graph", {})
         self.assertTrue(sent.call_args.args[0].endswith("/memory/read_graph"))
         self.assertIn("Authorization", sent.call_args.kwargs["headers"])
 
     def test_the_scheduler_starts_a_tidy_only_when_it_is_due(self):
         for is_due, starts in ((True, 1), (False, 0)):
             with unittest.mock.patch.object(memory_tidy, "due", return_value=is_due), \
-                    unittest.mock.patch.object(brain, "load_config", return_value={}), \
+                    unittest.mock.patch.object(connections, "load_config", return_value={}), \
                     unittest.mock.patch.object(brain.threading, "Thread") as thread:
-                brain.start_memory_tidy()
+                scheduler.start_memory_tidy()
             self.assertEqual(thread.call_count, starts)
             if starts:
                 self.assertIs(thread.call_args.kwargs["target"], memory_tidy.run_in_background)
 
     def test_every_scheduler_tick_checks_the_tidy(self):
-        with unittest.mock.patch.object(brain, "due_schedules_now", return_value=[]), \
-                unittest.mock.patch.object(brain, "guarded") as guarded:
-            brain.scheduler_tick(datetime(2026, 11, 12, 4, 0))
+        with unittest.mock.patch.object(scheduler, "due_schedules_now", return_value=[]), \
+                unittest.mock.patch.object(scheduler, "guarded") as guarded:
+            scheduler.scheduler_tick(datetime(2026, 11, 12, 4, 0))
         self.assertIn("memory tidy", [call.args[0] for call in guarded.call_args_list])
 
     def test_the_tidy_asks_for_json_without_thinking(self):
-        with unittest.mock.patch.object(brain, "complete_text", return_value="{}") as complete:
-            brain.tidy_completion("prompt")
+        with unittest.mock.patch.object(scheduler, "complete_text", return_value="{}") as complete:
+            scheduler.tidy_completion("prompt")
         complete.assert_called_once_with("prompt", json_mode=True, think=False)
 
 

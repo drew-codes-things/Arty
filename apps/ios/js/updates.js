@@ -1,4 +1,6 @@
+import { answerGuard, flashNewQuestion } from "./answerguard.js";
 import { fill, formatMoment, fromUnixSeconds, h, sectionHead, showToast, withBusy } from "./dom.js";
+import { isAlerting } from "./notifications.js";
 import { loadPreferences, savePreferences } from "./settings.js";
 import { approvalButtons } from "./tasks.js";
 
@@ -61,8 +63,9 @@ export class UpdatesFeed {
   async receive(announcements) {
     this.items = [...announcements.slice().reverse(), ...this.items].slice(0, KEEP_UPDATES);
     if (announcements.some((item) => item.task_id != null)) await this.refreshWaitingTasks();
-    const newest = announcements.at(-1);
-    if (!this.isShowing()) showToast(`${newest.title || "Arty"}: ${newest.message}`.slice(0, 160));
+    const { quietCategories } = loadPreferences(this.storage);
+    const newest = announcements.filter((item) => isAlerting(item, quietCategories)).at(-1);
+    if (newest && !this.isShowing()) showToast(`${newest.title || "Arty"}: ${newest.message}`.slice(0, 160));
     this.render();
   }
 
@@ -76,8 +79,8 @@ export class UpdatesFeed {
   }
 
   unseenCount() {
-    const { lastSeenUpdate } = loadPreferences(this.storage);
-    return this.items.filter((item) => item.id > lastSeenUpdate).length;
+    const { lastSeenUpdate, quietCategories } = loadPreferences(this.storage);
+    return this.items.filter((item) => item.id > lastSeenUpdate && isAlerting(item, quietCategories)).length;
   }
 
   markSeen() {
@@ -106,18 +109,23 @@ export class UpdatesFeed {
   }
 
   card(item) {
+    const guard = answerGuard();
     const buttons = approvalButtons(item, this.waitingTaskIds).map(({ action, label }) => h("button", {
       type: "button", class: `button small${action === "approve" ? " primary" : ""}`,
-      onclick: (event) => withBusy(event.currentTarget, async () => {
-        showToast(await this.api.decideTask(item.task_id, action) || `${label}: sent`);
-        this.waitingTaskIds.delete(item.task_id);
-        this.render();
-      }),
+      onclick: (event) => {
+        if (!guard.isReady()) return undefined;
+        return withBusy(event.currentTarget, async () => {
+          showToast(await this.api.decideTask(item.task_id, action) || `${label}: sent`);
+          this.waitingTaskIds.delete(item.task_id);
+          this.render();
+        });
+      },
     }, label));
-    return h("article", { class: `card kind-${item.kind}` },
+    const card = h("article", { class: `card kind-${item.kind}` },
       h("div", { class: "card-meta" }, h("span", {}, item.kind), h("span", {}, formatMoment(fromUnixSeconds(item.created)))),
       item.title ? h("div", { class: "card-title" }, item.title) : null,
       h("div", { class: "card-body" }, item.message),
       buttons.length ? h("div", { class: "row" }, buttons) : null);
+    return buttons.length ? flashNewQuestion(card, buttons, guard) : card;
   }
 }

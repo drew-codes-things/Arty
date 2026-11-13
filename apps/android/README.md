@@ -7,7 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/kotlin-2.0-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Jetpack Compose](https://img.shields.io/badge/jetpack%20compose-ui-4285F4?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Android](https://img.shields.io/badge/android-9%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://developer.android.com/)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
 
 </div>
 
@@ -70,12 +70,19 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
   alerts, with Approve / Deny on anything waiting for you. New ones also arrive as notifications. On the lock screen
   an approval notice only says Arty needs your answer; Approve and Deny buttons on the notice itself appear on
   Android 12 and later, which asks for the unlock first. On older Android, tap the notice and decide in the app.
+  A new question in the app shows a short **New question** label and its buttons stay off until it has been on
+  screen for one second; a button on a notice is ignored in the first second after the notice appears.
 - **Tasks**, **Schedules** and **Memory** - what Arty's working on, what's planned, and what it remembers about you.
 - **Calendar** - your events, and adding new ones.
 - **Computers** (under More) - follow Arty CLI on a computer that ran `/remote`: read what it's doing, answer its
   permission questions with Allow or Deny, send it a message, or Stop the current turn. A phone with its own device key
   needs **Arty CLI** switched on for it on starfire's Arty devices page first.
 - **Lectures** - record a lesson (or pick a recording) and read the notes Arty writes from it.
+- **Notifications** (under More) - a switch for each kind of notification: email, server and homelab, background
+  tasks, approvals, reminders and deadlines, calendar, lectures, Arty's own notices and other. A switched-off kind makes
+  no phone notification and no sound but still appears in Updates. Each kind is also its own Android notification
+  channel, so Android's own settings (sound, pop-up, off) work per kind; a kind turned off there is flagged in the app,
+  and if Arty's notifications are off altogether (or the permission is denied) the page warns at the top.
 - **Share to Arty** - send text or files to Arty from any other app.
 - **Widget and quick tile** - talk to or call Arty without opening the app.
 
@@ -145,7 +152,7 @@ new details; the personal build needs rebuilding with them, or a new code scanne
 
 ## License
 
-[PolyForm Strict 1.0.0](https://polyformproject.org/licenses/strict/1.0.0) - see [LICENSE](../../LICENSE). You can download, keep and use Arty for yourself or any other
-noncommercial purpose; sharing it, changing it, building on it or using it commercially needs permission.
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.
 
 The IBM Plex fonts are under the SIL Open Font License.

@@ -12,6 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import FakeHub, _scratch  # noqa: E402
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import connections  # noqa: E402
+import prompting  # noqa: E402
+import reply_rules  # noqa: E402
+import steering  # noqa: E402
 import desktop_look  # noqa: E402
 import email_watch  # noqa: E402
 import personal  # noqa: E402
@@ -27,22 +32,22 @@ class WhereTheDesktopIs(unittest.TestCase):
         self.assertFalse(hasattr(brain, "DESKTOP_HELP"))
 
     def test_the_sign_in_question_names_the_console_from_config(self):
-        asked = brain.question_for_user("Please sign in to LinkedIn in the browser", CONSOLE)
+        asked = steering.question_for_user("Please sign in to LinkedIn in the browser", CONSOLE)
         self.assertIn("Proxmox web UI > VM 900 test-desktop > Console", asked)
-        plain = brain.question_for_user("Please sign in to LinkedIn in the browser", {})
+        plain = steering.question_for_user("Please sign in to LinkedIn in the browser", {})
         self.assertNotIn("Proxmox", plain)
         self.assertIn("Sign in to websites", plain)
 
     def test_the_gmail_sign_in_help_names_the_console_from_config(self):
-        self.assertIn("Proxmox web UI > VM 900 test-desktop > Console", brain.sign_in_help(CONSOLE))
-        plain = brain.sign_in_help({})
+        self.assertIn("Proxmox web UI > VM 900 test-desktop > Console", steering.sign_in_help(CONSOLE))
+        plain = steering.sign_in_help({})
         self.assertNotIn("VM 900", plain)
         self.assertIn("Sign in to Google (Gmail)", plain)
 
     def test_the_desktop_line_names_the_console_only_when_one_is_set(self):
         self.assertIsInstance(SHIPPED.get("desktop_console", ""), str)
-        self.assertEqual(brain.on_my_desktop({}), "On my desktop")
-        self.assertEqual(brain.on_my_desktop(CONSOLE), f"On my desktop ({CONSOLE['desktop_console']})")
+        self.assertEqual(steering.on_my_desktop({}), "On my desktop")
+        self.assertEqual(steering.on_my_desktop(CONSOLE), f"On my desktop ({CONSOLE['desktop_console']})")
 
 
 class DesktopPersona(unittest.TestCase):
@@ -110,21 +115,21 @@ class LocalTime(unittest.TestCase):
     MOMENT = datetime(2026, 7, 1, 12, 0, tzinfo=ZoneInfo("UTC"))
 
     def test_the_default_keeps_uk_time(self):
-        line = brain.time_line({}, self.MOMENT)
+        line = prompting.time_line({}, self.MOMENT)
         self.assertIn("(UK time, BST, UTC+01:00)", line)
         self.assertIn("13:00", line)
 
     def test_another_owner_sets_their_zone_and_label(self):
-        line = brain.time_line({"time_zone": "America/Los_Angeles", "time_zone_label": "Pacific time"}, self.MOMENT)
+        line = prompting.time_line({"time_zone": "America/Los_Angeles", "time_zone_label": "Pacific time"}, self.MOMENT)
         self.assertIn("05:00 (Pacific time, PDT, UTC-07:00)", line)
 
     def test_an_unknown_zone_falls_back_to_the_default(self):
-        self.assertIn("(UK time,", brain.time_line({"time_zone": "Mars/Olympus"}, self.MOMENT))
+        self.assertIn("(UK time,", prompting.time_line({"time_zone": "Mars/Olympus"}, self.MOMENT))
 
     def test_a_leaked_time_line_is_caught_whatever_the_label(self):
         for config in ({}, {"time_zone": "America/Los_Angeles", "time_zone_label": "Pacific time"}):
-            leaked = "Sure thing.\n\n" + brain.time_line(config, self.MOMENT)
-            self.assertTrue(brain.PROMPT_LEAK.search(leaked), config)
+            leaked = "Sure thing.\n\n" + prompting.time_line(config, self.MOMENT)
+            self.assertTrue(reply_rules.PROMPT_LEAK.search(leaked), config)
 
     def test_the_shipped_config_names_the_uk(self):
         self.assertEqual((SHIPPED["time_zone"], SHIPPED["time_zone_label"]), ("Europe/London", "UK time"))
@@ -143,7 +148,7 @@ class CrisisHelp(unittest.TestCase):
 
     def test_the_brain_passes_the_configured_help(self):
         config = {"model": "m", "crisis_help": "Call or text 988, any time.", "conversations_dir": _scratch}
-        with unittest.mock.patch.object(brain, "load_config", return_value=config), \
+        with unittest.mock.patch.object(connections, "load_config", return_value=config), \
                 unittest.mock.patch.object(brain, "archive_turn"), \
                 unittest.mock.patch.object(brain.desktop_look, "user_active"):
             reply = brain.run_turn([{"role": "user", "content": "i want to kill myself"}])[0]
@@ -166,7 +171,7 @@ class EmailWatchKey(unittest.TestCase):
 
     def check(self, when):
         email_watch.check_new(lambda name, arguments: self.listing(when), lambda prompt: "",
-                              lambda title, message: self.sent.append(message))
+                              lambda title, message, **options: self.sent.append(message))
 
     def test_the_same_email_shown_with_a_different_date_is_not_sent_twice(self):
         self.check("10:42")
@@ -183,7 +188,7 @@ class EmailWatchKey(unittest.TestCase):
     def test_a_new_reply_in_the_thread_is_sent(self):
         self.check("10:42")
         email_watch.check_new(lambda name, arguments: self.listing("10:50").replace("one?", "two instead?"),
-                              lambda prompt: "", lambda title, message: self.sent.append(message))
+                              lambda prompt: "", lambda title, message, **options: self.sent.append(message))
         self.assertEqual(len(self.sent), 2)
 
 
@@ -204,14 +209,14 @@ class ToolsSurviveARestart(unittest.TestCase):
             return reply
 
         state = {"messages": [{"role": "user", "content": "check the logs"}], "context": {}}
-        with unittest.mock.patch.object(brain, "hub", hub), \
-                unittest.mock.patch.object(brain, "http_json", side_effect=model), \
+        with unittest.mock.patch.object(connections, "hub", hub), \
+                unittest.mock.patch.object(connections, "http_json", side_effect=model), \
                 unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
                 unittest.mock.patch.object(brain.models, "find", return_value=None), \
-                unittest.mock.patch.object(brain, "system_prompt", return_value=""), \
-                unittest.mock.patch.object(brain, "current_context", return_value=""):
+                unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
+                unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
             with self.assertRaises(RuntimeError):
-                brain.run_agent({"model": "m", "approval": {}}, state, background=True, task=task)
+                brain.run_agent({"model": "m", "approval": {}}, state, run=brain.AgentRun(background=True, task=task))
         saved = store.get_task(task["id"])["history"]["messages"]
         self.assertEqual([m["role"] for m in saved], ["user", "assistant", "tool"])
         self.assertEqual(hub.calls, ["homelab__service_status"])

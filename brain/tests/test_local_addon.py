@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 EXTRA = {"id": "extra/one", "name": "One", "object": "model", "owned_by": "home"}
@@ -63,7 +64,7 @@ class Turns(unittest.TestCase):
         fake = FakeAddon()
         with unittest.mock.patch.object(brain, "local_addon", fake):
             self.assertEqual(brain.run_turn([{"role": "user", "content": "hi"}], EXTRA["id"]), ("handled", [], {}, None))
-            with unittest.mock.patch.object(brain, "load_config", side_effect=RuntimeError("normal path")):
+            with unittest.mock.patch.object(connections, "load_config", side_effect=RuntimeError("normal path")):
                 with self.assertRaisesRegex(RuntimeError, "normal path"):
                     brain.run_turn([{"role": "user", "content": "hi"}], "Arty")
         self.assertEqual(fake.turns, [EXTRA["id"], "Arty"])
@@ -71,7 +72,7 @@ class Turns(unittest.TestCase):
 
 class Routes(Server):
     def listed_ids(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value={"model": "qwen3:14b"}), \
+        with unittest.mock.patch.object(connections, "load_config", return_value={"model": "qwen3:14b"}), \
                 unittest.mock.patch.object(models, "find", return_value=None), \
                 unittest.mock.patch.object(models, "chat_models", return_value=[]), \
                 unittest.mock.patch.object(models, "solo_entries", return_value=[]):

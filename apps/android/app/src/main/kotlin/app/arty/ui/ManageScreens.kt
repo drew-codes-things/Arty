@@ -173,6 +173,18 @@ fun TasksScreen(vm: ArtyViewModel) {
 
 @Composable
 private fun TaskCard(task: ArtyTask, vm: ArtyViewModel, modifier: Modifier) {
+    val waitingMessage = task.waitingMessage
+    val isQuestion = task.status == "waiting" && waitingMessage != null
+    if (!isQuestion) {
+        TaskCardBody(task, vm, modifier, answerable = false)
+        return
+    }
+    val hold = rememberAnswerHold("task-${task.id}-$waitingMessage")
+    HeldQuestion(hold, modifier) { TaskCardBody(task, vm, Modifier, answerable = hold.ready) }
+}
+
+@Composable
+private fun TaskCardBody(task: ArtyTask, vm: ArtyViewModel, modifier: Modifier, answerable: Boolean) {
     var expanded by remember { mutableStateOf(false) }
     Card(statusColour(task.status), modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -192,10 +204,10 @@ private fun TaskCard(task: ArtyTask, vm: ArtyViewModel, modifier: Modifier) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val actions = if (task.waitingKind == "approval") listOf("approve" to "Approve", "deny" to "Deny") else listOf("done" to "Done")
                 actions.forEach { (action, label) ->
-                    if (action == "deny") ArtyQuietButton(onClick = { vm.decide(task, action) }) { Text(label) }
-                    else ArtyButton(onClick = { vm.decide(task, action) }) { Text(label) }
+                    if (action == "deny") ArtyQuietButton(onClick = { vm.decide(task, action) }, enabled = answerable) { Text(label) }
+                    else ArtyButton(onClick = { vm.decide(task, action) }, enabled = answerable) { Text(label) }
                 }
-                ArtyOutlinedButton(onClick = { vm.decide(task, "cancel") }) { Text("Cancel task", color = ArtyColors.TextDim) }
+                ArtyOutlinedButton(onClick = { vm.decide(task, "cancel") }, enabled = answerable) { Text("Cancel task", color = ArtyColors.TextDim) }
             }
         }
         val result = task.result
@@ -242,6 +254,18 @@ fun UpdatesScreen(vm: ArtyViewModel) {
 
 @Composable
 private fun UpdateCard(update: Announcement, vm: ArtyViewModel, modifier: Modifier) {
+    val waiting = vm.tasks.any { it.id == update.taskId && it.status == "waiting" }
+    val isQuestion = update.taskId != null && update.actions.isNotEmpty() && waiting
+    if (!isQuestion) {
+        UpdateCardBody(update, vm, modifier, isQuestion = false, answerable = false)
+        return
+    }
+    val hold = rememberAnswerHold("update-${update.id}")
+    HeldQuestion(hold, modifier) { UpdateCardBody(update, vm, Modifier, isQuestion = true, answerable = hold.ready) }
+}
+
+@Composable
+private fun UpdateCardBody(update: Announcement, vm: ArtyViewModel, modifier: Modifier, isQuestion: Boolean, answerable: Boolean) {
     var expanded by remember { mutableStateOf(false) }
     Card(updateColour(update.kind), modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -258,14 +282,13 @@ private fun UpdateCard(update: Announcement, vm: ArtyViewModel, modifier: Modifi
             if (long) ArtyTextButton(if (expanded) "Show less" else "Show all", onClick = { expanded = !expanded })
         }
         // Buttons only while the task is still waiting for an answer.
-        val waiting = vm.tasks.any { it.id == update.taskId && it.status == "waiting" }
-        if (update.taskId != null && update.actions.isNotEmpty() && waiting) {
+        if (isQuestion) {
             Spacer(Modifier.size(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 update.actions.filter { it in UPDATE_ACTIONS }.forEach { action ->
                     val label = UPDATE_ACTIONS.getValue(action)
-                    if (action == "deny" || action == "cancel") ArtyQuietButton(onClick = { vm.decideUpdate(update, action) }) { Text(label) }
-                    else ArtyButton(onClick = { vm.decideUpdate(update, action) }) { Text(label) }
+                    if (action == "deny" || action == "cancel") ArtyQuietButton(onClick = { vm.decideUpdate(update, action) }, enabled = answerable) { Text(label) }
+                    else ArtyButton(onClick = { vm.decideUpdate(update, action) }, enabled = answerable) { Text(label) }
                 }
             }
         }

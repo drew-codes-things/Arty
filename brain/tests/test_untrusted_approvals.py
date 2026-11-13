@@ -10,6 +10,9 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import background_tasks  # noqa: E402
+import connections  # noqa: E402
 import policy  # noqa: E402
 
 RULES = json.loads((Path(__file__).resolve().parents[1] / "brain.json").read_text())["approval"]
@@ -118,14 +121,15 @@ class InTheToolLoop(unittest.TestCase):
     def run_turn(self, steps, background=False, chat_approved=None):
         hub = FakeHub()
         state = {"messages": [{"role": "user", "content": "read my latest email"}], "context": {}}
-        with unittest.mock.patch.object(brain, "hub", hub), \
-                unittest.mock.patch.object(brain, "http_json", side_effect=model_replies(*steps)), \
+        with unittest.mock.patch.object(connections, "hub", hub), \
+                unittest.mock.patch.object(connections, "http_json", side_effect=model_replies(*steps)), \
                 unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
                 unittest.mock.patch.object(brain.models, "find", return_value=None), \
-                unittest.mock.patch.object(brain, "system_prompt", return_value=""), \
-                unittest.mock.patch.object(brain, "current_context", return_value=""), \
-                unittest.mock.patch.object(brain, "run_native_safely", return_value=("done", None)) as native:
-            outcome = brain.run_agent({"model": "m", "approval": RULES}, state, background=background, chat_approved=chat_approved)
+                unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
+                unittest.mock.patch.object(agent_loop, "current_context", return_value=""), \
+                unittest.mock.patch.object(agent_loop, "run_native_safely", return_value=("done", None)) as native:
+            outcome = brain.run_agent({"model": "m", "approval": RULES}, state,
+                                      run=brain.AgentRun(background=background, chat_approved=chat_approved))
         return outcome, hub.calls, native
 
     def test_a_command_the_email_asked_for_waits_for_the_user(self):
@@ -159,10 +163,10 @@ class ApprovedLater(unittest.TestCase):
         hub = FakeHub()
         state = {"messages": [], "context": {}}
         waiting = {"kind": "approval", "call": {"name": "schedule_task", "arguments": {"instructions": "x"}}}
-        with unittest.mock.patch.object(brain, "hub", hub), \
-                unittest.mock.patch.object(brain, "load_config", return_value={}), \
-                unittest.mock.patch.object(brain, "run_native_safely", return_value=("Scheduled.", None)) as native:
-            brain.apply_decision(state, waiting, "approve", "")
+        with unittest.mock.patch.object(connections, "hub", hub), \
+                unittest.mock.patch.object(connections, "load_config", return_value={}), \
+                unittest.mock.patch.object(background_tasks, "run_native_safely", return_value=("Scheduled.", None)) as native:
+            background_tasks.apply_decision(state, waiting, "approve", "")
         native.assert_called_once()
         self.assertEqual(hub.calls, [])
         self.assertIn("Scheduled.", state["messages"][-1]["content"])

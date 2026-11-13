@@ -82,11 +82,11 @@ Each run becomes a background task.
 
 ## Notifications
 
-`POST /v1/notify` `{"title": "...", "message": "..."}` sends to Updates in the Arty phone and desktop apps. Every notification goes there and nowhere else (not Telegram or Discord).
+`POST /v1/notify` `{"title": "...", "message": "...", "category": "..."}` sends to Updates in the Arty phone and desktop apps. `category` is optional: one of `email`, `server`, `tasks`, `approvals`, `reminders`, `calendar`, `lectures`, `arty` or `other`; anything else, or none, is `other`. The apps let the user switch each category's phone notifications off. Every notification goes there and nowhere else (not Telegram or Discord).
 
 ## Announcements (what Arty tells you)
 
-- `GET /v1/announcements?after=<id>&wait=<seconds>`: everything Arty has notified you about since `after` (reminders, briefings, task results, approvals, Uptime Kuma alerts), oldest first, as `{"announcements": [{id, kind, title, message, task_id, actions, created}], "last": <id>}`. With `wait` (up to 55 s) it waits for one to arrive. Call with `after=0&wait=0` first to learn `last`, then follow from there. `kind` is `reminder`, `approval` (with `task_id` and `actions`, e.g. `approve`/`deny`), `alert` or `message`.
+- `GET /v1/announcements?after=<id>&wait=<seconds>`: everything Arty has notified you about since `after` (reminders, briefings, task results, approvals, Uptime Kuma alerts), oldest first, as `{"announcements": [{id, kind, category, title, message, task_id, actions, created}], "last": <id>}`. With `wait` (up to 55 s) it waits for one to arrive. Call with `after=0&wait=0` first to learn `last`, then follow from there. `kind` is `reminder`, `approval` (with `task_id` and `actions`, e.g. `approve`/`deny`), `alert` or `message`. `category` is one of the `POST /v1/notify` categories, set by whatever sent it (announcements from before categories are `other`); older apps ignore it.
 - `POST /hooks/alert?token=<ALERT_TOKEN>`: Uptime Kuma's webhook (secret in brain.env). Recorded in the feed only.
 - `POST /hooks/notify?token=<ALERT_TOKEN>` `{title, message, urgent}`: alerts from the homelab (the Proxmox host's `arty-notify`, its notification target "arty", the security watch), shown as alerts.
 - The morning (08:00) and evening (22:00) briefings are ordinary schedules; ask Arty to move or cancel them.

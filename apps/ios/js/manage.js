@@ -1,6 +1,7 @@
+import { answerGuard, flashNewQuestion } from "./answerguard.js";
 import { fill, formatClock, formatDay, formatMoment, fromUnixSeconds, h, sectionHead, showToast, twoStepButton, withBusy } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
-import { RESULT_PREVIEW_CHARS, capitalised, resultPreview, taskActions } from "./tasks.js";
+import { RESULT_PREVIEW_CHARS, capitalised, isWaitingForAnswer, resultPreview, taskActions } from "./tasks.js";
 
 const LECTURE_REFRESH_MS = 15000;
 const RECORDING_TYPES = ["audio/mp4", "audio/webm"];
@@ -61,12 +62,17 @@ export async function renderTasks(container, api) {
 }
 
 function taskCard(task, api, reload) {
+  const guard = answerGuard();
+  const isQuestion = isWaitingForAnswer(task);
   const actions = taskActions(task).map(({ action, label, primary }) => h("button", {
     type: "button", class: `button small${primary ? " primary" : ""}`,
-    onclick: (event) => withBusy(event.currentTarget, async () => {
-      showToast(await api.decideTask(task.id, action) || `${label}: sent`);
-      reload();
-    }),
+    onclick: (event) => {
+      if (isQuestion && !guard.isReady()) return undefined;
+      return withBusy(event.currentTarget, async () => {
+        showToast(await api.decideTask(task.id, action) || `${label}: sent`);
+        reload();
+      });
+    },
   }, label));
   let expanded = false;
   const result = task.result ? h("div", { class: "card-body" }, resultPreview(task.result)) : null;
@@ -77,12 +83,13 @@ function taskCard(task, api, reload) {
     result.replaceWith(expanded ? markdownBlock(task.result) : h("div", { class: "card-body" }, resultPreview(task.result)));
     toggle.textContent = expanded ? "Show less" : "Show all";
   });
-  return h("article", { class: `card status-${task.status}` },
+  const card = h("article", { class: `card status-${task.status}` },
     h("div", { class: "card-meta" }, h("span", {}, `#${task.id} · ${capitalised(task.status)}`), h("span", {}, formatMoment(fromUnixSeconds(task.updated)))),
     h("div", { class: "card-title" }, task.title || task.instructions),
-    task.status === "waiting" && task.waiting?.message ? h("div", { class: "waiting-message" }, task.waiting.message) : null,
+    isQuestion ? h("div", { class: "waiting-message" }, task.waiting.message) : null,
     result, toggle,
     actions.length ? h("div", { class: "row" }, actions) : null);
+  return isQuestion ? flashNewQuestion(card, actions, guard) : card;
 }
 
 export async function renderSchedules(container, api) {

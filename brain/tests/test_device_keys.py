@@ -11,6 +11,7 @@ import devices  # noqa: E402
 from test_review_brain import Server  # noqa: E402
 
 import brain  # noqa: E402
+import api_keys  # noqa: E402
 import store  # noqa: E402
 
 STARFIRE = "https://starfire.example"
@@ -58,7 +59,7 @@ class MadeKeys(Server):
         self.assertNotIn(hashlib.sha256(made["api_key"].encode()).hexdigest(), listed)
 
     def test_the_app_key_can_make_keys_too(self):
-        with unittest.mock.patch.object(brain, "APP_KEY", "app-key-for-test"):
+        with unittest.mock.patch.object(api_keys, "APP_KEY", "app-key-for-test"):
             status, _ = self.make(headers={"Authorization": "Bearer app-key-for-test"}, authorised=False)
         self.assertEqual(status, 201)
 

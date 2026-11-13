@@ -143,10 +143,11 @@ class EmailWatch(unittest.TestCase):
         def model(prompt):
             judged.append(prompt)
             return fake_model(prompt)
-        email_watch.check_new(fake_tools(), model, lambda title, message: sent.append((title, message)))
-        email_watch.check_new(fake_tools(), model, lambda title, message: sent.append((title, message)))
+        email_watch.check_new(fake_tools(), model, lambda title, message, category: sent.append((title, message, category)))
+        email_watch.check_new(fake_tools(), model, lambda title, message, category: sent.append((title, message, category)))
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][0], "📧 2 important emails")
+        self.assertEqual(sent[0][2], "email")
         self.assertNotIn("**", sent[0][1])  # notifications show plain text
         self.assertEqual(len(judged), 1)  # the second check had nothing new to judge
 

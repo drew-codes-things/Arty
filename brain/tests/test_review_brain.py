@@ -24,6 +24,13 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import agent_loop  # noqa: E402
+import alerts  # noqa: E402
+import archive  # noqa: E402
+import background_tasks  # noqa: E402
+import connections  # noqa: E402
+import native_calls  # noqa: E402
+import scheduler  # noqa: E402
 import personal  # noqa: E402
 import policy  # noqa: E402
 import store  # noqa: E402
@@ -190,8 +197,8 @@ class FakeHub:
 class ApiTools(Server):
     def call_tool(self, page, name, arguments, approved=False):
         hub = FakeHub(page)
-        with unittest.mock.patch.object(brain, "hub", hub), \
-                unittest.mock.patch.object(brain, "load_config", return_value={"approval": RULES}):
+        with unittest.mock.patch.object(connections, "hub", hub), \
+                unittest.mock.patch.object(connections, "load_config", return_value={"approval": RULES}):
             status, body = self.request("POST", f"/v1/tools/{name}", body={"arguments": arguments, "approved": approved})
         return status, hub.calls
 
@@ -215,23 +222,23 @@ class ApiTools(Server):
         self.assertNotIn("workspace__browser_upload", calls)
 
     def test_a_bad_number_for_a_native_tool_is_a_400(self):
-        with unittest.mock.patch.object(brain, "load_config", return_value={"approval": RULES}), \
-                unittest.mock.patch.object(brain, "week_recap", side_effect=KeyError("time")):
+        with unittest.mock.patch.object(connections, "load_config", return_value={"approval": RULES}), \
+                unittest.mock.patch.object(native_calls, "week_recap", side_effect=KeyError("time")):
             status, _ = self.request("POST", "/v1/tools/week_recap", body={"arguments": {}})
         self.assertEqual(status, 400)
 
 
 class NativeTools(unittest.TestCase):
     def test_a_failing_native_tool_is_a_tool_error_the_model_can_read(self):
-        with unittest.mock.patch.object(brain, "week_recap", side_effect=KeyError("time")):
-            result, waiting = brain.run_native_safely("week_recap", {}, {}, False, None)
+        with unittest.mock.patch.object(native_calls, "week_recap", side_effect=KeyError("time")):
+            result, waiting = native_calls.run_native_safely("week_recap", {}, {}, False, None)
         self.assertTrue(result.startswith("tool error"))
         self.assertIsNone(waiting)
 
     def test_cancel_with_a_word_for_a_number(self):
         store.init()
-        self.assertEqual(brain.run_native_safely("cancel_scheduled", {"schedule_id": "abc"}, {}, False, None)[0],
-                         "No such scheduled job.")
+        self.assertTrue(native_calls.run_native_safely("cancel_scheduled", {"schedule_id": "abc"}, {}, False, None)[0]
+                        .startswith("No active scheduled job #0, so nothing was cancelled."))
 
 
 class ChatApproval(unittest.TestCase):
@@ -241,12 +248,12 @@ class ChatApproval(unittest.TestCase):
         reply = {"message": {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "workspace__run_command", "arguments": {"command": "git push"}}}]}}
         state = {"messages": [{"role": "user", "content": "push it"}], "context": {}}
-        with unittest.mock.patch.object(brain, "hub", hub), \
-                unittest.mock.patch.object(brain, "http_json", return_value=reply), \
+        with unittest.mock.patch.object(connections, "hub", hub), \
+                unittest.mock.patch.object(connections, "http_json", return_value=reply), \
                 unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
                 unittest.mock.patch.object(brain.models, "find", return_value=None), \
-                unittest.mock.patch.object(brain, "system_prompt", return_value=""), \
-                unittest.mock.patch.object(brain, "current_context", return_value=""):
+                unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
+                unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
             outcome = brain.run_agent({"model": "m", "approval": RULES}, state)
         self.assertIn("need your OK", outcome["answer"])
         self.assertEqual(state["messages"][-1]["role"], "tool")
@@ -263,10 +270,10 @@ class Scheduler(unittest.TestCase):
         patches = [unittest.mock.patch.object(brain.notify, "send", lambda title, message, *a, **k: self.sent.append(message)),
                    unittest.mock.patch.object(brain.calendar_feed, "due_reminders", return_value=[]),
                    unittest.mock.patch.object(brain.personal, "due_deadline_reminders", return_value=[]),
-                   unittest.mock.patch.object(brain, "start_expiry_check", lambda: None),
+                   unittest.mock.patch.object(scheduler, "start_expiry_check", lambda: None),
                    unittest.mock.patch.object(brain.email_watch, "due", return_value=False),
                    unittest.mock.patch.object(brain.desktop_look, "due", return_value=False),
-                   unittest.mock.patch.object(brain, "load_config", return_value={})]
+                   unittest.mock.patch.object(connections, "load_config", return_value={})]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
@@ -275,20 +282,20 @@ class Scheduler(unittest.TestCase):
         now = datetime.now()
         store.create_schedule("broken", "x", "not a cron", "?", now.timestamp() - 10, "broken one")
         store.create_schedule("fine", "x", None, "once", now.timestamp() - 5, "drink some water")
-        brain.scheduler_tick(now)
+        scheduler.scheduler_tick(now)
         self.assertIn("Drink some water", self.sent)
         broken = [s for s in store.list_schedules(include_disabled=True) if s["title"] == "broken"][0]
         self.assertEqual(broken["enabled"], 0)
 
     def test_a_crash_in_a_background_check_does_not_kill_the_tick(self):
         with unittest.mock.patch.object(brain.style, "due", side_effect=OSError("prompt file missing")):
-            brain.scheduler_tick(datetime.now())
+            scheduler.scheduler_tick(datetime.now())
 
     def test_a_reminder_that_could_not_be_sent_is_tried_again(self):
         now = datetime.now()
         created = store.create_schedule("water", "x", None, "once", now.timestamp() - 5, "drink some water")
         with unittest.mock.patch.object(brain.notify, "send", side_effect=OSError("phone push down")):
-            brain.scheduler_tick(now)
+            scheduler.scheduler_tick(now)
         again = [s for s in store.list_schedules() if s["id"] == created["id"]]
         self.assertEqual(len(again), 1)
         self.assertGreater(again[0]["next_run"], now.timestamp())
@@ -296,7 +303,7 @@ class Scheduler(unittest.TestCase):
     def test_a_repeat_is_counted_from_when_it_was_due(self):
         due = datetime.now().replace(second=0, microsecond=0) - timedelta(minutes=1)
         created = store.create_schedule("stretch", "x", "every 45m", "every 45 minutes", due.timestamp(), "stretch")
-        brain.scheduler_tick(due + timedelta(seconds=20))
+        scheduler.scheduler_tick(due + timedelta(seconds=20))
         moved = [s for s in store.list_schedules() if s["id"] == created["id"]][0]
         self.assertEqual(moved["next_run"], (due + timedelta(minutes=45)).timestamp())
 
@@ -304,14 +311,14 @@ class Scheduler(unittest.TestCase):
 class Worker(unittest.TestCase):
     def test_a_database_error_does_not_kill_the_worker(self):
         with unittest.mock.patch.object(store, "claim_next_task", side_effect=sqlite3.OperationalError("locked")):
-            self.assertFalse(brain.worker_step())
+            self.assertFalse(background_tasks.worker_step())
 
     def test_a_failure_while_recording_a_failure_does_not_kill_it(self):
         task = {"id": 1, "title": "t"}
         with unittest.mock.patch.object(store, "claim_next_task", return_value=task), \
-                unittest.mock.patch.object(brain, "process_task", side_effect=RuntimeError("boom")), \
+                unittest.mock.patch.object(background_tasks, "process_task", side_effect=RuntimeError("boom")), \
                 unittest.mock.patch.object(store, "update_task", side_effect=sqlite3.OperationalError("locked")):
-            self.assertTrue(brain.worker_step())
+            self.assertTrue(background_tasks.worker_step())
 
 
 class ApprovedOnce(unittest.TestCase):
@@ -332,11 +339,11 @@ class ApprovedOnce(unittest.TestCase):
             return "Restarted."
 
         done = {"status": "done", "answer": "Finished the job and reported back properly.", "tools_used": [], "raw": {}}
-        with unittest.mock.patch.object(brain.hub, "call", call), unittest.mock.patch.object(brain.hub, "refresh"), \
-                unittest.mock.patch.object(brain, "run_agent", return_value=done), \
-                unittest.mock.patch.object(brain, "load_config", return_value={"conversations_dir": _scratch}), \
+        with unittest.mock.patch.object(connections.hub, "call", call), unittest.mock.patch.object(connections.hub, "refresh"), \
+                unittest.mock.patch.object(background_tasks, "run_agent", return_value=done), \
+                unittest.mock.patch.object(connections, "load_config", return_value={"conversations_dir": _scratch}), \
                 unittest.mock.patch.object(brain.notify, "send"):
-            brain.process_task(task)
+            background_tasks.process_task(task)
 
     def test_the_decision_is_marked_as_being_carried_out_before_the_tool_runs(self):
         seen = []
@@ -360,9 +367,9 @@ class Archive(unittest.TestCase):
                                                           "not json", json.dumps(good)]) + "\n")
         config = {"conversations_dir": str(folder)}
         self.assertEqual(len(list(brain.archive_records(config))), 2)
-        self.assertIn("hello", brain.recent_exchanges(config))
+        self.assertIn("hello", archive.recent_exchanges(config))
         with unittest.mock.patch.object(store, "list_tasks", return_value=[]):
-            self.assertIn("hello", brain.week_recap(config))
+            self.assertIn("hello", native_calls.week_recap(config))
 
     def test_a_long_archive_is_read_newest_first(self):
         folder = Path(tempfile.mkdtemp(prefix="arty-archive-"))
@@ -375,19 +382,19 @@ class Archive(unittest.TestCase):
 
 class SelfHeal(unittest.TestCase):
     def setUp(self):
-        brain._healing.clear()
+        alerts._healing.clear()
 
     def test_a_partial_diagnosis_does_not_crash(self):
         diagnosis = json.dumps({"fix": {"action": "start"}})
-        with unittest.mock.patch.object(brain.hub, "refresh"), \
-                unittest.mock.patch.object(brain.hub, "call", return_value=diagnosis), \
+        with unittest.mock.patch.object(connections.hub, "refresh"), \
+                unittest.mock.patch.object(connections.hub, "call", return_value=diagnosis), \
                 unittest.mock.patch.object(brain.notify, "send") as sent:
-            brain.self_heal({"name": "web", "hostname": "thing.example", "port": "not a port"})
+            alerts.self_heal({"name": "web", "hostname": "thing.example", "port": "not a port"})
         sent.assert_called_once()
 
     def test_the_cooldown_is_claimed_once(self):
-        self.assertTrue(brain.claim_healing("web"))
-        self.assertFalse(brain.claim_healing("web"))
+        self.assertTrue(alerts.claim_healing("web"))
+        self.assertFalse(alerts.claim_healing("web"))
 
 
 class Quiz(unittest.TestCase):

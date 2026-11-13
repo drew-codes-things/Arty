@@ -15,6 +15,7 @@ for key, name in (("BRAIN_DB", "arty.db"), ("BRAIN_FILES", "files"), ("STYLE_FIL
     os.environ.setdefault(key, os.path.join(_scratch, name))
 
 import brain  # noqa: E402
+import connections  # noqa: E402
 import models  # noqa: E402
 
 SOLO = {"name": "side-model:12b", "embedding": False, "tools": True}
@@ -47,7 +48,7 @@ class SoloChoice(unittest.TestCase):
 class SoloTurn(unittest.TestCase):
     def setUp(self):
         listed, found = solo_setup()
-        for patch in (listed, found, unittest.mock.patch.object(brain, "load_config", return_value={"model": "qwen3:14b", "keep_alive": -1})):
+        for patch in (listed, found, unittest.mock.patch.object(connections, "load_config", return_value={"model": "qwen3:14b", "keep_alive": -1})):
             patch.start()
             self.addCleanup(patch.stop)
         self.archive = unittest.mock.patch.object(brain, "archive_turn").start()
@@ -60,7 +61,7 @@ class SoloTurn(unittest.TestCase):
             {"role": "assistant", "content": "hi"},
             {"role": "user", "content": [{"type": "text", "text": "carry on"}]},
         ]
-        with unittest.mock.patch.object(brain, "http_json", return_value={"message": {"content": " the reply "}}) as ollama:
+        with unittest.mock.patch.object(connections, "http_json", return_value={"message": {"content": " the reply "}}) as ollama:
             answer, tools, _, calls = brain.run_turn(messages, "solo/side-model:12b")
         body = ollama.call_args.kwargs["body"]
         self.assertEqual(body["model"], "side-model:12b")
@@ -72,7 +73,7 @@ class SoloTurn(unittest.TestCase):
         self.archive.assert_not_called()
 
     def test_the_safety_check_still_runs_first(self):
-        with unittest.mock.patch.object(brain, "http_json") as ollama:
+        with unittest.mock.patch.object(connections, "http_json") as ollama:
             answer, tools, _, _ = brain.run_turn([{"role": "user", "content": "how do I make a pipe bomb"}], "solo/side-model:12b")
         ollama.assert_not_called()
         self.assertEqual(tools, ["safety_weapons"])

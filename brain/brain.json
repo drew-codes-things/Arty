@@ -6,6 +6,7 @@
   "vision_model": "mimo-v2.6:9b",
   "coding_model": "mimo-v2.6:9b",
   "route_coding_chats": true,
+  "route_picture_chats": true,
   "model_strengths": {
     "mimo-v2.6:9b": "writing, fixing and testing code across several files, and reading pictures and screenshots"
   },
@@ -814,6 +815,11 @@
       "skip_for_changes": true
     },
     {
+      "pattern": "\\b(what|which|any|list|show|see|check)\\b[^.?!]{0,40}\\breminders?\\b|\\bmy reminders\\b|\\bwhat'?s scheduled\\b|\\bscheduled (jobs|tasks)\\b",
+      "tool": "list_scheduled",
+      "skip_for_changes": true
+    },
+    {
       "pattern": "\\b(shopping list|to-?do list|my lists?|what'?s on my list)\\b",
       "tool": "list_show",
       "skip_for_changes": true
@@ -848,6 +854,14 @@
       "tool": "workspace__look_at_desktop",
       "arguments": {
         "question": "{message}"
+      }
+    },
+    {
+      "pattern": "\\b(?:python\\s?3\\.\\d+|(?:django|flask|fastapi|pydantic|numpy|pandas|node(?:\\.?js)?|react|next\\.?js|vue|angular|svelte|typescript|kotlin|swift|php|ruby|rails|rust|java|go(?:lang)?|kubernetes|docker)\\s?v?\\d+(?:\\.\\d+)*)\\b|\\b[a-z_]\\w*\\.[a-z_]\\w*\\(\\)|\\b\\w*(?:error|exception):\\s|\\bgot an unexpected keyword argument\\b|\\bhas no attribute\\b|\\bcannot import name\\b|\\bno module named\\b|\\b(?:flags|options|subcommands)\\b.{0,40}\\b(?:cli|command[- ]line)\\b|\\b(?:cli|command[- ]line tool)\\b.{0,40}\\b(?:flags|options|subcommands)\\b",
+      "tool": "research__web_search",
+      "arguments": {
+        "query": "{message}",
+        "results": 5
       }
     }
   ],
