@@ -42,12 +42,12 @@ class VisionGpu(unittest.TestCase):
             brain.look(["aW1n"], "what is it?")
         self.assertIs(self.calls[0][1]["think"], False)
 
-    def test_reload_main_model_loads_the_brain_model_with_its_keep_alive(self):
+    def test_reload_main_model_loads_the_brain_model_with_its_keep_alive_and_window(self):
         with self.fake_http({}):
             brain.reload_main_model(CONFIG).join(5)
         url, body = self.calls[0]
         self.assertTrue(url.endswith("/api/generate"))
-        self.assertEqual(body, {"model": "qwen3:14b", "keep_alive": -1})
+        self.assertEqual(body, {"model": "qwen3:14b", "keep_alive": -1, "options": {"num_ctx": 12288}, "shift": False})
 
     def test_reload_failure_is_logged_not_raised(self):
         with self.fake_http(error=urllib.error.URLError("down")), self.assertLogs("brain", "WARNING") as logs:
@@ -64,7 +64,7 @@ class VisionGpu(unittest.TestCase):
 
     def test_a_direct_picture_keeps_the_vision_model_loaded_for_the_next_one(self):
         with self.fake_http({"message": {"content": "a cat"}}), \
-                unittest.mock.patch.object(brain, "main_model_return"):
+                unittest.mock.patch.object(brain, "main_model_return", **{"keeps.return_value": False}):
             self.direct_vision()
         self.assertEqual(self.calls[0][1]["keep_alive"], brain.VISION_KEEP_ALIVE)
 

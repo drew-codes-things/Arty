@@ -63,9 +63,6 @@ Everything added and fixed since 1.3.0: Arty CLI remote control, faster replies 
 
 ## Desktop app
 
-### New
-- A smoother, warmer look across the desktop, Android and iPhone apps.
-
 ### Fixed
 - Connect checks that a plain-http brain knows the key before sending it.
 - An IPv6 address counts as home only when it is private. Tailscale addresses and `.ts.net`, `.internal`, `.home` and `.home.arpa` names count as home.

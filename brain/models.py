@@ -173,6 +173,86 @@ def summary(model: dict) -> str:
     return " · ".join(part for part in [size, *traits] if part)
 
 
+DEFAULT_CONTEXT_TOKENS = 12288
+
+
+def is_token_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def own_window(config: dict, model: str) -> int | None:
+    table = config.get("model_windows") or {}
+    if not model or table.get("enabled") is not True:
+        return None
+    sizes = table.get("num_ctx") or {}
+    size = sizes.get(model, sizes.get(model.removesuffix(":latest")))
+    return size if is_token_count(size) else None
+
+
+def context_tokens(config: dict, model: str = "") -> int:
+    if own := own_window(config, model):
+        return own
+    size = config.get("options", {}).get("num_ctx")
+    return size if is_token_count(size) else DEFAULT_CONTEXT_TOKENS
+
+
+DEFAULT_REPLY_TOKENS = 2048
+
+
+def reply_tokens(config: dict) -> int:
+    size = {**config.get("options", {}), **(config.get("agent_options") or {})}.get("num_predict")
+    return size if isinstance(size, int) and size > 0 else DEFAULT_REPLY_TOKENS
+
+
+SHIFTS_CONTEXT = False
+
+
+def for_runner(config: dict, body: dict) -> dict:
+    return {**body, "options": {**(body.get("options") or {}), "num_ctx": context_tokens(config, body.get("model", ""))},
+            "shift": SHIFTS_CONTEXT}
+
+
+CARD_ARM = "card"
+STEADY_ARM = "steady"
+SAMPLING_ARMS = (CARD_ARM, STEADY_ARM)
+DEFAULT_SAMPLING = "default"
+PLAIN_REPLY_SAMPLING = "without_thinking"
+NOT_SENT_AS_OPTIONS = ("sampling", "models", STEADY_ARM, "num_ctx")
+EXACT_COPY_OPTIONS = ("repeat_penalty",)
+
+
+def sampling_arm(config: dict) -> str:
+    arm = (config.get("agent_options") or {}).get("sampling", CARD_ARM)
+    if arm in SAMPLING_ARMS:
+        return arm
+    log.warning("brain.json agent_options.sampling must be one of %s, not %r; using %s", ", ".join(SAMPLING_ARMS), arm, CARD_ARM)
+    return CARD_ARM
+
+
+def sampling_for(config: dict, model: str, thinks: bool) -> dict:
+    agent = config.get("agent_options") or {}
+    if sampling_arm(config) == STEADY_ARM:
+        return dict(agent.get(STEADY_ARM) or {})
+    entries = agent.get("models") or {}
+    entry = entries.get(model) or entries.get(model.removesuffix(":latest")) or entries.get(DEFAULT_SAMPLING) or {}
+    chosen = {key: value for key, value in entry.items() if key != PLAIN_REPLY_SAMPLING}
+    if not thinks:
+        chosen.update(entry.get(PLAIN_REPLY_SAMPLING) or {})
+    return chosen
+
+
+def agent_options(config: dict, model: str = "", thinks: bool = True) -> dict:
+    flat = {key: value for key, value in (config.get("agent_options") or {}).items() if key not in NOT_SENT_AS_OPTIONS}
+    exact_copy = {key: flat[key] for key in EXACT_COPY_OPTIONS if key in flat}
+    return {**config.get("options", {}), **flat, **sampling_for(config, model, thinks), **exact_copy,
+            "num_predict": reply_tokens(config)}
+
+
+def agent_sampling(config: dict, model: str) -> dict:
+    return {"arm": sampling_arm(config), "thinking": sampling_for(config, model, True),
+            PLAIN_REPLY_SAMPLING: sampling_for(config, model, False)}
+
+
 def is_for_coding(name: str, coding_name: str) -> bool:
     is_coding_model = bool(coding_name) and name in (coding_name, f"{coding_name}:latest")
     return is_coding_model or CODER_MARK in name
@@ -328,7 +408,7 @@ def handoff_tool(config: dict, definition: dict) -> dict:
     return {**definition, "function": {**function, "description": description}}
 
 
-def ask(name: str, prompt: str, config: dict) -> str:
+def ask(name: str, prompt: str, config: dict, keep_alive=0) -> str:
     """One-shot question to another installed model (no tools, no memory), for delegating a job."""
     if not prompt.strip():
         return "Give the other model the full job to do."
@@ -339,11 +419,12 @@ def ask(name: str, prompt: str, config: dict) -> str:
         return NOT_ARTY_REFUSAL.format(name=model["name"], allowed=", ".join(arty_models()))
     if model["embedding"]:
         return f"{name} is a search-index model and can't answer questions."
-    options = {key: value for key, value in config.get("options", {}).items() if key in ("num_ctx", "num_predict", "repeat_penalty")}
+    options = {key: value for key, value in config.get("options", {}).items() if key in ("num_predict", "repeat_penalty")}
     make_room(model["name"], vram_budget(config))
     try:
-        reply = _ollama("/api/chat", {"model": model["name"], "messages": [{"role": "user", "content": prompt}], "stream": False,
-                                      "options": options, "keep_alive": 0}, timeout=900)
+        reply = _ollama("/api/chat", for_runner(config, {"model": model["name"], "messages": [{"role": "user", "content": prompt}],
+                                                         "stream": False, "options": options, "keep_alive": keep_alive}),
+                        timeout=900)
     except (urllib.error.URLError, TimeoutError) as error:
         return f"{name} didn't answer: {error}"
     return f"{model['name']} says:\n{(reply.get('message') or {}).get('content', '').strip()}"

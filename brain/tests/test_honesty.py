@@ -267,5 +267,61 @@ class HomelabNames(unittest.TestCase):
         self.assertEqual([rule["pattern"] for rule in lookups], ["servers?", r"\b(pve1)\b"])
 
 
+
+SHIPPED = json.loads((Path(__file__).resolve().parents[1] / "brain.json").read_text())
+PLACE_RULE = next(rule for rule in SHIPPED["lookups"] if rule.get("tool") == "place_time")
+OTHER_LOOKUPS = [{"tool": "weather", "pattern": "rain"}, {"tool": "calendar_events", "pattern": "diary"}]
+
+
+def looked_up(said, lookups=(PLACE_RULE,)):
+    config = {"lookups": list(lookups), "time_zone": "Europe/London"}
+    others = {"weather": "Tomorrow: dry, 14C.", "calendar_events": "Dentist at 3pm."}
+    real_run_native = brain.run_native
+
+    def run_native(name, arguments, *rest):
+        return (others[name], None) if name in others else real_run_native(name, arguments, *rest)
+    with unittest.mock.patch.object(brain, "run_native", side_effect=run_native):
+        return brain.look_up_first(config, said)
+
+
+class PlaceTimeLookup(unittest.TestCase):
+    def test_a_question_about_a_places_time_is_looked_up(self):
+        for said in ("What's the time in Tokyo?", "what time is it in new york right now", "time in tokyo?",
+                     "what's the time difference between London and Sydney", "current time in Paris please"):
+            with self.subTest(said=said):
+                used, notes, _ = looked_up(said)
+                self.assertEqual(used, ["place_time"])
+                self.assertIn("(Asia/Tokyo)" if "okyo" in said else "it is", notes)
+
+    def test_time_in_a_sentence_that_is_not_about_clocks_is_left_alone(self):
+        for said in ("I had a great time in Paris last year", "first time in a while I've cooked",
+                     "how much time in the oven for a chicken", "we spent some time in Rome"):
+            with self.subTest(said=said):
+                self.assertEqual(looked_up(said), ([], "", None))
+
+    def test_a_clock_question_naming_no_place_is_not_a_lookup(self):
+        for said in ("what time is it in the morning when the bins go out", "what's the time difference, roughly?"):
+            with self.subTest(said=said):
+                self.assertEqual(looked_up(said), ([], "", None))
+
+    def test_a_clock_question_naming_no_place_does_not_take_another_lookups_slot(self):
+        used, notes, _ = looked_up("what time is it in the morning, will it rain, and what's in my diary",
+                                   lookups=[PLACE_RULE] + OTHER_LOOKUPS)
+        self.assertEqual(used, ["weather", "calendar_events"])
+        self.assertNotIn("No place found", notes)
+
+    def test_home_is_the_brains_own_time_zone(self):
+        config = {"lookups": [PLACE_RULE], "time_zone": "America/New_York"}
+        _, notes, _ = brain.look_up_first(config, "what's the time in Tokyo?")
+        self.assertIn("At home (America/New_York)", notes)
+        self.assertNotIn("Europe/London", notes)
+
+    def test_the_model_calling_place_time_gets_the_brains_time_zone_as_home(self):
+        config = {"time_zone": "Australia/Perth"}
+        result, _ = brain.run_native("place_time", {"text": "time in tokyo"}, config, False, None)
+        self.assertIn("At home (Australia/Perth)", result)
+        result, _ = brain.run_native("place_time", {"text": "time in tokyo", "home": "Asia/Tokyo"}, config, False, None)
+        self.assertIn("At home (Asia/Tokyo)", result)
+
 if __name__ == "__main__":
     unittest.main()

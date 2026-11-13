@@ -25,9 +25,38 @@ private fun contrast(foreground: Color, background: Color): Double {
     return (lighter + 0.05) / (darker + 0.05)
 }
 
-class WarmTokensTest {
+class ThemeTokensTest {
     private val surfaces = listOf(ArtyColors.Ink, ArtyColors.Sunken, ArtyColors.Surface, ArtyColors.Raised)
     private val textTones = listOf(ArtyColors.Text, ArtyColors.TextDim, ArtyColors.TextFaint)
+
+    @Test
+    fun surfacesAndTextUseTheStarfirePalette() {
+        assertEquals(Color(0xFF19191C), ArtyColors.Ink)
+        assertEquals(Color(0xFF121214), ArtyColors.Sunken)
+        assertEquals(Color(0xFF222226), ArtyColors.Surface)
+        assertEquals(Color(0xFF2C2C31), ArtyColors.Raised)
+        assertEquals(Color(0xFFEEEEF0), ArtyColors.Text)
+        assertEquals(Color(0xFFB4B4BD), ArtyColors.TextDim)
+        assertEquals(Color(0xFF9A9AA5), ArtyColors.TextFaint)
+    }
+
+    @Test
+    fun accentAndStatusColoursUseTheStarfirePalette() {
+        assertEquals(Color(0xFFE5383B), ArtyColors.Signal)
+        assertEquals(Color(0xFFFF7A7C), ArtyColors.SignalText)
+        assertEquals(0.14f, ArtyColors.SignalSoft.alpha, 0.5f / 255f)
+        assertEquals(Color(0xFFF2B552), ArtyColors.Caution)
+        assertEquals(Color(0xFF5FD990), ArtyColors.Added)
+    }
+
+    @Test
+    fun linesAndFillsUseTheStarfireMixes() {
+        assertEquals(0.10f, ArtyColors.Line.alpha, 0.5f / 255f)
+        assertEquals(0.18f, ArtyColors.LineStrong.alpha, 0.5f / 255f)
+        assertEquals(0.46f, ArtyColors.LineControl.alpha, 0.5f / 255f)
+        assertEquals(0.07f, ArtyColors.FillHover.alpha, 0.5f / 255f)
+        assertEquals(0.12f, ArtyColors.FillPress.alpha, 0.5f / 255f)
+    }
 
     @Test
     fun everyTextToneIsReadableOnEverySurface() {

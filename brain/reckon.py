@@ -6,7 +6,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
+from functools import cache
+from pathlib import Path
+from zoneinfo import TZPATH, ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import calendar_feed
 import quick
@@ -271,7 +273,10 @@ def date_facts(text) -> str:
 
 
 PLACE_AREAS = {"Africa", "America", "Asia", "Atlantic", "Australia", "Europe", "Indian", "Pacific"}
-WORDS_THAT_ARE_ZONES = {"easter", "wake", "midway", "center"}
+WORDS_THAT_ARE_ZONES = {"easter", "wake", "midway", "center", "christmas", "oral", "resolute", "reunion", "north", "south", "west",
+                        "act", "virgin", "victoria"}
+CURRENT_ZONES_FILE = "zone.tab"
+ZONE_TAB_NAME_COLUMN = 2
 PLACE_ALIASES = {
     "japan": "Asia/Tokyo", "china": "Asia/Shanghai", "beijing": "Asia/Shanghai", "india": "Asia/Kolkata",
     "delhi": "Asia/Kolkata", "new delhi": "Asia/Kolkata", "mumbai": "Asia/Kolkata", "bangalore": "Asia/Kolkata",
@@ -287,9 +292,17 @@ PLACE_ALIASES = {
     "california": "America/Los_Angeles", "san francisco": "America/Los_Angeles", "seattle": "America/Los_Angeles",
     "las vegas": "America/Los_Angeles", "texas": "America/Chicago", "dallas": "America/Chicago",
     "houston": "America/Chicago", "washington": "America/New_York", "boston": "America/New_York",
-    "miami": "America/New_York", "florida": "America/New_York",
+    "miami": "America/New_York", "florida": "America/New_York", "north korea": "Asia/Pyongyang", "new jersey": "America/New_York",
+    "buenos aires": "America/Argentina/Buenos_Aires", "cordoba": "America/Argentina/Cordoba", "mendoza": "America/Argentina/Mendoza",
+    "indianapolis": "America/Indiana/Indianapolis", "louisville": "America/Kentucky/Louisville", "montreal": "America/Toronto",
+    "thunder bay": "America/Toronto", "yellowknife": "America/Edmonton", "calcutta": "Asia/Kolkata", "saigon": "Asia/Ho_Chi_Minh",
+    "rangoon": "Asia/Yangon", "katmandu": "Asia/Kathmandu", "dacca": "Asia/Dhaka", "tel aviv": "Asia/Jerusalem", "macao": "Asia/Macau",
+    "ulan bator": "Asia/Ulaanbaatar", "chongqing": "Asia/Shanghai", "harbin": "Asia/Shanghai", "canberra": "Australia/Sydney",
+    "new south wales": "Australia/Sydney", "queensland": "Australia/Brisbane", "tasmania": "Australia/Hobart",
+    "belfast": "Europe/London", "kiev": "Europe/Kyiv", "timbuktu": "Africa/Bamako",
 }
 FALLBACK_HOME_ZONE = "Europe/London"
+NO_PLACE_FOUND = "No place found in the message; use the time tool's convert_time."
 MAX_PLACES = 4
 CLOCK_FORMAT = "%H:%M on %A %d %B %Y"
 
@@ -298,9 +311,23 @@ def now_in(zone: ZoneInfo) -> datetime:
     return datetime.now(zone)
 
 
+def _listed_zones(listing: Path) -> set[str]:
+    rows = (line.split("\t") for line in listing.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#"))
+    return {row[ZONE_TAB_NAME_COLUMN].strip() for row in rows if len(row) > ZONE_TAB_NAME_COLUMN}
+
+
+@cache
+def current_zones() -> frozenset[str]:
+    for folder in TZPATH:
+        listing = Path(folder) / CURRENT_ZONES_FILE
+        if listing.is_file():
+            return frozenset(_listed_zones(listing) & available_timezones())
+    return frozenset(available_timezones())
+
+
 def _place_zones() -> dict[str, str]:
     zones = {}
-    for zone in available_timezones():
+    for zone in current_zones():
         area, _, city = zone.partition("/")
         if area not in PLACE_AREAS or not city or "/" in city:
             continue
@@ -348,7 +375,7 @@ def place_time(text, home=FALLBACK_HOME_ZONE) -> str:
         minutes = round((there.utcoffset() - home_now.utcoffset()).total_seconds() / 60)
         lines.append(f"In {place.title()} ({zone}) it is {there:{CLOCK_FORMAT}}, {_gap_from_home(minutes)}.")
     if not places:
-        lines.append("No place found in the message; use the time tool's convert_time.")
+        lines.append(NO_PLACE_FOUND)
     return "\n".join(lines)
 
 
@@ -379,7 +406,7 @@ TOOLS = {
     "place_time": (lambda a: place_time(a.get("text"), a.get("home")), _tool(
         "place_time", "The time right now in the places named in a piece of text (cities or countries), and how far ahead or behind home they are.",
         {"text": {"type": "string", "description": "the words naming the places, e.g. the user's question"},
-         "home": {"type": "string", "description": "home time zone, e.g. Europe/London"}}, ["text"])),
+         "home": {"type": "string", "description": "a different home time zone; leave out to compare with home"}}, ["text"])),
     "clock_maths": (lambda a: clock_maths(a.get("time"), a.get("hours", 0), a.get("minutes", 0)), _tool(
         "clock_maths", "Add or take away hours and minutes from a time of day, e.g. when a film ending or a journey arrives.",
         {"time": {"type": "string", "description": "24-hour time, e.g. 19:50"},

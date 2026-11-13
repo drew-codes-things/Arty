@@ -1,9 +1,9 @@
 <resources>
     <!-- Dark from the first frame, so the app never flashes white while Compose starts. -->
     <style name="Theme.Arty" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/warm_ink</item>
-        <item name="android:statusBarColor">@color/warm_ink</item>
-        <item name="android:navigationBarColor">@color/warm_ink</item>
+        <item name="android:windowBackground">@color/ink</item>
+        <item name="android:statusBarColor">@color/ink</item>
+        <item name="android:navigationBarColor">@color/ink</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

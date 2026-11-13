@@ -1,3 +1,5 @@
+import io
+import json
 import os
 import stat
 import subprocess
@@ -304,3 +306,43 @@ def test_reading_and_writing_text_about_power_is_not_refused(command):
 ])
 def test_power_off_through_wrappers_and_stdin_is_refused(command):
     assert ws.refusal_reason(command)
+
+
+class VisionCall:
+    def __init__(self):
+        self.bodies = []
+
+    def __call__(self, request, timeout=None):
+        self.bodies.append(json.loads(request.data))
+        return io.BytesIO(json.dumps({"response": "A terminal window."}).encode())
+
+
+def looked_at_desktop(monkeypatch, tmp_path, config):
+    brain_config = tmp_path / "brain.json"
+    if config is not None:
+        brain_config.write_text(json.dumps(config))
+    sent = VisionCall()
+    monkeypatch.setattr(ws, "BRAIN_CONFIG", str(brain_config))
+    monkeypatch.setattr(ws, "_screenshot", lambda: b"\x89PNG fake")
+    monkeypatch.setattr(ws, "remote_text", lambda *a, **k: (0, "1920 1080"))
+    monkeypatch.setattr(ws.urllib.request, "urlopen", sent)
+    assert ws.look_at_desktop("where is the Save button?") == "A terminal window."
+    return sent.bodies[0]
+
+
+def test_looking_at_the_desktop_loads_the_vision_model_at_the_brains_window(monkeypatch, tmp_path):
+    body = looked_at_desktop(monkeypatch, tmp_path, {"options": {"num_ctx": 30000}})
+    assert body["options"]["num_ctx"] == 30000
+    assert body["shift"] is False
+
+
+def test_a_model_with_its_own_window_gets_that_window(monkeypatch, tmp_path):
+    windows = {"enabled": True, "num_ctx": {ws.VISION_MODEL: 49152}}
+    body = looked_at_desktop(monkeypatch, tmp_path, {"options": {"num_ctx": 30000}, "model_windows": windows})
+    assert body["options"]["num_ctx"] == 49152
+
+
+def test_without_the_brains_settings_it_uses_the_shipped_window(monkeypatch, tmp_path):
+    body = looked_at_desktop(monkeypatch, tmp_path, None)
+    assert body["options"]["num_ctx"] == ws.FALLBACK_CONTEXT_TOKENS == 24576
+    assert body["shift"] is False

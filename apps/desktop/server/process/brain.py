@@ -41,7 +41,14 @@ TOOL_RESULT_CHARS = 6000
 STUCK_REPEATS = 3
 MEDIA_PATH = re.compile(r"/arty-files/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[^/?#]+$")
 MEDIA_TIMEOUT_SECONDS = 120
-TOOLS_USED_NOTE = "Tools you used or tried on their computer for that reply: "
+TOOLS_USED_NOTE = "For your reply above, you used or tried these tools on their computer: "
+TOOLS_NOTE_END = " (a note for you, not something to repeat)"
+TOOLS_NOTE_ECHO = re.compile(r"[ \t]*(?:\[\s*|<context>\s*)?(?:Tools you used or tried on their computer|"
+                             r"For your reply above, you used or tried these tools on their computer)[^\]\n<]*(?:\]|</context>)?",
+                             re.IGNORECASE)
+REPEATED_STEP_NOTE = ("\n\n(You did exactly this step in your last turn too. Doing it a third time won't change anything: "
+                      "try something different, or tell them plainly what happened.)")
+STOPPED_REPEATING = "I stopped there: I was {doing} over and over and it wasn't getting anywhere. Tell me what you'd like me to try instead."
 MAX_SAVED_ACTIONS = 30
 MAX_SAVED_ACTION_CHARS = 80
 
@@ -109,12 +116,27 @@ def save_turn(user_text, reply, actions=()):
     _save_history(trimmed(history))
 
 
-def _as_sent(message):
-    actions = message.get("actions")
-    sent = {"role": message.get("role"), "content": message.get("content")}
-    if actions:
-        sent["content"] = f"{sent['content']}\n\n[{TOOLS_USED_NOTE}{'; '.join(map(str, actions))}]"
-    return sent
+def _tools_note(actions):
+    return f"\n\n<context>{TOOLS_USED_NOTE}{'; '.join(map(str, actions))}{TOOLS_NOTE_END}</context>" if actions else ""
+
+
+def _without_tools_note(text):
+    cleaned = TOOLS_NOTE_ECHO.sub("", text)
+    return cleaned.strip() if cleaned != text else text
+
+
+def _as_sent(history):
+    sent, pending_note = [], ""
+    for message in history:
+        role, content = message.get("role"), message.get("content")
+        if role == "assistant":
+            sent.append({"role": role, "content": _without_tools_note(str(content or ""))})
+            pending_note = _tools_note(message.get("actions"))
+            continue
+        sent.append({"role": role, "content": f"{content}{pending_note}" if role == "user" else content})
+        if role == "user":
+            pending_note = ""
+    return sent, pending_note
 
 
 def trimmed(history):
@@ -303,8 +325,10 @@ def llm_stream(user_input, extra_system=None, note=""):
     this message only (small models heed it there far more than in the system prompt)."""
     system = DESKTOP_NOTE + tools.prompt_addition() + context.NOTE_EXPLAINED + (extra_system or "")
     messages = [{"role": "system", "content": system.strip()}]
-    messages += [_as_sent(message) for message in trimmed(load_history())]
-    messages.append({"role": "user", "content": user_input + (f"\n\n{note}" if note else "") + context.as_note()})
+    remembered, tools_note = _as_sent(trimmed(load_history()))
+    messages += remembered
+    note = "\n\n".join(part for part in (note, tools.request_note(user_input)) if part)
+    messages.append({"role": "user", "content": user_input + (f"\n\n{note}" if note else "") + tools_note + context.as_note()})
     offer = tools.definitions(user_input)
     consented = set()  # things they've said yes to during this reply
     recent_calls = []
@@ -317,6 +341,12 @@ def llm_stream(user_input, extra_system=None, note=""):
             lead = "\n\n"
         if not calls:
             return
+        signature = _calls_signature(calls)
+        if recent_calls[-(STUCK_REPEATS - 1):] == [signature] * (STUCK_REPEATS - 1):
+            yield lead + _stopped_repeating(calls)
+            return
+        repeated = bool(recent_calls) and recent_calls[-1] == signature
+        recent_calls = (recent_calls + [signature])[-STUCK_REPEATS:]
         messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
         for call in calls:
             function = call.get("function") or {}
@@ -338,12 +368,19 @@ def llm_stream(user_input, extra_system=None, note=""):
             else:
                 result = tools.run(name, arguments)
             print(f"[tool] {name} -> {len(str(result))} chars", flush=True)
-            messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "content": _clip(result)})
+            sent_result = _clip(result) + (REPEATED_STEP_NOTE if repeated else "")
+            messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "content": sent_result})
         # Lets the caller notice a hang-up between steps of a long job.
         yield ""
-        signature = json.dumps([(c.get("function") or {}).get("name") for c in calls] + [(c.get("function") or {}).get("arguments") for c in calls])
-        recent_calls = (recent_calls + [signature])[-STUCK_REPEATS:]
-        if len(recent_calls) == STUCK_REPEATS and len(set(recent_calls)) == 1:
-            # The same call over and over: stop offering tools so it has to answer.
-            offer = None
     yield "I stopped after a lot of steps. Tell me if you want me to keep going."
+
+
+def _calls_signature(calls):
+    functions = [call.get("function") or {} for call in calls]
+    return json.dumps([function.get("name") for function in functions] + [function.get("arguments") for function in functions])
+
+
+def _stopped_repeating(calls):
+    function = calls[0].get("function") or {}
+    doing, _where = tools.describe(function.get("name", ""), function.get("arguments") or "{}")
+    return STOPPED_REPEATING.format(doing=doing or "doing the same step")

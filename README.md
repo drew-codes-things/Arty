@@ -84,7 +84,7 @@ alerts - only ever go to **Updates** in the phone and desktop apps.
 | [`apps/beta/code/`](apps/beta/code/) | **Beta, being replaced by Arty CLI.** Arty Code - the first terminal app |
 | [`voice/`](voice/) | The room mic and speakers hub, and the "Hey Arty" voice assistant |
 | [`extensions/gmail/`](extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
-| [`extensions/browser/`](extensions/browser/) | Chrome extension that lets Arty Desktop use your own browser |
+| [`extensions/browser/`](extensions/browser/) | Browser extension (Chrome, Edge, Brave, Chromium, Firefox) that lets Arty Desktop use your own browser |
 | [`chat-bots/telegram/`](chat-bots/telegram/), [`chat-bots/discord/`](chat-bots/discord/) | Arty on Telegram and Discord, owner-only |
 | [`docs/`](docs/) | [The Arty API](docs/API.md), [linking everything through Cloudflare](docs/cloudflare.md), [connecting a phone](docs/connecting-a-phone.md) and [connecting a Quest headset](docs/connecting-a-headset.md) |
 
@@ -151,16 +151,18 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.4.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.4.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.4.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-1.5.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.5.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.5.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-Browser-Extension-1.5.0.zip` | [Arty for Chrome](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
+| `Arty-Browser-Extension-1.5.0.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (below).
 
-What changed lately: [release notes for 12 November 2026](docs/release-notes-2026-11-12.md), and before that [11 November 2026](docs/release-notes-2026-11-11.md).
+What changed lately: [release notes for 13 November 2026](docs/release-notes-2026-11-13.md), and before that [12 November 2026](docs/release-notes-2026-11-12.md).
 
 ---
 
@@ -296,12 +298,12 @@ Follow [arty-pc/README.md](arty-pc/README.md) to sign Arty's browser in to the s
 | App | First start |
 |---|---|
 | [Arty Desktop](apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](apps/android/README.md) | Install `Arty-1.4.0.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](apps/android/README.md) | Install `Arty-1.5.0.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |
 | [Arty Code](apps/beta/code/README.md) (beta, being replaced) | `pipx install ./apps/beta/code`, then `arty-code setup` asks for the same details as Arty Desktop |
-| [Arty for Chrome](extensions/browser/README.md) | Lets Arty Desktop use your own browser |
+| [Arty for Chrome](extensions/browser/README.md) | Lets Arty Desktop use your own browser: Chrome, Edge, Brave, Chromium or Firefox |
 
 Away from home, the phone apps need [the Cloudflare link](docs/cloudflare.md). To set a phone up, scan the QR code
 from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
@@ -397,7 +399,7 @@ Know these before relying on it:
 - **Speed** - `qwen3:14b` writes about 33 tokens a second on an RTX 3060. Replies usually start within a few
   seconds, but the first message after the model has unloaded, or one that needs a new group of tools, can take
   20-50 seconds.
-- **Short memory within a chat** - 12,288 tokens of context, so long chats are trimmed. Older chats and saved facts
+- **Short memory within a chat** - 24,576 tokens of context, so long chats are trimmed. Older chats and saved facts
   are recalled by search, and it can miss details.
 - **One model on the GPU at a time** - looking at an image swaps the vision model in for that one look, then the main
   model loads back in the background (about a minute in all).
@@ -455,7 +457,7 @@ A full run of 17 test questions passed 16; everything left over passed when re-t
 | Sums and percentages | Did them in its head | `calculate` |
 | Clock maths (film end times) | OK | `clock_maths` for exactness |
 | "Write me a command" | Ran it instead of writing it | Gives just the code; "...and run it" runs it |
-| All 65 tools offered at once | About 10,500 tokens of tool descriptions in a 12,288-token context | Capped at 40 tools per message, about 5,000 tokens |
+| All 65 tools offered at once | About 10,500 tokens of tool descriptions in what was then a 12,288-token context (24,576 now) | Capped at 40 tools per message, about 5,000 tokens |
 
 ### The honesty check, judged by qwen3:14b
 

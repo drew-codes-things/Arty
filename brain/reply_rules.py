@@ -35,6 +35,9 @@ def trim_offers(answer: str) -> str:
 
 
 URL_TAGS = re.compile(r"</?url>", re.IGNORECASE)
+TOOLS_NOTE_ECHO = re.compile(r"[ \t]*(?:\[\s*|<context>\s*)?(?:Tools you used or tried on their computer|"
+                             r"For your reply above, you used or tried these tools on their computer)[^\]\n<]*(?:\]|</context>)?",
+                             re.IGNORECASE)
 # Small models sometimes run on past their answer into their own instructions (the time line, the tool list).
 PROMPT_LEAK = re.compile(r"((?:^|\n)\s*It is now \w+day \d+ \w+ \d{4}, \d\d:\d\d \([^()\n]*, UTC[+-]\d\d:\d\d\)|\n\s*# Tools\b|<tools>|"
                          r"You may call one or more functions|\n\s*FACTS YOU ALREADY KNOW|\n\s*BACKGROUND ONLY, do not continue|</?notes>|"

@@ -95,3 +95,28 @@ def test_the_service_proves_it_holds_this_launchs_token_without_being_sent_it(mo
     assert response.json() == {"proof": "1595e14e468ad0570764971152d859f22ebc14291d012bf85a719d4d612222fc"}
     assert client.get("/whoami", params={"nonce": "not-hex"}).status_code == 400
     assert client.get("/whoami", headers={"Host": "evil.example:8765"}, params={"nonce": "0" * 32}).status_code == 403
+
+
+FIREFOX_EXTENSION = "moz-extension://4f0a8c1e-2b7d-4c55-9e1a-0d3b6f7a9c21"
+
+
+def test_the_arty_extension_in_firefox_reaches_only_the_browser_queue_with_the_pairing_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(arty_server, "PAIRING_FILE", tmp_path / ".arty_browser_pairing")
+    monkeypatch.setattr(arty_server, "_pairing", {})
+    paired = {"Origin": FIREFOX_EXTENSION, "X-Arty-Pairing": arty_server.pairing_code()}
+    assert client.post("/browser/next?timeout=0", headers=paired).status_code == 200
+    assert client.post("/browser/result", headers=paired, json={"id": 0, "result": {}}).status_code == 200
+    assert client.post("/browser/next?timeout=0", headers={"Origin": FIREFOX_EXTENSION, "X-Arty-Pairing": "0" * 32}).status_code == 403
+    assert status(**paired) == 403
+    assert client.post("/chat/stream", headers=paired, json={"text": "hi"}).status_code == 403
+    for forged in ("moz-extension://not-a-uuid", "moz-extension://4f0a8c1e-2b7d-4c55-9e1a-0d3b6f7a9c21.evil.example",
+                   "https://moz-extension.example"):
+        assert client.post("/browser/next?timeout=0", headers={**paired, "Origin": forged}).status_code == 403, forged
+
+
+def test_the_firefox_extension_passes_the_cors_check():
+    preflight = client.options("/browser/next", headers={"Origin": FIREFOX_EXTENSION, "Access-Control-Request-Method": "POST",
+                                                         "Access-Control-Request-Headers": "X-Arty-Pairing"})
+    assert preflight.headers.get("access-control-allow-origin") == FIREFOX_EXTENSION
+    other = client.options("/browser/next", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    assert other.headers.get("access-control-allow-origin") is None

@@ -186,3 +186,40 @@ class PlaceTime(unittest.TestCase):
 
     def test_unknown_home_zone_falls_back(self):
         self.assertIn("At home (Europe/London)", reckon.place_time("time in tokyo", "Mars/Olympus"))
+
+    def test_north_korea_is_pyongyang_not_darwin(self):
+        answer = reckon.place_time("What's the time in North Korea?", "Europe/London")
+        self.assertIn("In North Korea (Asia/Pyongyang) it is 04:06 on Friday 13 November 2026, 9 hours ahead of home.", answer)
+        self.assertNotIn("Australia/", answer)
+        self.assertNotIn("Asia/Seoul", answer)
+
+    def test_old_australian_zone_names_are_not_places(self):
+        for message in ("what time is it in the north of England", "every time in the south west I get lost",
+                        "is it a good time in my act to add a joke", "what time is it in the Virgin megastore"):
+            with self.subTest(message=message):
+                self.assertNotIn("Australia/", reckon.place_time(message, "Europe/London"))
+                self.assertNotIn("America/Virgin", reckon.place_time(message, "Europe/London"))
+
+    def test_the_north_of_england_is_england(self):
+        answer = reckon.place_time("what time is it in the north of England", "Europe/London")
+        self.assertIn("In England (Europe/London)", answer)
+
+    def test_words_that_are_also_zone_cities_are_not_places(self):
+        for message in ("time difference between christmas and easter", "is the oral exam at the same time in the morning",
+                        "a resolute time in my life", "a family reunion time in June"):
+            with self.subTest(message=message):
+                self.assertIn("No place found", reckon.place_time(message, "Europe/London"))
+
+    def test_old_names_of_real_places_still_work_under_their_current_zone(self):
+        for message, line in (("time in Kiev", "In Kiev (Europe/Kyiv)"), ("time in Buenos Aires", "(America/Argentina/Buenos_Aires)"),
+                              ("time in Calcutta", "In Calcutta (Asia/Kolkata)"), ("time in Saigon", "(Asia/Ho_Chi_Minh)"),
+                              ("time in Queensland", "(Australia/Brisbane)"), ("time in New Jersey", "In New Jersey (America/New_York)")):
+            with self.subTest(message=message):
+                self.assertIn(line, reckon.place_time(message, "Europe/London"))
+
+    def test_every_place_maps_to_a_current_zone(self):
+        current = reckon.current_zones()
+        self.assertIn("Asia/Tokyo", current)
+        self.assertNotIn("Australia/North", current)
+        stale = {name: zone for name, zone in reckon._place_zones().items() if zone not in current}
+        self.assertEqual(stale, {})

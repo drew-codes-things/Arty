@@ -243,7 +243,7 @@ systemctl enable --now homelab-security.timer >/dev/null
 echo "== CT $CT: one context size for every Ollama caller"
 # A model loaded with one context size is reloaded (and its prompt cache lost) when a caller asks
 # for another, so callers that don't say (Open WebUI's titles) get the brain's size too.
-pct exec $CT -- bash -c 'mkdir -p /etc/systemd/system/ollama.service.d && printf "[Service]\nEnvironment=\"OLLAMA_CONTEXT_LENGTH=12288\"\nEnvironment=\"OLLAMA_MAX_LOADED_MODELS=2\"\nEnvironment=\"OLLAMA_KV_CACHE_TYPE=q8_0\"\n" > /etc/systemd/system/ollama.service.d/context.conf && systemctl daemon-reload && systemctl restart ollama'
+pct exec $CT -- bash -c 'mkdir -p /etc/systemd/system/ollama.service.d && printf "[Service]\nEnvironment=\"OLLAMA_CONTEXT_LENGTH=24576\"\nEnvironment=\"OLLAMA_MAX_LOADED_MODELS=2\"\nEnvironment=\"OLLAMA_KV_CACHE_TYPE=q8_0\"\n" > /etc/systemd/system/ollama.service.d/context.conf && systemctl daemon-reload && systemctl restart ollama'
 
 echo "== GPU: CT $CT gets whichever card is fitted (NVIDIA: CUDA, AMD: Vulkan), checked at every boot"
 chmod 755 /usr/local/sbin/arty-gpu-select  # copied over before this block

@@ -5,6 +5,7 @@ Everything runs on the desktop VM over SSH (see remote.py).
 import base64
 import html
 import json
+import logging
 import os
 import re
 import shlex
@@ -20,6 +21,9 @@ from remote import text as remote_text
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 VISION_MODEL = os.environ.get("VISION_MODEL", "qwen2.5vl:7b")
+BRAIN_CONFIG = os.environ.get("BRAIN_CONFIG", "/srv/ai/brain/brain.json")
+FALLBACK_CONTEXT_TOKENS = 24576
+SHIFTS_CONTEXT = False
 TERMINAL_LOG = "~/.assistant/terminal.log"
 SCREEN_FILE = "/tmp/assistant-screen.png"
 OCR_MIN_CONFIDENCE = 40
@@ -309,6 +313,34 @@ def _screenshot() -> bytes | str:
     return data
 
 
+def is_token_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def brain_settings() -> dict:
+    try:
+        with open(BRAIN_CONFIG, encoding="utf-8") as settings:
+            loaded = json.load(settings)
+    except (OSError, ValueError) as error:
+        logging.getLogger("workspace").warning("could not read the brain's settings at %s (%s); using a %d-token window",
+                                               BRAIN_CONFIG, error, FALLBACK_CONTEXT_TOKENS)
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def context_tokens(model: str) -> int:
+    settings = brain_settings()
+    windows = settings.get("model_windows") or {}
+    own = (windows.get("num_ctx") or {}).get(model) if windows.get("enabled") is True else None
+    shared = (settings.get("options") or {}).get("num_ctx")
+    return next((size for size in (own, shared) if is_token_count(size)), FALLBACK_CONTEXT_TOKENS)
+
+
+def for_runner(body: dict) -> dict:
+    return {**body, "options": {**(body.get("options") or {}), "num_ctx": context_tokens(body.get("model", ""))},
+            "shift": SHIFTS_CONTEXT}
+
+
 @mcp.tool()
 def look_at_desktop(question: str = "") -> str:
     """Take a screenshot of your desktop and get a description of it (windows, text, buttons and their pixel positions).
@@ -323,8 +355,8 @@ def look_at_desktop(question: str = "") -> str:
         "Describe the windows, visible text and clickable controls, giving approximate pixel coordinates (x, y) for anything clickable. "
         + (f"Focus on this question: {question}" if question else "")
     )
-    body = json.dumps({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(shot).decode()], "stream": False,
-                       "keep_alive": 0}).encode()
+    body = json.dumps(for_runner({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(shot).decode()],
+                                  "stream": False, "keep_alive": 0})).encode()
     request = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=300) as response:

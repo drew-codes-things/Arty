@@ -668,7 +668,7 @@ def screenshot():
         return base64.b64encode(Path(scaled).read_bytes()).decode(), width, height
 
 
-def _vision(prompt, image, max_tokens=300):
+def ask_vision(prompt, image, max_tokens=300):
     """Asks the vision model (straight through Arty's brain, see process.vision.look)."""
     from process.vision import look
 
@@ -695,7 +695,7 @@ def computer_look(question=""):
     try:
         image, _w, _h = screenshot()
         ask = f"\n\nIn particular: {question.strip()}" if (question or "").strip() else ""
-        reply = _vision(LOOK_PROMPT.format(question=ask), image)
+        reply = ask_vision(LOOK_PROMPT.format(question=ask), image)
     except Exception as e:
         return f"Looking failed: {type(e).__name__}: {str(e)[:200]}"
     print("[computer] looked at the screen", flush=True)
@@ -708,7 +708,7 @@ def _locate(target):
     ask = (f"Find {target} on this screenshot. Reply with only JSON "
            '{"x": X, "y": Y} for its centre, as thousandths of the image width and '
            'height (0-1000), or {"x": null, "y": null} if it is not on the screen.')
-    raw = _vision(ask, image, max_tokens=40)
+    raw = ask_vision(ask, image, max_tokens=40)
     m = re.search(r"\{.*\}", raw, re.S)
     spot = json.loads(m.group(0)) if m else {}
     if spot.get("x") is None or spot.get("y") is None:

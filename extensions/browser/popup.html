@@ -4,12 +4,38 @@
   <meta charset="utf-8">
   <title>Arty for Chrome</title>
   <style>
-    body { font: 14px system-ui, sans-serif; width: 280px; margin: 12px; color: #1d1d1f; background: #fff; }
-    h1 { font-size: 15px; margin: 0 0 6px; }
-    p { margin: 0 0 10px; color: #555; }
-    input { width: 100%; box-sizing: border-box; padding: 6px; font: 13px ui-monospace, monospace; }
-    button { margin-top: 8px; padding: 6px 12px; }
-    #status { margin-top: 8px; min-height: 1.2em; }
+    :root {
+      color-scheme: dark;
+      --bg: #19191c;
+      --surface: #222226;
+      --text: #eeeef0;
+      --muted: #b4b4bd;
+      --faint: #9a9aa5;
+      --accent: #e5383b;
+      --accent-text: #ff7a7c;
+      --line-strong: color-mix(in srgb, var(--text) 18%, transparent);
+      --line-control: color-mix(in srgb, var(--text) 46%, transparent);
+      --accent-tint: color-mix(in srgb, var(--accent) 14%, transparent);
+      --focus: color-mix(in srgb, var(--accent-text) 72%, transparent);
+      --ease: cubic-bezier(.2, .7, .3, 1);
+    }
+    * { box-sizing: border-box; }
+    body { width: 300px; margin: 0; padding: 16px; background: var(--surface); color: var(--text); font: 14px/1.55 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+    :focus { outline: none; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; letter-spacing: -.015em; }
+    p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+    b { color: var(--text); font-weight: 500; }
+    form { display: flex; flex-direction: column; gap: 8px; }
+    input { width: 100%; height: 36px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--bg); color: var(--text); font: 13px "IBM Plex Mono", ui-monospace, monospace; transition: border-color .16s var(--ease), box-shadow .16s var(--ease); }
+    input::placeholder { color: var(--faint); opacity: 1; }
+    input:hover { border-color: var(--line-control); }
+    input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-tint); }
+    button { align-self: flex-end; height: 36px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--text); color: var(--bg); font: 500 13px "IBM Plex Sans", system-ui, sans-serif; cursor: pointer; transition: background-color .16s var(--ease), transform .16s var(--ease); }
+    button:hover { background: color-mix(in srgb, var(--text) 86%, var(--bg)); }
+    button:active { transform: scale(.97); }
+    #status { min-height: 1.2em; margin-top: 8px; color: var(--muted); font-size: 12px; }
+    @media (prefers-reduced-motion: reduce) { * { transition-duration: .001ms !important; } button:active { transform: none; } }
   </style>
 </head>
 <body>

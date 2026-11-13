@@ -100,6 +100,23 @@ class ListingEverything(Server):
         self.assertFalse(listed["arty/qwen3:14b"]["coding"])
         self.assertTrue(listed["arty/qwen2.5:72b"]["coding"])
 
+    def test_the_full_list_says_how_much_context_each_model_gets(self):
+        with unittest.mock.patch.object(brain, "load_config", return_value={"options": {"num_ctx": 24576}}):
+            status, body = self.request("GET", "/v1/models?all=1")
+        self.assertEqual(status, 200)
+        self.assertEqual({entry["context_tokens"] for entry in json.loads(body)["data"]}, {24576})
+
+    def test_the_full_list_says_how_long_an_agent_reply_can_be(self):
+        config = {"options": {"num_ctx": 24576, "num_predict": 2048}, "agent_options": {"num_predict": 4096}}
+        with unittest.mock.patch.object(brain, "load_config", return_value=config):
+            status, body = self.request("GET", "/v1/models?all=1")
+        self.assertEqual(status, 200)
+        self.assertEqual({entry["reply_tokens"] for entry in json.loads(body)["data"]}, {4096})
+
+    def test_the_context_size_falls_back_to_the_brain_default(self):
+        self.assertEqual(models.context_tokens({}), models.DEFAULT_CONTEXT_TOKENS)
+        self.assertEqual(models.context_tokens({"options": {"num_ctx": "lots"}}), models.DEFAULT_CONTEXT_TOKENS)
+
     def test_the_full_list_marks_the_coding_model_and_coder_models(self):
         self.assertTrue(models.is_for_coding("mimo-v2.6:9b", "mimo-v2.6:9b"))
         self.assertTrue(models.is_for_coding("qwen2.5-coder:14b", ""))

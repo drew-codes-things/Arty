@@ -207,9 +207,30 @@ def test_the_next_turn_knows_which_tools_the_last_reply_used(fake):
     assert brain.load_history()[-1]["actions"] == ["editing notes.txt"]
     fake["replies"] += [{"content": "Yes."}]
     list(brain.llm_stream("did you change it?"))
-    remembered = fake["sent"][0][2]
-    assert remembered["role"] == "assistant" and "editing notes.txt" in remembered["content"]
-    assert "actions" not in remembered
+    remembered, asked = fake["sent"][0][2], fake["sent"][0][3]
+    assert remembered == {"role": "assistant", "content": "Done."}
+    assert asked["role"] == "user" and asked["content"].startswith("did you change it?")
+    assert "<context>For your reply above, you used or tried these tools on their computer: editing notes.txt" in asked["content"]
+
+
+def test_tools_of_an_earlier_reply_ride_on_the_message_after_it(fake):
+    brain.save_turn("tidy my notes", "Done.", actions=["editing notes.txt"])
+    brain.save_turn("thanks", "Any time.")
+    fake["replies"] += [{"content": "Yes."}]
+    list(brain.llm_stream("did you change it?"))
+    sent = fake["sent"][0]
+    assert [message["content"] for message in sent[1:3]] == ["tidy my notes", "Done."]
+    assert sent[3]["content"].startswith("thanks") and "editing notes.txt" in sent[3]["content"]
+    assert sent[4] == {"role": "assistant", "content": "Any time."}
+    assert "editing notes.txt" not in sent[5]["content"]
+
+
+def test_a_tools_note_the_model_copied_into_an_old_reply_is_not_sent_back(fake):
+    brain.save_turn("open youtube", "It's open.\n\n[Tools you used or tried on their computer for that reply: opening youtube.com]",
+                    actions=["opening youtube.com"])
+    fake["replies"] += [{"content": "Yes."}]
+    list(brain.llm_stream("is it open?"))
+    assert fake["sent"][0][2]["content"] == "It's open."
 
 
 def test_the_brain_is_told_the_desktop_app_is_asking(monkeypatch):
@@ -251,3 +272,22 @@ def test_choosing_the_main_model_by_its_old_name_picks_arty(monkeypatch):
 def test_a_config_saved_with_the_old_name_starts_on_arty():
     assert brain.as_current_name("assistant-core") == "Arty"
     assert brain.as_current_name("arty/qwen3:14b") == "arty/qwen3:14b"
+
+
+def test_the_same_step_a_second_time_comes_back_with_a_note_to_try_something_else(fake):
+    click = call("chrome_click", {"item": 138})
+    fake["replies"] += [{"tool_calls": [click]}, {"tool_calls": [click]}, {"content": "That was a short video, not the first result."}]
+    list(brain.llm_stream("play the first result"))
+    assert brain.REPEATED_STEP_NOTE not in fake["sent"][1][-1]["content"]
+    assert fake["sent"][2][-1]["content"].endswith(brain.REPEATED_STEP_NOTE)
+
+
+def test_a_step_repeated_over_and_over_ends_in_a_plain_sentence_not_a_toolless_round(fake):
+    click = call("chrome_click", {"item": 138})
+    fake["replies"] += [{"tool_calls": [click]}, {"tool_calls": [click]}, {"tool_calls": [click]}, {"content": "unused"}]
+    pieces = list(brain.llm_stream("play the first result"))
+    reply = "".join(piece for piece in pieces if not isinstance(piece, brain.Activity))
+    assert len(fake["ran"]) == 2
+    assert len(fake["sent"]) == 3
+    assert "doing chrome_click" in reply and "over and over" in reply
+    assert "lost my train of thought" not in reply

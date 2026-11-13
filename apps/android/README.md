@@ -126,7 +126,7 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
   any, otherwise the personal build's built-in ones.
 - Chat turns run as brain jobs that the app polls, because Cloudflare ends any request that waits more than 100
   seconds. The wait rides out a dropped connection, 429, 500, 502 to 504 and Cloudflare's 520 to 530 (`ChatWait`).
-- `ui/Theme.kt` and `ui/Controls.kt` - the warm look: colour, shape and motion tokens, and the buttons, fields, cards
+- `ui/Theme.kt` and `ui/Controls.kt` - the look shared with starfire.ai: colour, shape and motion tokens, and the buttons, fields, cards
   and list arrivals every screen shares. Motion stops when the phone's animations are turned off.
 - `design/` - the Arty logo source and icon previews. Fonts are IBM Plex Sans and Mono (SIL Open Font License).
 - Toolchain: Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21, JDK 21, compileSdk and targetSdk 35, minSdk 28.

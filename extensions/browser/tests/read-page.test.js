@@ -5,7 +5,8 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
-const readPageSource = source.slice(source.indexOf('function readPage()'), source.indexOf('function clickItem('));
+const readPageSource = source.slice(source.indexOf('function readPage('), source.indexOf('function clickItem('));
+const hintsLine = source.match(/^const PRIVATE_FIELD_HINTS = .*$/m)[0];
 
 function field({ type = 'text', name = '', id = '', autocomplete = '', label = '', value = '' }) {
   const attributes = { type, autocomplete, 'aria-label': label };
@@ -19,12 +20,12 @@ function field({ type = 'text', name = '', id = '', autocomplete = '', label = '
 
 function readPageWith(elements) {
   const context = {
-    document: { title: 'Checkout', body: { innerText: 'Pay now' }, querySelectorAll: (selector) => (selector === '[data-arty-n]' ? [] : elements) },
+    document: { title: 'Checkout', body: { innerText: 'Pay now' }, querySelector: () => null, querySelectorAll: (selector) => (selector === '[data-arty-n]' ? [] : elements) },
     location: { href: 'https://shop.example/checkout' },
     getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
   };
   vm.createContext(context);
-  vm.runInContext(`${readPageSource}\nresult = readPage();`, context);
+  vm.runInContext(`${hintsLine}\n${readPageSource}\nresult = readPage(PRIVATE_FIELD_HINTS);`, context);
   return context.result.items.map((item) => item.label).join('\n');
 }
 

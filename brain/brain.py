@@ -58,9 +58,13 @@ import policy
 import remote_sessions
 import store
 import timing
+import tool_guide
+import written_calls
 import undo
 import weather
 import web_app
+import window_fit
+from agent_sessions import AgentSessions
 from announcements import announced, record_announcement, wait_for_announcements
 from api_support import (
     IDENTITY_NONCE, optional_int, ApiError, same_secret, identity_proofs, text_field, list_limit, valid_messages,
@@ -73,7 +77,7 @@ from reply_rules import (
     OFFER_SENTENCE, trim_offers, URL_TAGS, PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING,
     SEARCH_REQUEST, REMIND_REQUEST, CHAT_APP, reminder_from, PROMISE, TOOL_TALK, DO_REQUEST, PRETEND_TOOLS,
     TOOL_META_SENTENCE, TOOL_FAILED, FAILED_NOTE, NOT_ACTIONS, NOT_FOR_ME, VOICE_MODE, ADDRESSED_PROMPT, JSON_BLOCK,
-    ANSWERED_ALREADY_CHARS, TOOLLESS_NOTE, APP_NOTES)
+    ANSWERED_ALREADY_CHARS, TOOLLESS_NOTE, APP_NOTES, TOOLS_NOTE_ECHO)
 from schedules import (
     create_schedule, ensure_reminder, set_reminder, send_reminder, guarded, due_schedules_now,
     send_calendar_and_deadline_reminders)
@@ -144,7 +148,7 @@ OWNER said: "%s"
 Answer:""", USER_NAME)
 BACKGROUND_INSTRUCTIONS = """BACKGROUND TASK MODE
 You are working on a task by yourself; the user is not watching the chat. Work through it fully with your tools, checking each step.
-- If you need a human (a website login, a CAPTCHA or bot check), call ask_user: the task pauses until the user has done it, then you continue.
+- If you need a human (a website login, a CAPTCHA or bot check), ask the user with your tools: the task pauses until the user has done it, then you continue.
 - Outward-facing actions (posting, sending, connecting, buying) are held for the user's approval automatically; just carry on calling the tool.
 - When finished, reply with a short report of what you did and found, written to the user as "you". It is sent to his phone."""
 
@@ -158,7 +162,7 @@ def tidy_answer(answer: str) -> str:
         answer = answer[:leak.start()].rstrip()
     if answer.count("```") % 2 == 1 and (fumbled := FUMBLED_CALL.search(answer)):
         answer = answer[:fumbled.start()]  # an unclosed block would turn the rest of the chat into code
-    answer = LOOKUP_LABEL.sub("", answer)
+    answer = TOOLS_NOTE_ECHO.sub("", LOOKUP_LABEL.sub("", answer))
     answer = TOOL_META_SENTENCE.sub("", JSON_BLOCK.sub("\n", answer))
     answer = re.sub(r"\n{3,}", "\n\n", answer)  # no strip: this also cleans early sentences, whose spaces matter
     answer = NAME_GREETING.sub(lambda m: m.group(1), answer)
@@ -337,10 +341,10 @@ def restore_memory_reply(said: str) -> str | None:
 def addressed_to_arty(config, heard: str, conversation: list[dict]) -> bool:
     previous = next((message_text(m) for m in reversed(conversation) if m.get("role") == "assistant"), "") or "(nothing yet)"
     try:
-        reply = http_json(f"{OLLAMA_URL}/api/chat", timeout=60, body={
+        reply = http_json(f"{OLLAMA_URL}/api/chat", timeout=60, body=models.for_runner(config, {
             "model": config["model"], "stream": False, "format": "json", "think": False,
-            "options": {"temperature": 0, "num_predict": 20, "num_ctx": config.get("options", {}).get("num_ctx", 12288)},
-            "messages": [{"role": "user", "content": ADDRESSED_PROMPT % (previous[-400:], heard[:400])}]})
+            "options": {"temperature": 0, "num_predict": 20},
+            "messages": [{"role": "user", "content": ADDRESSED_PROMPT % (previous[-400:], heard[:400])}]}))
         return json.loads(reply["message"]["content"]).get("for_arty") is not False
     except Exception as error:
         log.warning("couldn't tell whether a voice message was for Arty: %s", error)
@@ -350,10 +354,10 @@ def addressed_to_arty(config, heard: str, conversation: list[dict]) -> bool:
 def extract_memories(config, user_text, answer, save=None):
     with memory_lock:
         try:
-            reply = http_json(f"{OLLAMA_URL}/api/chat", body={
-                "model": config["model"], "stream": False, "format": "json", "think": False, "options": {"temperature": 0, "num_predict": 512, "num_ctx": config.get("options", {}).get("num_ctx", 12288)},
+            reply = http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
+                "model": config["model"], "stream": False, "format": "json", "think": False, "options": {"temperature": 0, "num_predict": 512},
                 "messages": [{"role": "user", "content": EXTRACT_PROMPT % user_text[:2000]}],
-            })
+            }))
             facts = json.loads(reply["message"]["content"]).get("facts") or []
             if isinstance(facts, list) and facts:
                 (save or save_facts)([f for f in facts if isinstance(f, dict)])
@@ -449,6 +453,11 @@ def system_prompt(config, client_system="", background=False, toolless=False):
     return system
 
 
+def with_tool_guide(instructions: str, tools: list) -> str:
+    guide = tool_guide.guide(tool_guide.offered_names(tools))
+    return f"{instructions}\n\n{guide}" if guide else instructions
+
+
 def current_context(config, request: str = ""):
     """What changes every message: memories, recent conversations and the time. It rides at the start of
     the latest user message (see with_context), after everything that can be cached."""
@@ -480,8 +489,17 @@ def time_line(config, moment: datetime | None = None) -> str:
     now = (moment or datetime.now().astimezone()).astimezone(local_zone(config))
     offset = now.strftime("%z")
     label = str(config.get("time_zone_label") or DEFAULT_TIME_ZONE_LABEL)
-    return (f"It is now {now:%A %d %B %Y, %H:%M} ({label}, {now:%Z}, UTC{offset[:3]}:{offset[3:]}). "
-            "For the time or time difference in another place, use the time tool's convert_time, which states the difference.")
+    return f"It is now {now:%A %d %B %Y, %H:%M} ({label}, {now:%Z}, UTC{offset[:3]}:{offset[3:]})."
+
+
+def with_home_zone(name: str, arguments: dict, config) -> dict:
+    if name != "place_time" or arguments.get("home"):
+        return arguments
+    return {**arguments, "home": local_zone(config).key}
+
+
+def found_no_place(name: str, result) -> bool:
+    return name == "place_time" and reckon.NO_PLACE_FOUND in str(result)
 
 
 def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
@@ -511,6 +529,9 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         if str(result).startswith("BLOCKED:"):
             # Small models turn this into vague advice; say exactly what's wrong and what to do.
             blocked = sign_in_help(config) if name.startswith("workspace__gmail") else str(result).split(". Do not")[0]
+            continue
+        if found_no_place(name, result):
+            log.info("lookup %s found no place in the message, so it is left to the model", name)
             continue
         if LOOKUP_FAILED.search(str(result)):
             # Left to the model, a failed check becomes "nothing new": say it couldn't be checked, and why.
@@ -601,11 +622,12 @@ def run_native(name, arguments, config, background, task):
         prompt = str(arguments.get("prompt", ""))
         if declined := declined_reply(config, prompt):
             return declined, None
-        return models.ask(str(arguments.get("model", "")), prompt, config), None
+        wanted = str(arguments.get("model", ""))
+        return models.ask(wanted, prompt, config, session_keep_alive(wanted, 0)), None
     if name in personal.TOOLS:
         return personal.TOOLS[name][0](arguments), None
     if name in reckon.TOOLS:
-        return reckon.TOOLS[name][0](arguments), None
+        return reckon.TOOLS[name][0](with_home_zone(name, arguments, config)), None
     if name in sharing.TOOLS:
         return sharing.TOOLS[name][0](arguments), None
     if name == "weather":
@@ -704,11 +726,12 @@ def vision_model(wanted: str = ""):
 def look(images: list[str], prompt: str) -> str:
     """Asks the vision model about base64 images."""
     config = load_config()
-    options = {k: v for k, v in config.get("options", {}).items() if k in ("num_ctx", "num_predict")}
+    options = {k: v for k, v in config.get("options", {}).items() if k == "num_predict"}
     looker = vision_model()["name"]
     models.make_room(looker, models.vram_budget(config))
-    raw = http_json(f"{OLLAMA_URL}/api/chat", body={"model": looker, "stream": False, "think": False, "options": options, "keep_alive": 0,
-                                                   "messages": [{"role": "user", "content": prompt, "images": images}]})
+    raw = http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
+        "model": looker, "stream": False, "think": False, "options": options, "keep_alive": session_keep_alive(looker, 0),
+        "messages": [{"role": "user", "content": prompt, "images": images}]}))
     return ((raw or {}).get("message") or {}).get("content", "").strip() or "(the vision model gave no description)"
 
 
@@ -716,7 +739,8 @@ def reload_main_model(config: dict):
     def load():
         models.make_room(config["model"], models.vram_budget(config))
         try:
-            http_json(f"{OLLAMA_URL}/api/generate", body={"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}, timeout=300)
+            http_json(f"{OLLAMA_URL}/api/generate", body=models.for_runner(config, {"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}),
+                      timeout=300)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             log.warning("could not bring %s back after another model ran: %s", config["model"], error)
     thread = threading.Thread(target=load, daemon=True)
@@ -838,6 +862,116 @@ def save_progress(task, state, requested):
     store.update_task(task["id"], history=state)
 
 
+FRESH_LOAD_NANOSECONDS = 1_000_000_000
+ROUND_TIMING_FIELDS = ("load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration")
+CACHED_PROMPT_FIELD = "prompt_eval_cached_count"
+ROUNDS_KEY = "arty_rounds"
+
+
+def round_timings(model: str, raw: dict) -> dict:
+    timings = {"model": model, **{field: int(raw.get(field) or 0) for field in ROUND_TIMING_FIELDS}}
+    if CACHED_PROMPT_FIELD in raw:
+        timings[CACHED_PROMPT_FIELD] = int(raw[CACHED_PROMPT_FIELD] or 0)
+    timings["loaded_fresh"] = timings["load_duration"] >= FRESH_LOAD_NANOSECONDS
+    return timings
+
+
+def turn_rounds(raw: dict | None) -> list[dict]:
+    return list((raw or {}).get(ROUNDS_KEY) or [])
+
+
+WINDOW_OVERFLOW = re.compile(r"context (size|length|window)|exceeds the available context|longer than the context", re.IGNORECASE)
+OVERFLOW_STATUS = 413
+OVERFLOW_TYPE = "context_length_exceeded"
+
+
+REPLY_CAP_NOTE = "\n\n(I hit my reply length limit, so this was cut short. Ask me to continue.)"
+WINDOW_END_NOTE = ("\n\n(This conversation filled my context window, so this reply was cut short. Send a shorter message or "
+                   "start a new conversation so I have room to finish.)")
+WINDOW_END_MARGIN_TOKENS = 16
+
+
+def overflow_message(model: str, window: int, reply_cut: bool) -> str:
+    if reply_cut:
+        return (f"{model}'s context window of {window} tokens filled up before the reply finished, so it was cut short. "
+                "Compact the conversation and send it again.")
+    return (f"This conversation is longer than {model}'s context window of {window} tokens, so the model did not read it. "
+            "Shorten or compact the conversation and send it again.")
+
+
+class WindowOverflow(ApiError):
+    def __init__(self, model: str, window: int, reply_cut: bool = False):
+        super().__init__(OVERFLOW_STATUS, overflow_message(model, window, reply_cut))
+        self.model = model
+        self.window = window
+
+    def details(self) -> dict:
+        return {"message": str(self), "type": OVERFLOW_TYPE, "code": OVERFLOW_STATUS, "model": self.model,
+                "context_tokens": self.window}
+
+
+def ollama_error_text(error: Exception) -> str:
+    if not isinstance(error, urllib.error.HTTPError):
+        return str(error)
+    try:
+        found = json.loads(error.read() or b"{}").get("error")
+    except (ValueError, AttributeError, OSError):
+        return str(error)
+    return str(found or error)
+
+
+def ran_into_window_end(config: dict, raw: dict) -> bool:
+    prompt, written = raw.get("prompt_eval_count"), raw.get("eval_count")
+    if not isinstance(prompt, int) or not isinstance(written, int):
+        return False
+    return prompt + written >= models.context_tokens(config, config["model"]) - WINDOW_END_MARGIN_TOKENS
+
+
+def cut_short_note(config: dict, raw: dict, agent: bool) -> str:
+    if not ran_into_window_end(config, raw):
+        log.warning("reply hit the num_predict cap and was cut off")
+        return REPLY_CAP_NOTE
+    window = models.context_tokens(config, config["model"])
+    if agent:
+        log.warning("an agent reply ran into the end of %s's %d-token window", config["model"], window)
+        raise WindowOverflow(config["model"], window, reply_cut=True)
+    log.warning("a reply ran into the end of %s's %d-token window and was cut off", config["model"], window)
+    return WINDOW_END_NOTE
+
+
+def model_reply(body: dict, config: dict, draft, risky, on_thinking, agent: bool) -> dict:
+    try:
+        if draft:
+            return stream_chat(body, lambda piece: draft.feed(piece, risky), on_thinking=on_thinking)
+        return http_json(f"{OLLAMA_URL}/api/chat", body=body)
+    except (urllib.error.HTTPError, RuntimeError) as error:
+        reason = ollama_error_text(error)
+        if agent and WINDOW_OVERFLOW.search(reason):
+            log.warning("an agent conversation did not fit %s's window: %s", config["model"], reason)
+            raise WindowOverflow(config["model"], models.context_tokens(config, config["model"])) from None
+        raise
+
+
+def written_reply(body: dict) -> str:
+    try:
+        shown = http_json(f"{OLLAMA_URL}/api/chat", body={**body, "stream": False, "_debug_render_only": True})
+        replay = {"model": body["model"], "prompt": shown["_debug_info"]["rendered_template"], "raw": True, "stream": False,
+                  "options": body.get("options") or {}}
+        replay.update({key: body[key] for key in ("keep_alive", "shift") if key in body})
+        return http_json(f"{OLLAMA_URL}/api/generate", body=replay).get("response") or ""
+    except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError) as error:
+        log.warning("couldn't replay an empty model reply to see what it wrote: %s", error)
+        return ""
+
+
+def fitted_to_window(config: dict, body: dict) -> dict:
+    fitted, left_out = window_fit.fit_to_window(config, body)
+    if left_out:
+        log.info("left out %d earlier messages so the prompt and a %d-token reply fit %s's window", left_out,
+                 window_fit.reply_room(body), config["model"])
+    return fitted
+
+
 def run_agent(config, state, background=False, chat_approved=None, task=None, client_system="", client_tools=None, skip_groups=(),
               draft=None, looked_up=None, agent=False, on_thinking=None):
     """The tool loop. state = {"messages": [...], "context": {...}, "groups": [...]} and is updated in place.
@@ -874,12 +1008,15 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
     rules = config.get("approval", {})
     max_rounds = int(config.get("background", {}).get("max_rounds", 30)) if background else int(config.get("max_tool_rounds", MAX_TOOL_ROUNDS))
     tool_log, raw = list(looked_up[0]), {}
+    steps_this_turn = client_tool_runs(messages)[0]
     context["failed"] = []  # tools that didn't work this turn (see be_honest)
     nudged = False
+    replays = 0
     searched_for_it = False
     client_names = {tool["function"]["name"] for tool in client_tools or []}
     last_request = APP_NOTES.sub("", message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {}))).strip()
-    think = thinking_for(config, last_request)
+    user_texts = [APP_NOTES.sub("", message_text(m)).strip() for m in messages if m.get("role") == "user"]
+    think = thinking_for(config, agent_sessions.deciding_request(user_texts) if agent else last_request)
     shown_thinking = on_thinking if agent and client_system else None
     if not background and not agent and WRITE_ONLY_REQUEST.search(last_request):
         if RUN_REQUEST.search(last_request):
@@ -906,18 +1043,26 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
             tools = tools + client_tools
         if answer_from_lookups and round_number == 0:
             tools = []
-        options = config.get("options", {})
+        if not (agent and client_system):
+            history[0] = {"role": "system", "content": with_tool_guide(instructions, tools)}
+        options = models.agent_options(config, config["model"], bool(think)) if agent else config.get("options", {})
         if answer_from_lookups:
             options = {**options, "temperature": LOOKUP_TEMPERATURE}  # stick to the looked-up facts
-        body = with_thinking({"model": config["model"], "messages": history, "stream": False,
-                              "options": options, "keep_alive": config.get("keep_alive", "10m")}, think)
+        body = models.for_runner(config, with_thinking({"model": config["model"], "messages": history, "stream": False,
+                                                        "options": options, "keep_alive": config.get("keep_alive", "10m")}, think,
+                                                       raises_reply_size=not agent))
         if tools:  # Ollama rejects a tools list for models without tool support
             body["tools"] = tools
+        if agent:
+            body["truncate"] = False
+        else:
+            body = fitted_to_window(config, body)
+        risky = None
         if draft:
             # Hold back what the checks below might still throw away: a reply that will be sent back to use
             # its tools, or replaced by a web search, mustn't have been shown (or said out loud) already.
-            may_nudge = not agent and not nudged and bool(tools) and not tool_log
-            may_search = not agent and nudged and not tool_log and not searched_for_it and "research__web_search" in hub.routes
+            may_nudge = not agent and not nudged and bool(tools) and not (tool_log or steps_this_turn)
+            may_search = not agent and nudged and not (tool_log or steps_this_turn) and not searched_for_it and "research__web_search" in hub.routes
             draft.start_round(allowed=not (may_nudge and ACTION_REQUEST.search(last_request))
                               and not (may_search and SEARCH_REQUEST.search(last_request)))
 
@@ -929,15 +1074,33 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 if may_nudge and (PROMISE.search(text) or CLAIMED.search(text)):
                     return True
                 return (may_nudge or may_search) and bool(CLARIFYING.search(text) or "web_search" in text)
-            raw = stream_chat(body, lambda piece: draft.feed(piece, risky), on_thinking=shown_thinking)
-        else:
-            raw = http_json(f"{OLLAMA_URL}/api/chat", body=body)
+        raw = model_reply(body, config, draft, risky, shown_thinking, agent)
         log.info("model: loaded in %.1fs, read the %s-token prompt in %.1fs (cached parts are free), wrote %s in %.1fs",
                  raw.get("load_duration", 0) / 1e9,
                  raw.get("prompt_eval_count", "?"), raw.get("prompt_eval_duration", 0) / 1e9,
                  raw.get("eval_count", "?"), raw.get("eval_duration", 0) / 1e9)
+        if agent:
+            state.setdefault("rounds", []).append(round_timings(config["model"], raw))
         message = raw["message"]
         calls = message.get("tool_calls") or []
+        if written_calls.looks_swallowed(raw, tools) and replays < written_calls.REPLAY_LIMIT:
+            replays += 1
+            replayed_text = written_reply(body)
+            offered = [tool["function"]["name"] for tool in tools]
+            found = written_calls.calls_written_in(replayed_text)
+            renamed = [written_calls.offered_name(call["function"]["name"], offered) for call in found]
+            if found and all(renamed):
+                calls = [{"function": {**call["function"], "name": name}} for call, name in zip(found, renamed)]
+                message = {**message, "tool_calls": calls}
+                log.info("Ollama dropped the model's call to %s; using the call it wrote", ", ".join(renamed))
+            elif found:
+                missing = [call["function"]["name"] for call, name in zip(found, renamed) if not name]
+                log.warning("the model called %s, which it wasn't offered; told it which tools it has", ", ".join(missing))
+                history.append({"role": "assistant", "content": replayed_text.strip()})
+                history.append({"role": "user", "content": written_calls.missing_tool_note(missing, offered)})
+                continue
+            else:
+                message = {**message, "content": written_calls.text_outside_calls(replayed_text)}
         if not calls:
             answer = message.get("content") or ""
             if background and context.get("blocked"):
@@ -946,7 +1109,7 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 state["groups"] = sorted(requested)
                 return {"status": "waiting", "waiting": {"kind": "user", "message": f"Please sign in (or pass the bot check) on {host} in the browser on my desktop.",
                                                          "call": {"name": "ask_user", "arguments": {}}}, "tools_used": tool_log, "raw": raw}
-            if not background and not agent and nudged and not tool_log and not searched_for_it and "research__web_search" in hub.routes and (
+            if not background and not agent and nudged and not (tool_log or steps_this_turn) and not searched_for_it and "research__web_search" in hub.routes and (
                     CLARIFYING.search(answer) or "web_search" in answer or SEARCH_REQUEST.search(last_request)):
                 # Sent back once and still no search: run it ourselves and have the model answer from the results.
                 searched_for_it = True
@@ -957,17 +1120,16 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 history.append({"role": "user", "content": f"(Web search results for my message:\n{results[:TOOL_RESULT_CHARS]}\n\n"
                                 "Now answer my message from these results, in your own words, briefly. Say which source if it helps.)"})
                 continue
-            if not background and not agent and not nudged and tools and not tool_log and (
+            if not background and not agent and not nudged and tools and not (tool_log or steps_this_turn) and (
                     PROMISE.search(answer) or CLAIMED.search(answer) or CLARIFYING.search(answer) or ACTION_REQUEST.search(last_request)):
                 # Small models describe doing things ("I've set a reminder", "here are my findings") without
                 # calling a tool; send them back once to actually do it.
                 nudged = True
                 history.append({"role": "assistant", "content": answer})
-                history.append({"role": "user", "content": "(You haven't used any tools, so none of that has actually happened. Do it now "
-                                "with your tools: schedule_task (with reminder_text) for reminders, web_search for anything you need to "
-                                "look up (including anything I mentioned that you don't recognise, before asking me what I mean), "
-                                "calendar_add for events. Only then answer, and only with what the tools gave you. If none of your tools can "
-                                "do it, say so plainly in a sentence instead: never pretend it's done.)"})
+                history.append({"role": "user", "content": "(You haven't used any tools, so none of that has actually happened. "
+                                f"{tool_guide.nudge_tools(tool_guide.offered_names(tools))} Only then answer, and only with what "
+                                "the tools gave you. If none of your tools can do it, say so plainly in a sentence instead: never "
+                                "pretend it's done.)"})
                 continue
             if not background and not agent and not nudged and PRETEND_TOOLS.search(answer):
                 nudged = True
@@ -990,8 +1152,7 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 history.append({"role": "user", "content": "(Your reply was empty. Answer my last message, using your tools if needed.)"})
                 continue
             if raw.get("done_reason") == "length":
-                log.warning("reply hit the num_predict cap and was cut off")
-                answer += "\n\n(I hit my reply length limit, so this was cut short. Ask me to continue.)"
+                answer += cut_short_note(config, raw, agent)
             state["groups"] = sorted(requested)
             return {"status": "done", "answer": answer, "tools_used": tool_log, "raw": raw}
         written = (message.get("content") or "").strip()
@@ -1179,6 +1340,23 @@ def client_tool_runs(conversation: list[dict], by_last_result: bool = False,
     return used, failed
 
 
+LOST_TRAIN_OF_THOUGHT = "Sorry, I lost my train of thought there. Could you ask that again?"
+LOST_TRACK_START = "Sorry, I lost track before I could answer"
+LOST_TRACK_AFTER_STEPS = (LOST_TRACK_START + ", after {steps} on your computer. Have a look at where it got to, and tell "
+                          "me what you'd like next.")
+
+
+def empty_reply(conversation: list[dict]) -> str:
+    steps, _failed = client_tool_runs(conversation)
+    if not steps:
+        return LOST_TRAIN_OF_THOUGHT
+    return LOST_TRACK_AFTER_STEPS.format(steps="1 step" if len(steps) == 1 else f"{len(steps)} steps")
+
+
+def is_own_fallback(answer: str) -> bool:
+    return answer == LOST_TRAIN_OF_THOUGHT or answer.startswith(LOST_TRACK_START)
+
+
 def some_tool_worked(tools_used: list[str], failed: list[tuple[str, str]]) -> bool:
     failed_names = {name for name, _ in failed}
     return any(tool not in failed_names for tool in tools_used)
@@ -1188,9 +1366,9 @@ def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None) ->
     config = load_config()
     judge_model = model or config["model"]
     judge_keep_alive = keep_alive if model else config.get("keep_alive", "10m")
-    body = {"model": judge_model, "stream": False, "format": "json", "think": False, "keep_alive": judge_keep_alive,
-            "options": {"temperature": 0, "num_predict": max_tokens, "num_ctx": config.get("options", {}).get("num_ctx", 12288)},
-            "messages": [{"role": "user", "content": prompt}]}
+    body = models.for_runner(config, {"model": judge_model, "stream": False, "format": "json", "think": False, "keep_alive": judge_keep_alive,
+                                      "options": {"temperature": 0, "num_predict": max_tokens},
+                                      "messages": [{"role": "user", "content": prompt}]})
     return json.loads(http_json(f"{OLLAMA_URL}/api/chat", body=body)["message"]["content"])
 
 
@@ -1220,6 +1398,8 @@ def reports_an_action(request: str, sentence: str, model: str = "", keep_alive=N
 
 def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]], already_sent: str = "",
               request: str = "", model: str = "", keep_alive=None) -> str:
+    if is_own_fallback(answer):
+        return answer
     failed_names = {name for name, _ in failed}
     acted = [tool for tool in tools_used if tool not in NOT_ACTIONS and tool not in LOOKUP_TOOLS]
     if acted and not failed_names & set(acted):
@@ -1306,10 +1486,10 @@ Student's answer: %s"""
 
 def judge_answer(config, question: str, expected: str, given: str) -> tuple[bool, str]:
     try:
-        reply = http_json(f"{OLLAMA_URL}/api/chat", body={
+        reply = http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
             "model": config["model"], "stream": False, "format": "json", "think": False,
-            "options": {"temperature": 0, "num_predict": 120, "num_ctx": config.get("options", {}).get("num_ctx", 12288)},
-            "messages": [{"role": "user", "content": QUIZ_JUDGE_PROMPT % (question, expected, given[:500])}]})
+            "options": {"temperature": 0, "num_predict": 120},
+            "messages": [{"role": "user", "content": QUIZ_JUDGE_PROMPT % (question, expected, given[:500])}]}))
         marked = json.loads(reply["message"]["content"])
         return bool(marked.get("correct")), str(marked.get("feedback") or "")[:200]
     except (OSError, ValueError, KeyError) as error:
@@ -1323,10 +1503,11 @@ PLAIN_COMPLETION_TOKENS = 1500
 def complete_text(prompt: str, json_mode: bool = False, think: bool | None = None) -> str:
     """One plain model call (no persona, memory or tools), for writing jobs like lecture notes and research."""
     config = load_config()
-    options = {"temperature": 0.2, "num_predict": PLAIN_COMPLETION_TOKENS, "num_ctx": config.get("options", {}).get("num_ctx", 12288),
+    options = {"temperature": 0.2, "num_predict": PLAIN_COMPLETION_TOKENS,
                "repeat_penalty": config.get("options", {}).get("repeat_penalty", 1.1)}  # small models can loop on one line
-    body = {"model": config["model"], "stream": False, "options": options,
-            "keep_alive": config.get("keep_alive", "10m"), "messages": [{"role": "user", "content": prompt}], **({"format": "json"} if json_mode else {})}
+    body = models.for_runner(config, {"model": config["model"], "stream": False, "options": options,
+                                      "keep_alive": config.get("keep_alive", "10m"), "messages": [{"role": "user", "content": prompt}],
+                                      **({"format": "json"} if json_mode else {})})
     wanted = (not json_mode and thinking_for(config, writing_job=True)) if think is None else think
     body = with_thinking(body, wanted)
     return (http_json(f"{OLLAMA_URL}/api/chat", body=body).get("message") or {}).get("content") or ""
@@ -1351,12 +1532,13 @@ def solo_conversation(messages):
 
 
 def solo_turn(model_name, messages):
+    config = load_config()
     said = message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {}))
-    if declined := safety.check(APP_NOTES.sub("", said), load_config().get("crisis_help")):
+    if declined := safety.check(APP_NOTES.sub("", said), config.get("crisis_help")):
         kind, reply = declined
         return reply, [f"safety_{kind}"], {}, None
-    body = {"model": model_name, "messages": solo_conversation(messages), "stream": False,
-            "keep_alive": load_config().get("keep_alive", "10m")}
+    body = models.for_runner(config, {"model": model_name, "messages": solo_conversation(messages), "stream": False,
+                                      "keep_alive": config.get("keep_alive", "10m")})
     reply = http_json(f"{OLLAMA_URL}/api/chat", body=body)
     return ((reply.get("message") or {}).get("content") or "").strip(), [], reply, None
 
@@ -1367,6 +1549,8 @@ HIDDEN_TOOL_RESULT = "That tool isn't available here."
 OLLAMA_DOWN = "the AI server's model runner isn't answering; try again in a minute"
 OTHER_MODEL_KEEP_ALIVE = "3m"
 MAIN_RELOAD_DELAY_SECONDS = 200
+AGENT_KEEP_ALIVE = "15m"
+AGENT_QUIET_SECONDS = 600
 VISION_KEEP_ALIVE = "1m"
 VISION_MAIN_RETURN_SECONDS = 30
 
@@ -1401,31 +1585,76 @@ class MainModelReturn:
     def __init__(self):
         self.lock = threading.Lock()
         self.timer = None
+        self.running = 0
+        self.due = 0.0
+        self.kept_model = ""
+
+    def hold(self, model: str):
+        with self.lock:
+            self.running += 1
+            self.kept_model = model
+            self._stop_timer()
+
+    def release(self, main_config: dict, quiet_seconds: float):
+        with self.lock:
+            self.running = max(0, self.running - 1)
+            self._return_after(main_config, quiet_seconds)
 
     def schedule(self, main_config: dict, delay: float = MAIN_RELOAD_DELAY_SECONDS):
         with self.lock:
-            if self.timer is not None:
-                self.timer.cancel()
-            self.timer = threading.Timer(delay, reload_main_model, args=(main_config,))
-            self.timer.daemon = True
-            self.timer.start()
+            self._return_after(main_config, delay)
+
+    def keeps(self, model: str) -> bool:
+        with self.lock:
+            has_session = self.running > 0 or self.timer is not None
+            return has_session and bool(model) and model == self.kept_model
+
+    def _stop_timer(self):
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+
+    def _return_after(self, main_config: dict, delay: float):
+        self.due = max(self.due, time.monotonic() + delay)
+        if self.running:
+            return
+        self._stop_timer()
+        timer = threading.Timer(max(0.0, self.due - time.monotonic()), self._bring_main_back, args=(main_config,))
+        timer.daemon = True
+        self.timer = timer
+        timer.start()
+
+    def _bring_main_back(self, main_config: dict):
+        with self.lock:
+            if self.running or self.timer is not threading.current_thread():
+                return
+            self.timer, self.due, self.kept_model = None, 0.0, ""
+        reload_main_model(main_config)
 
 
 main_model_return = MainModelReturn()
+agent_sessions = AgentSessions()
 
 
 def schedule_main_reload(main_config: dict):
     main_model_return.schedule(main_config)
 
 
-def use_requested_model(config: dict, requested: str, any_installed: bool) -> bool:
+def session_keep_alive(model: str, otherwise):
+    return AGENT_KEEP_ALIVE if main_model_return.keeps(model) else otherwise
+
+
+def use_requested_model(config: dict, requested: str, any_installed: bool, session: bool = False) -> bool:
     main_config = dict(config)
     config["model"] = chosen_model(config["model"], requested, any_installed)
     if config["model"] == main_config["model"]:
         return False
-    config["keep_alive"] = OTHER_MODEL_KEEP_ALIVE
+    config["keep_alive"] = AGENT_KEEP_ALIVE if session else session_keep_alive(config["model"], OTHER_MODEL_KEEP_ALIVE)
     models.make_room(config["model"], models.vram_budget(config))
-    schedule_main_reload(main_config)
+    if session:
+        main_model_return.hold(config["model"])
+    else:
+        schedule_main_reload(main_config)
     return True
 
 
@@ -1492,7 +1721,16 @@ def chat_model(config: dict, requested: str, said: str) -> str:
 
 def agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking=None):
     config = load_config()
-    use_requested_model(config, agent_model(config, requested_model), any_installed)
+    main_config = dict(config)
+    holds_another_model = use_requested_model(config, agent_model(config, requested_model), any_installed, session=True)
+    try:
+        return agent_reply(config, messages, client_tools, on_text, on_thinking)
+    finally:
+        if holds_another_model:
+            main_model_return.release(main_config, AGENT_QUIET_SECONDS)
+
+
+def agent_reply(config, messages, client_tools, on_text, on_thinking):
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
     said = APP_NOTES.sub("", message_text(last_user)).strip() if last_user is not None else ""
     if last_user is not None:
@@ -1509,6 +1747,7 @@ def agent_turn(messages, requested_model, client_tools, on_text, any_installed, 
     hub.refresh()
     outcome = run_agent(config, state, client_system=client_system, client_tools=client_tools, draft=draft, agent=True,
                         on_thinking=on_thinking)
+    outcome["raw"] = {**(outcome.get("raw") or {}), ROUNDS_KEY: state.get("rounds", [])}
     if outcome["status"] == "client_tools":
         content = draft.finish(outcome["content"]) if draft else outcome["content"]
         return content, outcome["tools_used"], outcome["raw"], outcome["calls"]
@@ -1660,7 +1899,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     answer = tidy_answer(trim_offers(outcome["answer"]))
     if not answer:
         log.warning("reply was empty after tidying; the model wrote: %r", (outcome["answer"] or "")[:300])
-        answer = "Sorry, I lost my train of thought there. Could you ask that again?"
+        answer = empty_reply(conversation)
     reminded = ensure_reminder(conversation, outcome["tools_used"], answer)
     if reminded != answer and reminded.startswith("Reminder set"):
         outcome["tools_used"].append("schedule_task")  # set here from the user's words
@@ -2307,10 +2546,13 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError) as error:
                 log.warning("could not list Ollama models: %s", error)
                 raise ApiError(503, OLLAMA_DOWN) from error
-            coding_name = load_config().get("coding_model", "")
+            config = load_config()
+            coding_name = config.get("coding_model", "")
+            reply_size = models.reply_tokens(config)
             return self.send_json(200, {"object": "list", "data": [
                 {"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "object": "model", "owned_by": "home", "model": m["name"],
-                 "description": models.summary(m), "coding": models.is_for_coding(m["name"], coding_name)}
+                 "description": models.summary(m), "coding": models.is_for_coding(m["name"], coding_name),
+                 "context_tokens": models.context_tokens(config, m["name"]), "reply_tokens": reply_size, "agent_sampling": models.agent_sampling(config, m["name"])}
                 for m in downloaded]})
         if segments in (["v1", "models"], ["models"]):
             listed = [{"id": MODEL_ID, "object": "model", "owned_by": "home"}]
@@ -2642,13 +2884,14 @@ class Handler(BaseHTTPRequestHandler):
                     if url.startswith("data:") and "," in url:
                         images.append(url.split(",", 1)[1])
             converted.append({"role": message.get("role", "user"), "content": message_text(message), **({"images": images} if images else {})})
-        options = {k: v for k, v in config.get("options", {}).items() if k in ("num_ctx", "num_predict")}
+        options = {k: v for k, v in config.get("options", {}).items() if k == "num_predict"}
         if max_tokens:
             options["num_predict"] = max_tokens
         models.make_room(model["name"], models.vram_budget(config))
         try:
-            raw = http_json(f"{OLLAMA_URL}/api/chat", body={"model": model["name"], "messages": converted, "stream": False, "options": options,
-                                                           "keep_alive": VISION_KEEP_ALIVE})
+            raw = http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
+                "model": model["name"], "messages": converted, "stream": False, "options": options,
+                "keep_alive": session_keep_alive(model["name"], VISION_KEEP_ALIVE)}))
         finally:
             main_model_return.schedule(config, VISION_MAIN_RETURN_SECONDS)
         answer = (raw.get("message") or {}).get("content", "")
@@ -2685,7 +2928,10 @@ class Handler(BaseHTTPRequestHandler):
         turn = (messages, requested_model, client_tools, skip_groups)
         client = client_name(request)
         if not request.get("stream"):
-            answer, tools_used, raw, client_calls = run_turn(*turn, client=client, any_installed=any_installed, agent=agent)
+            try:
+                answer, tools_used, raw, client_calls = run_turn(*turn, client=client, any_installed=any_installed, agent=agent)
+            except WindowOverflow as overflow:
+                return self.send_json(overflow.status, {"error": overflow.details()})
         else:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -2712,6 +2958,13 @@ class Handler(BaseHTTPRequestHandler):
                     answer, tools_used, raw, client_calls = run_turn(
                         *turn, on_text=send_early, client=client, any_installed=any_installed, agent=agent,
                         on_thinking=send_reasoning if agent and asked_for_reasoning else None)
+            except WindowOverflow as overflow:
+                if stream.open:
+                    after_early_text = "\n\n" if sent else ""
+                    send_chunk({"role": "assistant", "content": f"{after_early_text}{overflow}"})
+                    send_chunk({}, finish="stop", error=overflow.details())
+                    stream.write(b"data: [DONE]\n\n")
+                return
             except Exception:
                 log.exception("streamed chat failed")
                 if stream.open:
@@ -2723,6 +2976,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
         usage = {"prompt_tokens": raw.get("prompt_eval_count", 0), "completion_tokens": raw.get("eval_count", 0)}
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        if agent:
+            usage["rounds"] = turn_rounds(raw)
         openai_calls = [{"id": f"call_{uuid.uuid4().hex[:12]}", "type": "function",
                          "function": {"name": c["function"]["name"], "arguments": json.dumps(parse_arguments(c["function"].get("arguments")))}}
                         for c in client_calls or []]

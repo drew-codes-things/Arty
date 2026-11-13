@@ -60,9 +60,9 @@ def steer_away_from_repeats(history: list[dict], conversation: list[dict], newes
         steer_last_request(history, fresh.repetition_note(conversation, newest_request))
 
 
-def with_thinking(body, think: bool):
+def with_thinking(body, think: bool, raises_reply_size=True):
     options = body.get("options") or {}
-    if think:
+    if think and raises_reply_size:
         options = {**options, "num_predict": max(int(options.get("num_predict", 0)), THINKING_MIN_TOKENS)}
     return {**body, "think": think, "options": options}
 

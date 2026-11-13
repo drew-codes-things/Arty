@@ -14,9 +14,50 @@
   "keep_alive": -1,
   "options": {
     "temperature": 0.4,
-    "num_ctx": 12288,
+    "num_ctx": 24576,
     "num_predict": 2048,
     "repeat_penalty": 1.1
+  },
+  "agent_options": {
+    "num_predict": 4096,
+    "repeat_penalty": 1.0,
+    "sampling": "card",
+    "steady": {
+      "temperature": 0.15
+    },
+    "models": {
+      "default": {
+        "temperature": 0.6,
+        "top_k": 20,
+        "top_p": 0.95,
+        "presence_penalty": 0.0
+      },
+      "mimo-v2.6:9b": {
+        "temperature": 0.6,
+        "top_k": 20,
+        "top_p": 0.95,
+        "presence_penalty": 0.0
+      },
+      "qwen3:14b": {
+        "temperature": 0.6,
+        "top_k": 20,
+        "top_p": 0.95,
+        "min_p": 0.0,
+        "without_thinking": {
+          "temperature": 0.7,
+          "top_p": 0.8
+        }
+      },
+      "qwen2.5vl:7b": {
+        "temperature": 0.0001
+      }
+    }
+  },
+  "model_windows": {
+    "enabled": false,
+    "num_ctx": {
+      "mimo-v2.6:9b": 49152
+    }
   },
   "persona_file": "/srv/ai/brain/persona.md",
   "conversations_dir": "/srv/ai/memory/conversations",
@@ -749,7 +790,7 @@
       "tool": "homelab__proxmox_status"
     },
     {
-      "pattern": "^(?!.*\\b((on|in) your (computer|desktop|pc|terminal)|run (a |the )?command)\\b).*?\\b(is (it|\\w+) (down|up|working)|websites?|services? (down|up|status)|uptime)\\b",
+      "pattern": "^(?!.*\\b((on|in) your (computer|desktop|pc|terminal)|run (a |the )?command|says?|said|headlines?|top stor(y|ies)|articles?|tabs?|web ?pages?|homepage|browser)\\b).*?\\b(is (it|\\w+) (down|up|working)|websites?|services? (down|up|status)|uptime)\\b",
       "tool": "homelab__service_status"
     },
     {
@@ -760,7 +801,7 @@
       }
     },
     {
-      "pattern": "\\b(calendar|what'?s on|my (day|week)|appointments?|schedule for|busy (today|tomorrow))\\b",
+      "pattern": "^(?!.*\\b(tabs?|web ?pages?|pages?|homepage|websites?|sites?|browser|screen)\\b)(?!.*\\b[\\w-]+\\.(com|co\\.uk|org|net|io|xyz)\\b).*?\\b(calendar|what'?s on|my (day|week)|appointments?|schedule for|busy (today|tomorrow))\\b",
       "tool": "calendar_events",
       "skip_for_changes": true,
       "arguments": {
@@ -789,11 +830,10 @@
       }
     },
     {
-      "pattern": "\\b(what('?s| is) the (local )?time (in|over in|now in)|what time is it (now |right now )?(in|over in)|(current|local) time in|time (is it )?(now |right now )?in|time difference)\\b",
+      "pattern": "\\b(what('?s| is) the (local )?time (in|over in|now in)|what time is it (now |right now )?(in|over in)|(current|local) time in|time (is it|it is) (now |right now )?(in|over in)|^\\W*(the )?time (now |right now )?in|time difference)\\b",
       "tool": "place_time",
       "arguments": {
-        "text": "{message}",
-        "home": "Europe/London"
+        "text": "{message}"
       }
     },
     {

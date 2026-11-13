@@ -59,6 +59,8 @@ TOKEN = secrets.token_urlsafe(32)
 TOKEN_FILE = cfg.DATA_ROOT / ".arty_token"
 EXTENSION_ID = "lepggpdmafbgbgfgacpglpjelmiofkli"
 EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
+FIREFOX_EXTENSION_ORIGIN = r"moz-extension://[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+EXTENSION_ORIGINS = re.compile(rf"{re.escape(EXTENSION_ORIGIN)}|{FIREFOX_EXTENSION_ORIGIN}")
 EXTENSION_ROUTES = {("POST", "/browser/next"), ("POST", "/browser/result")}
 OPEN_ROUTES = {("GET", "/whoami")}
 PAIRING_FILE = cfg.DATA_ROOT / ".arty_browser_pairing"
@@ -103,7 +105,7 @@ def _new_pairing_code():
 
 def _is_arty_extension(request):
     is_extension_route = (request.method, request.url.path) in EXTENSION_ROUTES
-    if not is_extension_route or request.headers.get("origin") != EXTENSION_ORIGIN:
+    if not is_extension_route or not EXTENSION_ORIGINS.fullmatch(request.headers.get("origin") or ""):
         return False
     return hmac.compare_digest(request.headers.get("x-arty-pairing", "").encode(), pairing_code().encode())
 
@@ -124,7 +126,7 @@ async def only_local_callers(request, call_next):
     return JSONResponse({"error": "not allowed"}, status_code=403)
 
 
-app.add_middleware(CORSMiddleware, allow_origin_regex=rf"^(null|{EXTENSION_ORIGIN})$", allow_methods=["*"],
+app.add_middleware(CORSMiddleware, allow_origin_regex=rf"^(null|{EXTENSION_ORIGINS.pattern})$", allow_methods=["*"],
                    allow_headers=["Content-Type", "X-Arty-Token", "X-Arty-Pairing"])
 
 _listen_cfg = config.get("listen") or {}

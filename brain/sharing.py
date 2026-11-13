@@ -159,7 +159,7 @@ def start_screen_recording() -> str:
     if code != 0:
         return f"Couldn't start recording: {output.strip()[:300]}"
     return (f"Recording my screen now (it stops by itself after {MAX_RECORDING_SECONDS} seconds). Your browser and "
-            "desktop tools are ready from your next step: do what the user wants to see now, e.g. browser_open a search. "
+            "desktop tools are ready from your next step: do what the user wants to see now, e.g. open a search in the browser. "
             "Only call stop_screen_recording once it's done; it sends the video.")
 
 

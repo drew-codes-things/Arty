@@ -15,8 +15,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -28,27 +26,27 @@ import androidx.compose.ui.unit.sp
 import app.arty.R
 
 object ArtyColors {
-    val Ink = Color(0xFF1B1918)
-    val Sunken = Color(0xFF151413)
-    val Surface = Color(0xFF24211F)
-    val Raised = Color(0xFF2E2A28)
-    val Text = Color(0xFFF1ECE7)
-    val TextDim = Color(0xFFC0B8B0)
-    val TextFaint = Color(0xFF9D948C)
+    val Ink = Color(0xFF19191C)
+    val Sunken = Color(0xFF121214)
+    val Surface = Color(0xFF222226)
+    val Raised = Color(0xFF2C2C31)
+    val Text = Color(0xFFEEEEF0)
+    val TextDim = Color(0xFFB4B4BD)
+    val TextFaint = Color(0xFF9A9AA5)
     val Line = Text.copy(alpha = 0.10f)
     val LineStrong = Text.copy(alpha = 0.18f)
-    val LineControl = Text.copy(alpha = 0.40f)
+    val LineControl = Text.copy(alpha = 0.46f)
     val Fill = Text.copy(alpha = 0.05f)
-    val FillHover = Text.copy(alpha = 0.08f)
+    val FillHover = Text.copy(alpha = 0.07f)
     val FillPress = Text.copy(alpha = 0.12f)
     val Signal = Color(0xFFE5383B)
-    val SignalText = Color(0xFFFF8A8C)
-    val SignalSoft = Signal.copy(alpha = 0.15f)
-    val SignalContainer = Color(0xFF412423)
+    val SignalText = Color(0xFFFF7A7C)
+    val SignalSoft = Signal.copy(alpha = 0.14f)
+    val SignalContainer = Color(0xFF3D2529)
     val OnSignal = Color.White
-    val Caution = Color(0xFFF0A8A9)
-    val Added = Color(0xFF7EE2A8)
-    val Shadow = Color(0xFF080504)
+    val Caution = Color(0xFFF2B552)
+    val Added = Color(0xFF5FD990)
+    val Shadow = Color(0xFF000000)
 }
 
 object ArtyRadius {
@@ -94,32 +92,7 @@ private fun systemAsksForReducedMotion(): Boolean {
     }
 }
 
-private val InkTop = Color(0xFF211E1C)
-private val InkBottom = Color(0xFF171514)
-private val Ember = Color(0xFFE57850)
-private const val RED_GLOW_ALPHA = 0.16f
-private const val EMBER_GLOW_ALPHA = 0.05f
-private const val RED_GLOW_REACH = 0.65f
-private const val EMBER_GLOW_REACH = 0.5f
-private val InkFall = Brush.verticalGradient(0f to InkTop, 0.46f to ArtyColors.Ink, 1f to InkBottom)
-
-fun Modifier.artyBackground(): Modifier = drawBehind {
-    drawRect(InkFall)
-    drawRect(
-        Brush.radialGradient(
-            listOf(ArtyColors.Signal.copy(alpha = RED_GLOW_ALPHA), Color.Transparent),
-            center = Offset.Zero,
-            radius = size.maxDimension * RED_GLOW_REACH,
-        ),
-    )
-    drawRect(
-        Brush.radialGradient(
-            listOf(Ember.copy(alpha = EMBER_GLOW_ALPHA), Color.Transparent),
-            center = Offset(size.width, size.height),
-            radius = size.maxDimension * EMBER_GLOW_REACH,
-        ),
-    )
-}
+fun Modifier.artyBackground(): Modifier = drawBehind { drawRect(ArtyColors.Ink) }
 
 val PlexSans = FontFamily(
     Font(R.font.plex_sans_regular, FontWeight.Normal),

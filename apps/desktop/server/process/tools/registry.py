@@ -202,6 +202,18 @@ def prompt_addition():
     return machines + (WORKING if machines else "")
 
 
+CURRENT_PAGE_REQUEST = re.compile(r"\b(this|the|my|current|open)\s+(tab|page|site|website)\b|\btabs?\b.*\bopen\b|"
+                                  r"\b(i'?m|i am)\s+(on|looking at|reading)\b", re.I)
+LOOK_AGAIN_NOTE = ("(Look at my browser with chrome_tabs or chrome_read before you answer: what's open may have changed "
+                   "since we last talked.)")
+
+
+def request_note(request_text):
+    if _browser_allowed() and CURRENT_PAGE_REQUEST.search(request_text or ""):
+        return LOOK_AGAIN_NOTE
+    return ""
+
+
 WORKING = """
 
 While you're working on a machine, between one tool call and the next, you
@@ -218,9 +230,10 @@ WORK_TOOLS = {"computer_run_command", "computer_read_file", "computer_write_file
 STICKY_SECONDS = 1800
 _last_used = {}
 TOOL_GROUPS = [
-    (re.compile(r"chrome|browser|\btabs?\b|website|\bsite\b|web ?page|\bpage\b|https?://|www\.|\.(com|co\.uk|org|net|io)\b|"
+    (re.compile(r"chrome|firefox|\bedge\b|\bbrave\b|homepage|browser|\btabs?\b|website|\bsite\b|web ?page|\bpage\b|https?://|www\.|\.(com|co\.uk|org|net|io)\b|"
                 r"google|youtube|search (for|online|the web)|online|log ?in|sign ?in|link", re.I),
-     {"chrome_tabs", "chrome_open", "chrome_read", "chrome_click", "chrome_type", "chrome_tab"}),
+     {"chrome_tabs", "chrome_open", "chrome_read", "chrome_find", "chrome_click", "chrome_type", "chrome_tab", "chrome_scroll",
+      "chrome_look"}),
     (re.compile(r"window|minimi|maximi|snap|full ?screen|focus|switch|desktop|move|resize|close|bring", re.I),
      {"desktop_windows", "desktop_window", "desktop_switch"}),
     (re.compile(r"volume|mute|louder|quieter|sound|music|song|spotify|play|pause|skip|next track|previous|brightness|"

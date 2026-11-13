@@ -65,7 +65,8 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
   Windows reads the time since your last key press or mouse move. On Linux it uses the desktop's idle time, or
   where the desktop won't give that (KDE on Wayland), how long the screen has been locked. Spotting long stretches
   in one app needs the app in front, which KDE on Wayland only gives with `kdotool` installed. Nothing is stored.
-- **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) and it can use your own tabs too.
+- **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) (it also loads in Edge, Brave,
+  Chromium and Firefox) and it can open, read, scroll, look at, click and type in your own tabs too.
   Pair it once with the code under **Chrome sites…** in the tray menu; the same screen lists the sites Arty may
   use, each with a **Forget** button.
 
@@ -83,8 +84,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.4.0-x86_64.AppImage
-./Arty-1.4.0-x86_64.AppImage
+chmod +x Arty-1.5.0-x86_64.AppImage
+./Arty-1.5.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -95,7 +96,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.4.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.5.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.

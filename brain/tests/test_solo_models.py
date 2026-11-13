@@ -66,7 +66,7 @@ class SoloTurn(unittest.TestCase):
         self.assertEqual(body["model"], "side-model:12b")
         self.assertEqual(body["messages"], [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"},
                                             {"role": "user", "content": "carry on"}])
-        self.assertNotIn("options", body)
+        self.assertEqual((body["options"], body["shift"]), ({"num_ctx": models.DEFAULT_CONTEXT_TOKENS}, False))
         self.assertNotIn("tools", body)
         self.assertEqual((answer, tools, calls), ("the reply", [], None))
         self.archive.assert_not_called()
