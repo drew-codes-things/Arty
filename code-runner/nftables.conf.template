@@ -1,0 +1,18 @@
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet code_runner {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iif "lo" accept
+        ct state established,related accept
+        ip saddr @BRAIN_ADDRESS@ tcp dport 8790 accept
+        icmp type echo-request accept
+    }
+
+    chain output {
+        type filter hook output priority 0; policy drop;
+        oif "lo" accept
+        ct state established,related accept
+    }
+}

@@ -70,6 +70,19 @@ class DeployBundle(unittest.TestCase):
         self.assertIn("brain/agent_loop.py", modules)
         self.assertEqual(modules - members, set())
 
+    def test_the_docs_library_and_its_units_are_shipped_and_started(self):
+        self.assertEqual(self.run_result.returncode, 0, self.run_result.stderr)
+        members = set(self.bundle_members())
+        modules = {f"doclib/{path.name}" for path in (ROOT / "doclib").glob("*.py")}
+        self.assertIn("doclib/server.py", modules)
+        self.assertEqual(modules - members, set())
+        self.assertTrue({"services/docs-library.service", "services/docs-library-refresh.service",
+                         "services/docs-library-refresh.timer"} <= members)
+        script = (ROOT / "deploy.sh").read_text()
+        self.assertIn("install -m 644 deploy/doclib/*.py deploy/doclib/retrieval_set.json /srv/ai/doclib/", script)
+        self.assertIn("systemctl enable docs-library docs-library-refresh.timer", script)
+        self.assertIn("systemctl restart tool-hub brain docs-library", script)
+
     def test_the_bundle_goes_to_a_fresh_temporary_path_on_the_host(self):
         self.assertEqual(self.run_result.returncode, 0, self.run_result.stderr)
         first_destination = (self.logs / "scp.log").read_text().splitlines()[0]

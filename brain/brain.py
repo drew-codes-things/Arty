@@ -138,6 +138,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     said = user_words(message_text(last_user), client) if last_user is not None else ""
     turn_model = chat_model(config, requested_model, said, has_new_picture(messages))
     use_requested_model(config, turn_model, any_installed)
+    log.info("this turn runs on %s", config["model"])
     on_routed_model = turn_model != requested_model
     if last_user is not None:
         desktop_look.user_active()

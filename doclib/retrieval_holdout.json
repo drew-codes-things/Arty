@@ -1,0 +1,14 @@
+[
+ {"language": "python", "question": "Python pathlib Path.read_text", "expect": ["library/pathlib.html#pathlib.path.read_text"]},
+ {"language": "python", "question": "python functools lru_cache maxsize", "expect": ["library/functools.html#functools.lru_cache"]},
+ {"language": "javascript", "question": "JavaScript Promise.allSettled", "expect": ["javascript/global_objects/promise/allsettled"]},
+ {"language": "javascript", "question": "JavaScript String padStart", "expect": ["javascript/global_objects/string/padstart"]},
+ {"language": "rust", "question": "Rust HashMap entry or_insert", "expect": ["struct.hashmap#method.entry", "enum.entry#method.or_insert"]},
+ {"language": "go", "question": "Go json.Marshal struct tags", "expect": ["devdocs.io/go/encoding/json/index#marshal"]},
+ {"language": "cpp", "question": "C++ std::sort with a custom comparator", "expect": ["devdocs.io/cpp/algorithm/sort"]},
+ {"language": "sql", "question": "PostgreSQL CREATE INDEX CONCURRENTLY", "expect": ["postgresql~18/sql-createindex"]},
+ {"language": "git", "question": "git cherry-pick a commit onto this branch", "expect": ["devdocs.io/git/git-cherry-pick"]},
+ {"language": "bash", "question": "bash for loop over files", "expect": ["bash/looping-constructs"]},
+ {"language": "php", "question": "PHP str_contains", "expect": ["devdocs.io/php/function.str-contains"]},
+ {"language": "docker", "question": "docker run --restart policy unless-stopped", "expect": ["#restart-policies", "commandline/run/index#restart"]}
+]

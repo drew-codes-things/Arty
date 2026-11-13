@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Arty's docs library: download changed documentation and rebuild the index
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /srv/ai/doclib/refresh.py --root /srv/ai/docs-library
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=3G

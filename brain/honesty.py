@@ -2,6 +2,7 @@ import json
 import logging
 import re
 
+import code_sandbox
 import connections
 import models
 
@@ -135,7 +136,11 @@ def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]],
     acted = [tool for tool in tools_used if tool not in NOT_ACTIONS and tool not in LOOKUP_TOOLS and tool not in LOOK_ONLY_TOOLS]
     if acted and not failed_names & set(acted):
         return answer
-    claims = false_claims(answer, tools_used, failed, request, model, keep_alive, prefix)
+    body, sandbox_line = code_sandbox.without_summary(answer)
+    pieces = prose_and_code(body)
+    prose = "\n".join(text for text, is_code in pieces if not is_code)
+    claims = [claim for claim in false_claims(body, tools_used, failed, request, model, keep_alive, prefix)
+              if claim["text"].strip() in prose]
     if not claims:
         return answer
     log.warning("reply claimed %d thing(s) the tools didn't do: corrected %s", len(claims),
@@ -146,8 +151,24 @@ def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]],
         if text in already_sent:
             afterwards.append(correction or HONEST_NOTHING_DONE)
         else:
-            answer = answer.replace(text, correction, 1)
-    answer = re.sub(r"[ \t]{2,}", " ", answer).strip()
+            pieces = replaced_in_prose(pieces, text, correction)
+    body = "".join(text if is_code else re.sub(r"[ \t]{2,}", " ", text) for text, is_code in pieces).strip()
     if afterwards:
-        answer = f"{answer}\n\n{' '.join(afterwards)}".strip()
-    return answer or HONEST_NOTHING_DONE
+        body = f"{body}\n\n{' '.join(afterwards)}".strip()
+    body = body or HONEST_NOTHING_DONE
+    return f"{body}\n\n{sandbox_line}" if sandbox_line else body
+
+
+def prose_and_code(text: str) -> list[tuple[str, bool]]:
+    pieces, position = [], 0
+    for start, end in code_sandbox.code_spans(text):
+        pieces += [(text[position:start], False), (text[start:end], True)]
+        position = end
+    return pieces + [(text[position:], False)]
+
+
+def replaced_in_prose(pieces: list[tuple[str, bool]], text: str, correction: str) -> list[tuple[str, bool]]:
+    for index, (piece, is_code) in enumerate(pieces):
+        if not is_code and text in piece:
+            return pieces[:index] + [(piece.replace(text, correction, 1), False)] + pieces[index + 1:]
+    return pieces

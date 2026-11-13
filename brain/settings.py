@@ -11,3 +11,4 @@ TRUSTED_PROXIES = frozenset(address.strip() for address in os.environ.get("BRAIN
                             if address.strip())
 STARFIRE_URL = os.environ.get("BRAIN_STARFIRE_URL", "")
 HOMELAB_NAMES = tuple(name.strip() for name in os.environ.get("HOMELAB_NAMES", "").split(",") if name.strip())
+CODE_RUNNER_URL = os.environ.get("CODE_RUNNER_URL", "")

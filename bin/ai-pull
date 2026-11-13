@@ -1,12 +1,16 @@
 #!/bin/sh
+BACKEND_ENV=/etc/default/arty-backend
+if [ -r "$BACKEND_ENV" ]; then set -a; . "$BACKEND_ENV"; set +a; fi
 if [ $# -eq 0 ]; then
   cat <<'HELP'
 Usage: ai-pull <model> [more models...]
 
-Downloads models from ollama.com into /srv/ai/ollama. Good fits for the RTX 3060 (12 GB):
+Downloads models for Arty from ollama.com, or from Hugging Face as hf.co/<user>/<repo>:<quant>
+when Arty runs on its own engine. Good fits for the RTX 3060 (12 GB):
   qwen3:14b         the Assistant's brain: chat, code and tool use (recommended first, 12k context)
   qwen2.5:7b        a faster brain with room for a 16k context
   qwen2.5vl:7b      vision, so look_at_desktop can see the screen
+                    (on Arty's engine: hf.co/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M)
   llama3.1:8b       general chat
 Models above 14B run partly on the CPU and are slow.
 Browse everything at https://ollama.com/search

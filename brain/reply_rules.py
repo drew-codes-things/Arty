@@ -109,7 +109,7 @@ FAILED_NOTE = ("\n\n(That didn't work. Tell the user plainly that it failed and 
 NOT_ACTIONS = {"use_tools"}
 LOOK_ONLY_TOOLS = {"chrome_tabs", "chrome_read", "chrome_find", "chrome_scroll", "chrome_look", "computer_look", "computer_apps",
                    "computer_read_file", "computer_list_files", "computer_find_files", "computer_search", "read_clipboard",
-                   "desktop_windows", "desktop_notifications", "system_status"}
+                   "desktop_windows", "desktop_notifications", "system_status", "code_sandbox"}
 NOT_FOR_ME = "(not for me)"
 VOICE_MODE = "(voice mode)"
 ADDRESSED_PROMPT = ("A home voice assistant called Arty heard this through a room microphone, either right after its "

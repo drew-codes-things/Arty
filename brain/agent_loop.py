@@ -1,10 +1,16 @@
 import json
 import logging
 import re
+import time
 import urllib.error
 from dataclasses import dataclass, field
 
+import code_check
+import code_sandbox
+import coding
 import connections
+import docs_reading
+import fresh_answer
 import models
 import policy
 import sharing
@@ -21,7 +27,7 @@ from settings import OLLAMA_URL
 from native_tools import NATIVE_TOOLS, BACKGROUND_ONLY_EXCLUDED
 from reply_rules import (PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING, SEARCH_REQUEST, PROMISE,
     TOOL_TALK, DO_REQUEST, PRETEND_TOOLS, TOOL_FAILED, FAILED_NOTE, ANSWERED_ALREADY_CHARS, without_app_notes)
-from steering import (LOOKUP_TEMPERATURE, WRITE_ONLY_REQUEST, RUN_REQUEST, RUN_TOOLS, WRITE_ONLY_NOTE,
+from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ONLY_NOTE, asks_for_code, asks_to_run, wants_the_computer,
     WRITE_AND_RUN_NOTE, READ_LINK_NOTE, asks_to_read_a_link, thinking_for, HOW_TO_NOTE, asks_how_to,
     steer_last_request, steer_away_from_repeats, with_thinking, with_context, parse_arguments, DESKTOP_TOOLS,
     NOTHING_TO_SIGN_IN, question_for_user)
@@ -248,6 +254,12 @@ class AgentTurn:
     replays: int = 0
     searched_for_it: bool = False
     answer_from_lookups: bool = False
+    code_checked: bool = False
+    code_rewrites: int = 0
+    sandbox_seconds: float = 0.0
+    sandbox_report: object = None
+    output_mismatches: list = field(default_factory=list)
+    output_rewritten: bool = False
 
     @property
     def is_chat(self) -> bool:
@@ -359,17 +371,22 @@ def tools_for_turn(config: dict, run: AgentRun, toolless: bool, looked_up: tuple
 def steer_the_request(turn: AgentTurn):
     last_request = turn.last_request
     if turn.is_chat and asks_how_to(last_request):
-        turn.all_tools = without_run_tools(turn.all_tools)
+        withhold_run_tools(turn)
         steer_last_request(turn.history, HOW_TO_NOTE)
-    elif turn.is_chat and WRITE_ONLY_REQUEST.search(last_request):
-        if RUN_REQUEST.search(last_request):
+    elif turn.is_chat and asks_for_code(last_request):
+        if asks_to_run(last_request):
             steer_last_request(turn.history, WRITE_AND_RUN_NOTE)
-        else:
-            turn.all_tools = without_run_tools(turn.all_tools)
+        elif not wants_the_computer(last_request):
+            withhold_run_tools(turn)
             steer_last_request(turn.history, WRITE_ONLY_NOTE)
     link_reader = written_calls.offered_name("fetch", [tool["function"]["name"] for tool in turn.all_tools])
     if turn.is_chat and link_reader and asks_to_read_a_link(last_request):
         steer_last_request(turn.history, READ_LINK_NOTE.format(tool=link_reader))
+
+
+def withhold_run_tools(turn: AgentTurn):
+    turn.all_tools = without_run_tools(turn.all_tools)
+    turn.client_names = turn.client_names - DESKTOP_RUN_TOOLS
 
 
 def without_run_tools(tools: list) -> list:
@@ -407,8 +424,10 @@ def offered_tools(turn: AgentTurn, round_number: int) -> list:
     if len(tools) < len(turn.all_tools):
         tools = [policy.use_tools_definition(turn.config)] + tools  # first: it never changes, so it stays cached
     if turn.run.client_tools and not turn.toolless:
-        tools = tools + turn.run.client_tools
-    if turn.answer_from_lookups and round_number == 0:
+        tools = tools + [tool for tool in turn.run.client_tools if tool["function"]["name"] in turn.client_names]
+    if turn.answer_from_lookups and (round_number == 0 or turn.code_checked):
+        tools = []
+    if turn.code_rewrites:
         tools = []
     return tools
 
@@ -441,7 +460,8 @@ def start_draft_round(turn: AgentTurn, tools: list):
     may_search = not agent and turn.nudged and turn.used_no_tools() and not turn.searched_for_it \
         and "research__web_search" in connections.hub.routes
     draft.start_round(allowed=not (may_nudge and ACTION_REQUEST.search(turn.last_request))
-                      and not (may_search and SEARCH_REQUEST.search(turn.last_request)))
+                      and not (may_search and SEARCH_REQUEST.search(turn.last_request))
+                      and not page_to_check_code_against(turn) and not sandbox_may_check(turn))
 
     def risky(text, may_nudge=may_nudge, may_search=may_search):
         if agent:
@@ -503,10 +523,95 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
     if not answer.strip() and not turn.nudged:
         nudge_after_an_empty_reply(turn)
         return None
+    if rewrite_unconfirmed_code(turn, answer):
+        return None
+    if rewrite_failing_code(turn, answer):
+        return None
     if turn.raw.get("done_reason") == "length":
         answer += cut_short_note(turn.config, turn.raw, turn.run.agent)
     turn.keep_groups()
-    return turn.outcome("done", answer=answer)
+    return turn.outcome("done", answer=with_sandbox_summary(turn, reads_fresh(turn, answer)))
+
+
+def page_to_check_code_against(turn: AgentTurn) -> str:
+    if not turn.is_chat or turn.code_checked or not turn.run.looked_up:
+        return ""
+    return docs_reading.page_read_in(turn.run.looked_up[1])
+
+
+def rewrite_unconfirmed_code(turn: AgentTurn, answer: str) -> bool:
+    page = page_to_check_code_against(turn)
+    if not page:
+        return False
+    turn.code_checked = True
+    try:
+        unconfirmed = code_check.unconfirmed_calls(answer, turn.run.looked_up[1])
+    except Exception as error:
+        log.warning("couldn't check the answer's code against %s: %r", page, error)
+        return False
+    if not unconfirmed:
+        return False
+    log.info("the answer's code calls %s, which %s doesn't show; sent back once to rewrite it", unconfirmed, page)
+    turn.code_rewrites += 1
+    send_back(turn, answer, code_check.rewrite_note(page, unconfirmed))
+    return True
+
+
+def sandbox_may_check(turn: AgentTurn) -> bool:
+    return turn.is_chat and code_sandbox.is_on() and coding.is_request(turn.last_request)
+
+
+def rewrite_failing_code(turn: AgentTurn, answer: str) -> bool:
+    turn.sandbox_report = None
+    turn.output_mismatches = []
+    if not sandbox_may_check(turn) or turn.raw.get("done_reason") == "length":
+        return False
+    started = time.monotonic()
+    try:
+        turn.sandbox_report = code_sandbox.report_for(answer, turn.last_request, code_sandbox.TURN_SECONDS - turn.sandbox_seconds)
+        failures = turn.sandbox_report.failures() if turn.sandbox_report else []
+        if not failures:
+            turn.output_mismatches = code_sandbox.output_mismatches(
+                answer, turn.sandbox_report, code_sandbox.TURN_SECONDS - turn.sandbox_seconds - (time.monotonic() - started))
+    finally:
+        turn.sandbox_seconds += time.monotonic() - started
+    if not failures:
+        return rewrite_wrong_output(turn, answer)
+    if turn.code_rewrites >= code_sandbox.MAX_REWRITES:
+        return False
+    turn.code_rewrites += 1
+    log.info("the sandbox found errors in %s; sent back to fix them (rewrite %d of %d)",
+             ", ".join(unit.label for unit, _ in failures), turn.code_rewrites, code_sandbox.MAX_REWRITES)
+    send_back(turn, answer, code_sandbox.rewrite_note(failures))
+    return True
+
+
+def rewrite_wrong_output(turn: AgentTurn, answer: str) -> bool:
+    if not turn.output_mismatches or turn.output_rewritten or turn.code_rewrites >= code_sandbox.MAX_REWRITES:
+        return False
+    turn.output_rewritten = True
+    turn.code_rewrites += 1
+    log.info("the answer shows output its code doesn't print; sent back once to fix it")
+    send_back(turn, answer, code_sandbox.output_note(turn.output_mismatches))
+    return True
+
+
+def reads_fresh(turn: AgentTurn, answer: str) -> str:
+    if not fresh_answer.hides_rewrites(turn.code_rewrites, turn.last_request):
+        return answer
+    return fresh_answer.without_rewrite_talk(answer, code_sandbox.code_spans(answer))
+
+
+def with_sandbox_summary(turn: AgentTurn, answer: str) -> str:
+    report = turn.sandbox_report
+    if report is None:
+        return answer
+    if report.ran_anything():
+        turn.tool_log.append(code_sandbox.TOOL_NAME)
+    if turn.output_mismatches:
+        log.info("replaced output the answer claimed with what the code really printed")
+        answer = code_sandbox.with_real_output(answer, turn.output_mismatches)
+    return f"{answer.rstrip()}\n\n{code_sandbox.summary(report, corrected_output=bool(turn.output_mismatches))}"
 
 
 def wait_for_sign_in(turn: AgentTurn) -> dict:

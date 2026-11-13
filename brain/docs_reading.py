@@ -6,6 +6,7 @@ from typing import NamedTuple
 from urllib.parse import urlparse
 
 import connections
+import local_docs
 import research
 
 log = logging.getLogger("brain.docs")
@@ -32,6 +33,7 @@ LINK = re.compile(r"!?\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+\"[^\"]*\")?\
 FENCE = re.compile(r"^\s*```")
 HEADING = re.compile(r"^#{1,6}\s")
 NAME_DECORATION = re.compile(r"[*\\`]")
+PAGE_READ = re.compile(r"\[read from (\S+) just now \(")
 
 DOTTED_CALL = re.compile(r"\b([a-z_]\w*)\.([a-z_]\w*)\(\)", re.IGNORECASE)
 DUNDER = re.compile(r"^__\w+__$")
@@ -48,6 +50,7 @@ DOCS_NOTE = ("[read from {url} just now ({kind}). Where it differs from what you
 UNCONFIRMED_NOTE = ("[read {url} just now: it never mentions {names}, and neither do the search results, so nothing "
                     "found confirms that {names} exists. Say you couldn't confirm it rather than describing it]")
 OFFICIAL = "the official documentation"
+LOCAL_COPY = "the official documentation, local copy"
 NOT_OFFICIAL = ("a page about this, not the official documentation; any setup or versions on it are someone else's, not "
                 "the user's")
 
@@ -210,11 +213,45 @@ def fetched_in_time(url: str, fetch) -> str:
         pool.shutdown(wait=False, cancel_futures=True)
 
 
+def page_read_in(notes: str) -> str:
+    found = PAGE_READ.search(notes)
+    return found.group(1) if found else ""
+
+
 def is_usable(text: str) -> bool:
     return len(text) >= research.MIN_PAGE_CHARS and not research.BOT_CHECK.search(text[:1500])
 
 
-def read_top_page(search_text: str, question: str, fetch=fetch_page) -> str:
+def local_sections_text(sections: list[local_docs.Found], question: str, limit: int = EXCERPT_CHARS) -> str:
+    parts, used = [], 0
+    for section in sections:
+        whole = f"From {section.url}\n## {section.heading}\n{section.text}"
+        if used + len(whole) <= limit:
+            parts.append(whole)
+            used += len(whole) + 2
+        elif not parts:
+            heading = f"From {section.url}\n## {section.heading}\n"
+            parts.append(heading + excerpt(section.text, question, limit - len(heading)))
+            used = limit
+    return "\n\n".join(parts)
+
+
+def local_page(question: str, find_local) -> str:
+    sections = find_local(question)
+    if not sections:
+        return ""
+    everything = "\n".join(f"{section.heading}\n{section.text}" for section in sections)
+    missing = sorted(name for name in named_things(question) if not names_all(everything, {name}))
+    if missing:
+        log.info("the local docs library doesn't name %s; reading the web instead", missing)
+        return ""
+    log.info("answering from the local docs library: %s", sections[0].url)
+    return DOCS_NOTE.format(url=sections[0].url, kind=LOCAL_COPY, excerpt=local_sections_text(sections, question))
+
+
+def read_top_page(search_text: str, question: str, fetch=fetch_page, find_local=None) -> str:
+    if local := local_page(question, find_local or local_docs.best_sections):
+        return local
     url = page_to_read(search_text, question)
     if not url:
         return ""

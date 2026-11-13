@@ -1,4 +1,10 @@
 #!/bin/sh
+BACKEND_ENV=/etc/default/arty-backend
+if [ -r "$BACKEND_ENV" ]; then set -a; . "$BACKEND_ENV"; set +a; fi
 ollama list
 echo
-echo "Remove one with: ollama rm <model>"
+if [ -n "${OLLAMA_HOST:-}" ]; then
+  echo "Remove one with: OLLAMA_HOST=$OLLAMA_HOST ollama rm <model> (Arty's engine removes only the models it pulled)"
+else
+  echo "Remove one with: ollama rm <model>"
+fi

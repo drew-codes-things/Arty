@@ -56,7 +56,7 @@ covering how to install it, how to use it, and what it's been run and tested on.
 
 ```
  Arty Desktop (your PC) ───────LAN─────────┐
- Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ Ollama (models, GPU)
+ Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ Ollama or ArtyEngine (models, GPU)
  Arty for iPhone ────LAN or Cloudflare─────┤                       │
  Arty for Quest (beta) ─▶ voice server ────┼─▶ Brain (:8081) ──────┼─▶ Tool hub: memory, web search, homelab, ...
  Voice assistant ("Hey Arty") ─────────────┤                       │
@@ -67,6 +67,13 @@ Everything talks to the brain through one API ([docs/API.md](docs/API.md)) with 
 use the brain's LAN address; away from home the phone apps go through a Cloudflare tunnel behind Cloudflare Access
 ([docs/cloudflare.md](docs/cloudflare.md)). Notifications - reminders, briefings, task results, approvals, homelab
 alerts - only ever go to **Updates** in the phone and desktop apps.
+
+The brain and its tool servers send their model requests to Ollama's API at `OLLAMA_URL` (`http://127.0.0.1:11434`
+unless set). That can be Ollama itself or [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine),
+Arty's own Ollama-compatible server built on llama.cpp's `llama-server`. ArtyEngine reads the models already in Ollama's
+store, so switching downloads nothing again, and its README covers installing it and moving Arty over and back.
+ArtyEngine is a separate repository with a different licence: [PolyForm Strict 1.0.0](https://github.com/drew-codes-things/ArtyEngine/blob/main/LICENSE)
+(noncommercial use, no sharing or changed versions), not Arty's Apache 2.0.
 
 ---
 
@@ -86,6 +93,8 @@ alerts - only ever go to **Updates** in the phone and desktop apps.
 | [`extensions/gmail/`](extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
 | [`extensions/browser/`](extensions/browser/) | Browser extension (Chrome, Edge, Brave, Chromium, Firefox) that lets Arty Desktop use your own browser |
 | [`chat-bots/telegram/`](chat-bots/telegram/), [`chat-bots/discord/`](chat-bots/discord/) | Arty on Telegram and Discord, owner-only |
+| `doclib/` | The docs library: official documentation (Python, MDN, Node.js, Rust, Go, Java, PostgreSQL, Docker, Git, Linux man pages, Proxmox, Debian and more) downloaded into a local search index that coding answers read first |
+| `code-runner/` | The code runner: a small container that runs the code in Arty's coding answers in a fresh sandbox (no network, capped time and memory) so Arty can fix real errors before it answers |
 | [`docs/`](docs/) | [The Arty API](docs/API.md), [linking everything through Cloudflare](docs/cloudflare.md), [connecting a phone](docs/connecting-a-phone.md) and [connecting a Quest headset](docs/connecting-a-headset.md) |
 
 The beta apps are built and unit-tested. Arty for Quest has run on a real headset (it connects and shows its panels) but not every feature has been tried.
@@ -104,7 +113,10 @@ Arty CLI's Windows installer has been run on Windows 10 (PowerShell 5.1).
   deadlines and email, with empty sections left out.
 - **Its own PC** - a Debian + XFCE virtual machine with a visible browser, a shared terminal you can watch, a
   searchable `~/library` of documents, and a desktop look it picks itself.
-- **Approvals** - anything that sends, buys, deletes or touches the homelab waits for your Approve / Deny.
+- **Approvals** - anything that sends, buys, deletes or touches the homelab, or installs software on Arty's PC, waits
+  for your Approve / Deny.
+- **Checked coding answers** - code questions read the matching section of the local docs library (or the web) first,
+  the code comes back in the reply, and with the optional code runner it is run in a sandbox and fixed before you see it.
 - **Safe browsing** - logins, CAPTCHAs and bot checks are reported back to you, never got around.
 - **Everywhere** - desktop app, Android, iPhone and Quest (beta: your own virtual reality AI), voice, Telegram and Discord, all sharing one memory.
 - **Works with [starfire.ai](https://github.com/drew-codes-things/starfire.ai)** - add Arty to starfire as an
@@ -281,10 +293,17 @@ and restarts everything. It keeps whichever main model is live. If your chat bot
 `ARTY_DISCORD_ID` and `ARTY_TELEGRAM_ID` (their PufferPanel server ids) and `PUFFER_DIR` (PufferPanel's servers folder
 on the Proxmox host) in `hosts.env`; left empty, the bots are skipped. Run it again after every change.
 
+It also installs the docs library (`doclib/` in `/srv/ai/doclib`, the `docs-library` service on port 8889, answering
+only the container itself and its Docker network) and a timer that refreshes it every Sunday at 04:30. The library
+starts empty: build it once with `pct exec 104 -- systemctl start docs-library-refresh`, which downloads the
+documentation and builds the index in `/srv/ai/docs-library` (about 750 MB; it downloads nothing while less than 8 GB
+is free). Until then coding questions read the web as before. On a new server `provision.sh` also adds the library to
+SearXNG as the `local docs` engine; it leaves an existing `/srv/ai/searxng/settings.yml` alone.
+
 Check it's up:
 
 ```bash
-pct exec 104 -- systemctl is-active ollama tool-hub brain
+pct exec 104 -- systemctl is-active ollama tool-hub brain docs-library
 pct exec 104 -- cat /srv/ai/secrets/arty-api.txt
 ```
 
@@ -313,6 +332,12 @@ from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
 
 - [Voice](voice/README.md): the room mic and speakers hub, "Hey Arty", and the Quest headset socket.
 - The [Telegram](chat-bots/telegram/README.md) and [Discord](chat-bots/discord/README.md) bots.
+- Code checking: make a small Debian container, put its id in `hosts.env` as `RUNNER_CT`, run
+  `code-runner/deploy.sh setup` while it still has internet, then `code-runner/deploy.sh firewall` (only `AI_ADDRESS`
+  can reach it afterwards; take its gateway away too). Set `CODE_RUNNER_URL=http://<runner address>:8790` in
+  `/srv/ai/secrets/brain.env` and run `systemctl restart brain`. Coding answers then end with a "Sandbox check:" line.
+  When an answer shows what its code prints, Arty compares that with what the code really printed in the sandbox and
+  fixes the answer if they differ (output that depends on time, randomness or input is left alone).
 - Homelab tools: put the keys in `/srv/ai/secrets/homelab.env` (Uptime Kuma: `UPTIME_KUMA_API_KEY`, created under
   Settings > API Keys) and run `systemctl restart tool-hub brain`.
 
@@ -360,10 +385,10 @@ Restart with `systemctl restart tool-hub brain` after changing them.
   that brings a new picture is answered by the vision model too, when it can use tools, instead of swapping the main
   model back in for the answer. A picture uploaded through the apps starts the vision model loading while you type.
   Set it to `false` to keep picture answers on the main model.
-- **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (`mimo-v2.6:9b`). For anything else the
-  main model can hand a job to another model in `arty_models` with `ask_other_model`; `model_strengths` says what each
-  one is best at. A model that isn't downloaded is never picked: Arty falls back to the coding model in agent
-  mode, or the main model, and logs it.
+- **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (`qwen3:14b`, the main model). For
+  anything else the main model can hand a job to another model in `arty_models` with `ask_other_model`;
+  `model_strengths` says what each one is best at. A model that isn't downloaded is never picked: Arty falls back to
+  the coding model in agent mode, or the main model, and logs it.
 - **Coding questions in chat**: `route_coding_chats` in `brain.json` (on by default when `coding_model` is set) sends a
   chat to `coding_model` when it picks plain `Arty` and is clearly about code: a fenced code block, a pasted traceback or
   compiler error, or asking to write, fix, debug, refactor, review or explain code, a script, a regex, a SQL query or a
@@ -371,6 +396,9 @@ Restart with `systemctl restart tool-hub brain` after changing them.
   change across a project always does, so a quick question doesn't cost two model swaps. Every app gets it with no update, the reply still comes from Arty, and the main model is loaded again
   200 seconds later. A model picked by name, solo models and the private add-on are never moved; if the coding model
   isn't downloaded, the main model answers and the brain logs it. Set it to `false` to keep every chat on the main model.
+  As shipped, `coding_model` is the main model, so coding chats stay on it; pictures still go to the vision model. A coding
+  question gets its code in the reply: Arty doesn't write it to a file or run it, on its PC or yours, unless you ask it
+  to run, test, save, install or build it.
 - **Models on their own**: anything listed in `solo_models` in `brain.json` shows up in the apps' model pickers as a
   plain chat, with no Arty persona, tools or memory.
 - **Approvals**: in chat Arty asks and acts when you say yes; for background tasks, Updates in the phone and desktop
@@ -409,7 +437,8 @@ Know these before relying on it:
 - **One model on the GPU at a time** - looking at an image swaps the vision model in for that one look, then the main
   model loads back in the background (about a minute in all).
 - **Limited actions** - email is read-only, through a signed-in Gmail window; it can't send it. It can't create VMs
-  or change the homelab on its own, and installing apps on its own PC isn't built yet.
+  or change the homelab on its own, and installing software on its own PC (sudo, apt, global npm or pip installs and
+  the like) waits for your approval.
 - **Home network for most things** - away from home only the phone apps work (through Cloudflare). Arty Desktop,
   voice and the chat bots need the LAN, and nothing works while the brain's container is off. There's no cloud
   fallback.
@@ -482,6 +511,7 @@ cd brain && python3 -m unittest discover -s tests
 (cd hub && /opt/ai-hub/bin/python -m unittest discover -s tests)   # needs mcp 2
 python3 -m pytest -q mcp voice/tests tests arty-pc chat-bots   # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
 (cd downloads && python3 -m unittest discover -p 'test_*.py')
+(cd code-runner && RUNNER_URL=http://<runner address>:8790 python3 -m unittest discover -s tests)   # live tests skip without RUNNER_URL
 ARTY_URL=http://<AI_ADDRESS>:8081/v1 ARTY_KEY=... python3 tests/e2e_battery.py   # scored eval against the live brain, see --help
 cd apps/ios && node --test tests/
 ```

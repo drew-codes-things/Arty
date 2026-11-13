@@ -134,6 +134,19 @@ engines:
     disabled: false
   - name: startpage
     disabled: false
+  - name: local docs
+    engine: json_engine
+    shortcut: ldocs
+    categories: [general, it]
+    paging: false
+    enable_http: true
+    search_url: http://$(ip -4 -o addr show dev docker0 | awk '{print $4}' | cut -d/ -f1):8889/search?q={query}&gate=coding&limit=5
+    results_query: results
+    url_query: url
+    title_query: title
+    content_query: snippet
+    timeout: 2.0
+    disabled: false
 EOF
   chmod 644 /srv/ai/searxng/settings.yml
 fi

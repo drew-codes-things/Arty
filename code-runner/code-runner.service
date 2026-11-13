@@ -1,0 +1,15 @@
+[Unit]
+Description=Arty code runner (runs model-written code in a per-run sandbox)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/runs
+
+[Service]
+Environment=RUNNER_LISTEN=0.0.0.0:8790
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -E -s /opt/code-runner/runner.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

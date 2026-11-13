@@ -1,6 +1,8 @@
 #!/bin/sh
 # ai-toolless on|off: let models without tool support run Arty (persona and memory, no tools).
 set -eu
+BACKEND_ENV=/etc/default/arty-backend
+if [ -r "$BACKEND_ENV" ]; then set -a; . "$BACKEND_ENV"; set +a; fi
 CONFIG=/srv/ai/brain/brain.json
 current=$(jq -r '.allow_toolless_models // false' "$CONFIG")
 case "${1:-}" in

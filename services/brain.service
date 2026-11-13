@@ -10,6 +10,7 @@ EnvironmentFile=-/srv/ai/secrets/notify.env
 # Listens on the home network for the Arty API and phone-notification buttons; every
 # endpoint except /health and the per-task /hooks links needs an API key.
 Environment=BRAIN_HOST=0.0.0.0
+Environment=DOCS_LIBRARY_URL=http://127.0.0.1:8889
 ExecStart=/usr/bin/python3 /srv/ai/brain/brain.py
 NoNewPrivileges=yes
 Restart=on-failure

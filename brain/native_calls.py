@@ -84,6 +84,10 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         if LOOKUP_FAILED.search(str(result)) or (name == WEB_SEARCH_TOOL and research.found_nothing(result)):
             # Left to the model, a failed check becomes "nothing new": say it couldn't be checked, and why.
             log.warning("lookup %s didn't work: %s", name, str(result)[:200])
+            if name == WEB_SEARCH_TOOL and (page := top_page_for("", said)):
+                used.append(docs_reading.FETCH_TOOL)
+                results.append(page)
+                continue
             failed.append(str(result).strip())
             continue
         used.append(name)

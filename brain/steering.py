@@ -1,6 +1,7 @@
 import json
 import re
 
+import coding
 import fresh
 import models
 from settings import PUBLIC_URL
@@ -29,9 +30,10 @@ MULTI_STEP_REQUEST = re.compile(r"\b(and then|after that|once (that'?s|it'?s) do
 THINKING_MIN_TOKENS = 6144
 WRITE_ONLY_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please |can you |could you |would you )?(?:write|give me|show me|"
                                 r"what'?s|what is|how do i)\b.*\b(?:one-?liner|command|script|function|code|regex|snippet|query|alias)\b", re.I)
-RUN_REQUEST = re.compile(r"\b(run|execute|test|try (it|this|that)|on your (computer|desktop|pc)|check (it|that) works)\b", re.I)
 RUN_TOOLS = {"workspace__run_command", "workspace__read_terminal", "workspace__list_files", "workspace__read_file",
              "workspace__write_file", "workspace__edit_file"}
+DESKTOP_RUN_TOOLS = {"computer_run_command", "computer_read_file", "computer_write_file", "computer_edit_file",
+                     "computer_list_files", "computer_search", "computer_find_files"}
 WRITE_ONLY_NOTE = "\n\n(Reply with the code itself. Don't run anything or look around your computer for this.)"
 WRITE_AND_RUN_NOTE = "\n\n(Write it, then run it on your computer with run_command and show what it printed.)"
 HOW_TO_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:(?:please |can you |could you |would you )?(?:tell me |show me |explain )?"
@@ -45,10 +47,37 @@ GIVEN_LINK = re.compile(r"https?://\S+", re.I)
 READ_LINK_REQUEST = re.compile(r"\b(read|summari[sz]e|summary|tl;?dr|what (?:is|does|'s)|tell me|explain|about|says?|key points)\b",
                                re.I)
 READ_LINK_NOTE = "\n\n(The user gave a link: read it with {tool} before answering.)"
+NEGATED_ASK = re.compile(r"\b(?:don'?t|do not|never|no need to|without|shouldn'?t)\b[^.!?\n,;]*?"
+                         r"(?=[.!?\n,;]|\b(?:but|just|instead|then)\b|$)", re.I)
+RUN_ASKED = re.compile(r"\b(?:run|execute|try|test)\s+(?:it|this|that|them|the (?:code|script|program|function|query|command)s?)\b|"
+                       r"\b(?:and|then)\s+(?:run|execute|test)\b|\bon your (?:computer|desktop|pc|vm|machine)\b|"
+                       r"\bcheck (?:it|that) works\b|\bshow (?:me )?what it (?:prints|outputs|returns)\b|\brun (?:it )?(?:on|in) your\b",
+                       re.I)
+COMPUTER_ASKED = re.compile(
+    r"\b(?:save|store|put|write)\s+(?:it|this|that|them|the (?:code|script|program|function|file|results?|output))\s+"
+    r"(?:to|in|into|as|on)\b|\bsave (?:it|this|that|them)\b|(?:^|[.!?]\s*|\b(?:and|then|please|you|first)\s+)install\b|"
+    r"\bin your (?:workspace|terminal|home folder)\b|(?:^|[\s'\"`(])(?:~|/home|/srv|/opt|/tmp)/\S", re.I)
 
 
 def asks_how_to(text: str) -> bool:
     return bool(HOW_TO_REQUEST.search(text)) and not RUN_IT_FOR_ME.search(text)
+
+
+def without_negated_asks(text: str) -> str:
+    return NEGATED_ASK.sub(" ", text or "")
+
+
+def asks_to_run(text: str) -> bool:
+    return bool(RUN_ASKED.search(without_negated_asks(text)))
+
+
+def wants_the_computer(text: str) -> bool:
+    asked = without_negated_asks(text)
+    return asks_to_run(text) or bool(COMPUTER_ASKED.search(asked)) or coding.is_big_job(text)
+
+
+def asks_for_code(text: str) -> bool:
+    return bool(WRITE_ONLY_REQUEST.search(text or "")) or coding.is_request(text)
 
 
 def asks_to_read_a_link(text: str) -> bool:

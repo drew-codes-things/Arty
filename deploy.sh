@@ -34,6 +34,7 @@ bundle=$(mktemp --suffix=.tgz)
 trap 'rm -f "$bundle"' EXIT
 tar czf "$bundle" --exclude=services/arty-desktop-egress.service --exclude='mcp/test_*.py' brain/*.py brain/persona.md brain/system-prompt.md brain/brain.json \
   mcp/*.py mcp/tool-hub.json hub/tool_hub.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless services/*.service \
+  services/*.timer doclib/*.py doclib/retrieval_set.json \
   apps/ios/index.html apps/ios/app.css apps/ios/sw.js apps/ios/manifest.webmanifest apps/ios/js/*.js apps/ios/js/vendor/*.js \
   apps/ios/fonts/*.ttf apps/ios/icons/*.png
 remote_bundle=$(ssh "$PROXMOX" mktemp --suffix=.tgz)
@@ -58,7 +59,9 @@ install -d /srv/ai/hub
 install -m 644 deploy/hub/tool_hub.py /srv/ai/hub/
 install -m 644 deploy/desktop_known_hosts /srv/ai/mcp/workspace_known_hosts
 install -m 755 deploy/bin/* /usr/local/bin/
-install -m 644 deploy/services/*.service /etc/systemd/system/
+install -m 644 deploy/services/*.service deploy/services/*.timer /etc/systemd/system/
+install -d /srv/ai/doclib /srv/ai/docs-library
+install -m 644 deploy/doclib/*.py deploy/doclib/retrieval_set.json /srv/ai/doclib/
 mkdir -p /srv/ai/apps
 rm -rf /srv/ai/apps/ios.new
 cp -r deploy/apps/ios /srv/ai/apps/ios.new
@@ -70,9 +73,11 @@ rm -rf deploy
 systemctl daemon-reload
 if systemctl is-enabled --quiet mcpo 2>/dev/null; then systemctl disable --now mcpo; fi
 systemctl enable tool-hub
-systemctl restart tool-hub brain
+systemctl enable docs-library docs-library-refresh.timer
+systemctl start docs-library-refresh.timer
+systemctl restart tool-hub brain docs-library
 sleep 10
-systemctl is-active tool-hub brain
+systemctl is-active tool-hub brain docs-library
 rm -rf /srv/ai/apps/ios.old
 [ ! -d /srv/ai/apps/beta/ios ] || echo "the old copy at /srv/ai/apps/beta/ios was left in place: delete it once the new one is checked"'
 REMOTE

@@ -182,7 +182,11 @@ def arty_description(config: dict, main: dict | None) -> str:
     coding_name, vision_name = config.get("coding_model", ""), config.get("vision_model", "")
     if not coding_name and not vision_name:
         return models.summary(main)
-    jobs = [f"{main['name']} for chat"]
+    if coding_name == main["name"]:
+        coding_name = ""
+        jobs = [f"{main['name']} for chat and code"]
+    else:
+        jobs = [f"{main['name']} for chat"]
     if coding_name and coding_name == vision_name:
         jobs.append(f"{coding_name} for code and pictures")
     else:

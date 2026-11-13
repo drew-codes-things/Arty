@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+BACKEND_ENV=/etc/default/arty-backend
+if [ -r "$BACKEND_ENV" ]; then set -a; . "$BACKEND_ENV"; set +a; fi
 CONFIG=/srv/ai/brain/brain.json
 current=$(jq -r .model "$CONFIG")
 
