@@ -31,6 +31,10 @@ going quiet after browser steps.
 - **No more empty replies after browser steps.** When Ollama dropped a tool call the model asked for, the brain now
   recovers it instead of answering with nothing. If a reply is still empty after steps on your computer, Arty says
   how far it got instead of "I lost my train of thought".
+- **Arty only names the tools it really has.** The instructions list the tools offered in each chat by their real
+  names, so the model no longer asks for tools that are missing (which Ollama dropped without a word).
+- **In your browser, Arty only does what you asked.** It never clicks subscribe, like, follow or buy unless you ask,
+  and after opening a video it tells you which one and whether it is playing.
 - Steps Arty already took in your browser count as using tools, so an honest answer after them is no longer
   questioned.
 - Long chats and background tasks are shortened to fit the window before they are sent, so a reply is not cut off
