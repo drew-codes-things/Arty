@@ -134,6 +134,7 @@ def _browser_allowed():
 
 SPECS += [(name, fn, _browser_allowed, spec) for name, fn, spec in browser.SPECS]
 _BROWSER_TOOLS = {name for name, *_ in browser.SPECS}
+_WEB_PAGE_TOOLS = _BROWSER_TOOLS - {"chrome_forget_site"}
 _DESKTOP_TOOLS = {name for name, *_ in desktop.SPECS + notifications.SPECS}
 
 _HANDLERS = {name: (fn, on) for name, fn, on, _ in SPECS}
@@ -168,8 +169,37 @@ def describe(name, arguments):
     return None, None
 
 
+ASKED_AFTER_A_WEB_PAGE = {"computer_run_command", "computer_write_file", "computer_edit_file", "computer_open", "open_url"}
+_reply = {"read_a_web_page": False}
+
+
+def start_reply():
+    _reply["read_a_web_page"] = False
+    browser.start_turn()
+
+
+def step_key(name, arguments):
+    return browser.step_target(name, _args(arguments)) if name in _BROWSER_TOOLS else None
+
+
+def _after_a_web_page_question(name, args):
+    lead = "This reply read a page in your browser, and pages can carry instructions."
+    if name == "computer_run_command":
+        return f"{lead} Let Arty run this on your computer?\n{str(args.get('command') or '')[:300]}"
+    if name == "open_url":
+        return f"{lead} Let Arty open {str(args.get('url') or '')[:120]}?"
+    return f"{lead} Let Arty go on: {computer.describe(name, args)}?"
+
+
 def needs_ok(name, arguments, consented):
     """A question to put to them before running this call, or None."""
+    question = _own_question(name, arguments, consented)
+    if question or not (_reply["read_a_web_page"] and name in ASKED_AFTER_A_WEB_PAGE):
+        return question
+    return _after_a_web_page_question(name, _args(arguments))
+
+
+def _own_question(name, arguments, consented):
     if name in _COMPUTER_TOOLS:
         return computer.needs_ok(name, _args(arguments), consented)
     if name in _DESKTOP_TOOLS:
@@ -288,6 +318,8 @@ def run(name, arguments):
     if fn is None or not on():
         return f"There is no tool called {name}."
     _last_used[name] = time.time()
+    if name in _WEB_PAGE_TOOLS:
+        _reply["read_a_web_page"] = True
     try:
         args = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
     except json.JSONDecodeError:

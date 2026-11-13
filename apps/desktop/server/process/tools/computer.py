@@ -146,7 +146,15 @@ _RISKY = re.compile(
     r"|\b[gm]?awk\b.*\bsystem\s*\("
     r"|\bunlink\b|\bgio\s+(?:trash|remove|rm|move|mv|copy|cp|save|rename|set)\b"
     r"|\bgit\s+config\s+(?:--global|--system)\b"
-    r"|-m\s+http\.server\b", re.I)
+    r"|-m\s+http\.server\b"
+    r"|<\(|>\("
+    r"|(?:^|[;&|(`]\s*|\b(?:sudo|exec|env|nohup|bash|sh|zsh|dash|ksh|fish|python\d?(?:\.\d+)?|perl|ruby|node|deno|bun|php"
+    r"|source|java\s+-jar)\s+(?:-\S+\s+)*)(?:\.\s+)?[\"']?(?:~|\$HOME|\$\{HOME\}|/home/[^/\s]+|/root)?/?(?:[^\s;&|\"']*/)?Downloads/"
+    r"|\bcd\s+[\"']?\S*Downloads\b[^\n]*[;&|]\s*(?:\./|\.\s|source\s|(?:sudo\s+)?(?:ba|z|da|k)?sh\s|python|perl|ruby|node|php|java\s)"
+    r"|\bcurl\b[^|;&]*\s(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|--json)(?:\s|=|$)"
+    r"|\bcurl\b[^|;&]*\s(?:-X\s*|--request[\s=])(?:POST|PUT|PATCH|DELETE)\b"
+    r"|\bcurl\b[^|;&]*https?://(?!(?:localhost|127\.0\.0\.1|\[::1\])[:/?])[^\s/?#]+[^\s?#]*\?[^\s#]*="
+    r"|\b(?:nc|ncat|netcat|socat)\b", re.I)
 _REPEATS = {_parser.MAX_REPEAT, _parser.MIN_REPEAT, getattr(_parser, "POSSESSIVE_REPEAT", _parser.MAX_REPEAT)}
 
 _CODE_OR_MARKUP = re.compile(r'["`<>{}()]')

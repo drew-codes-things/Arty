@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from written_calls import offered_name
+from written_calls import offered_name, safe_names
 
 HEADING = "How to use the tools you have in this chat (these are the only ones; use these exact names):"
 NO_TOOLS_NUDGE = "Do it now with your tools."
@@ -108,6 +108,7 @@ def offers_browser_actions(offered: list[str]) -> bool:
 
 
 def guide(offered: list[str]) -> str:
+    offered = safe_names(offered)
     lines = [text for text in (line_text(rule, offered) for rule in GUIDE) if text]
     if offers_browser_actions(offered):
         lines += BROWSER_CONDUCT
@@ -119,5 +120,6 @@ def search_tool(offered: list[str]) -> str | None:
 
 
 def nudge_tools(offered: list[str]) -> str:
+    offered = safe_names(offered)
     parts = [template.format(name=real) for name, template in NUDGE_PARTS if (real := offered_name(name, offered))]
     return f"Do it now with your tools: {', '.join(parts)}." if parts else NO_TOOLS_NUDGE

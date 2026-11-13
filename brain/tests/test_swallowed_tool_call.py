@@ -198,11 +198,11 @@ class ReadingWrittenCalls(unittest.TestCase):
         self.assertEqual(written_calls.calls_written_in('<tool_call>\n{"name": "chrome_tabs", "arguments": {}}'),
                          [{"function": {"name": "chrome_tabs", "arguments": {}}}])
 
-    def test_offered_names_match_exactly_or_by_the_part_after_the_server(self):
+    def test_offered_names_match_exactly_or_by_a_bare_name(self):
         offered = ["chrome_open", "research__web_search", "workspace__browser_open", "fetch__fetch"]
         self.assertEqual(written_calls.offered_name("chrome_open", offered), "chrome_open")
         self.assertEqual(written_calls.offered_name("web_search", offered), "research__web_search")
-        self.assertEqual(written_calls.offered_name("workspace__web_search", offered), "research__web_search")
+        self.assertIsNone(written_calls.offered_name("workspace__web_search", offered))
         self.assertIsNone(written_calls.offered_name("youtube_play", offered))
         self.assertIsNone(written_calls.offered_name("", offered))
 

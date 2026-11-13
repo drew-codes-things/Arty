@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const crypto = require('crypto');
 
 const folder = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(folder, 'background.js'), 'utf8');
@@ -15,7 +16,7 @@ function loadExtension({ tabs = SHOP, stored = {}, fetch = never, inject, captur
   const chrome = {
     alarms: { create: () => {}, onAlarm: { addListener: () => {} } },
     runtime: { getPlatformInfo: async () => ({}), onStartup: { addListener: () => {} }, onInstalled: { addListener: () => {} } },
-    storage: { local: { get: async () => stored } },
+    storage: { local: { get: async () => stored, set: async () => {} } },
     action: { setBadgeText: async () => {}, setTitle: async () => {} },
     tabs: {
       get: async (id) => tabs.find((tab) => tab.id === id),
@@ -34,7 +35,7 @@ function loadExtension({ tabs = SHOP, stored = {}, fetch = never, inject, captur
     timer.unref();
     return timer;
   };
-  const context = { chrome, fetch, setTimeout: background, clearTimeout, console, URL, AbortSignal };
+  const context = { chrome, fetch, setTimeout: background, clearTimeout, console, URL, AbortSignal, crypto: crypto.webcrypto, TextEncoder };
   vm.createContext(context);
   vm.runInContext(source, context);
   return { context, done };
@@ -85,6 +86,11 @@ test('a result that fails to send is sent again instead of being lost', async ()
   const sent = [];
   let handedOut = false;
   const fetch = async (url, options) => {
+    if (url.includes('/browser/hello')) {
+      const nonce = new URL(url).searchParams.get('nonce');
+      const proof = crypto.createHmac('sha256', 'abc123').update(`arty-browser-service:${nonce}`).digest('hex');
+      return { ok: true, status: 200, json: async () => ({ proof }) };
+    }
     if (url.includes('/browser/next')) {
       if (handedOut) return never();
       handedOut = true;
@@ -104,9 +110,12 @@ test('a result that fails to send is sent again instead of being lost', async ()
 function fieldsPage(fields) {
   const element = ({ type = 'text', name = '', autocomplete = '', label = '', value = '' }) => {
     const attributes = { type, autocomplete, 'aria-label': label };
-    return { tagName: 'INPUT', name, id: '', value, placeholder: '', getAttribute: (key) => attributes[key] ?? null };
+    return {
+      tagName: 'INPUT', name, id: '', value, placeholder: '', getAttribute: (key) => attributes[key] ?? null,
+      getBoundingClientRect: () => ({ width: 10, height: 10 }),
+    };
   };
-  return { document: { querySelectorAll: () => fields.map(element) } };
+  return { document: { querySelectorAll: () => fields.map(element) }, getComputedStyle: () => ({ visibility: 'visible', display: 'block' }) };
 }
 
 function runInPage(name, page, args) {
@@ -133,13 +142,14 @@ test('text that came into view keeps the words of one paragraph on one line', ()
   const infobox = block('infobox', 10);
   const article = block('article', 40);
   const below = block('below', 2000);
-  const text = (content, parent) => ({ textContent: content, parentElement: { getBoundingClientRect: () => parent.box, closest: () => parent } });
+  const text = (content, parent) => ({ textContent: content, parentElement: { getBoundingClientRect: () => parent.box, closest: (selector) => (selector.includes('aria-hidden') ? null : parent) } });
   const nodes = [text('Born ', infobox), text('Maida Vale', infobox), text(', London', infobox), text('Turing was', article),
     text(' a mathematician.', article), text('Not in view', below)];
   const page = {
     window: { scrollY: 0, innerHeight: 900, scrollBy() { this.scrollY = 300; }, scrollTo() {} },
     document: { documentElement: { scrollHeight: 5000 }, body: { scrollHeight: 5000 }, createTreeWalker: () => ({ nextNode: () => nodes.shift() }) },
     NodeFilter: { SHOW_TEXT: 4 },
+    getComputedStyle: () => ({ fontSize: '16px' }),
   };
   page.window.window = page.window;
   const result = runInPage('scrollPage', { ...page, window: page.window, scrollY: 0 }, ['down', 4000]);

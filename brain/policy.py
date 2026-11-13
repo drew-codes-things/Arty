@@ -25,7 +25,9 @@ SHELL_OPERATORS = re.compile(r"&&|\|\||[|;`]|\$\(|>")
 LOWERCASE_START = re.compile(r"^(?:sudo\s+)?[a-z0-9_./~-]")
 UNTRUSTED_READS = ["fetch__*", "research__web_search", "research__read_document", "research__search_library", "workspace__browser_*",
                    "workspace__gmail_*", "workspace__read_file", "workspace__read_screen_text", "workspace__get_clipboard",
-                   "homelab__nextcloud_get", "homelab__nextcloud_search"]
+                   "homelab__nextcloud_get", "homelab__nextcloud_search", "chrome_*", "computer_read_file", "computer_look",
+                   "computer_search", "computer_find_files", "computer_list_files", "read_clipboard", "desktop_notifications",
+                   "desktop_windows"]
 AFTER_UNTRUSTED = ["memory__create_*", "memory__add_*", "memory__delete_*", "workspace__run_command", "workspace__type_text",
                    "workspace__open_app", "workspace__press_keys", "workspace__click", "workspace__write_file", "workspace__edit_file",
                    "workspace__set_clipboard", "workspace__email_draft_link", "homelab__nextcloud_upload",
@@ -95,6 +97,12 @@ def remember_tool_result(context: dict, tool_name: str, result: str, rules: dict
     elements = dict(ELEMENT_LINE.findall(result))
     if elements:
         context["elements"] = elements
+
+
+def remember_client_results(context: dict, tool_names: list[str], rules: dict | None = None):
+    reads = (rules or {}).get("untrusted_reads", UNTRUSTED_READS)
+    if any(matches(name, reads) for name in tool_names):
+        context["untrusted"] = True
 
 
 def _words(text: str) -> set[str]:

@@ -66,7 +66,7 @@ def test_yes_is_remembered_for_that_site_in_the_config(sites):
 
 def test_an_allowed_site_still_asks_before_acting_in_their_name(sites):
     config.set_value("browser", "allowed_sites", ["shop.example"])
-    browser._last_page["text"] = "Tab 7: Shop\n[1] button: Buy now"
+    browser._remember_items({"items": [{"n": 1, "kind": "button", "label": "Buy now"}]})
     extension(TABS)
     assert "Buy now" in browser.needs_ok("chrome_click", {"item": 1})
 

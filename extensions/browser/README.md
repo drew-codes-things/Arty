@@ -18,9 +18,13 @@ The companion to [Arty Desktop](../../apps/desktop/README.md). It takes browser 
 local service on `127.0.0.1:8765` and runs them in your browser. That service only listens on your computer, and
 only accepts the app itself and this extension (recognised by its fixed id in Chrome, Edge and Brave or its
 `moz-extension://` address in Firefox, plus a pairing code you paste once, and only for its own browser queue), so
-nothing else can drive your browser or your computer through it. What you have typed into password, card and
-one-time-code fields is never read out to Arty, and while any of those fields has something in it Arty won't take a
-picture of the page either. With Arty Desktop closed, the extension does nothing.
+nothing else can drive your browser or your computer through it. The extension in turn sends its pairing code, and
+takes commands, only after the service has proved it holds the same code, so another program listening on that port
+gets nothing from it. Password, passcode, PIN, one-time-code, card, CVV, IBAN, sort code, account number, national
+insurance, security answer and API key fields are recognised by their type, label, placeholder, name, id or
+autocomplete: what you have typed into them is never read out to Arty, Arty never types into them, and while any of
+them has something in it Arty won't take a picture of the page either. With Arty Desktop closed, the extension does
+nothing.
 
 What Arty can do in your browser:
 
@@ -32,8 +36,8 @@ What Arty can do in your browser:
 | `chrome_find` | finds links, buttons and fields anywhere on the page by the words on them |
 | `chrome_scroll` | scrolls down or up a screen, or to the top or bottom, and reads what came into view |
 | `chrome_look` | takes a picture of the tab and has the vision model describe it (videos, pictures, layout) |
-| `chrome_click` | clicks a link or button by its number or its text |
-| `chrome_type` | types into a field; never passwords or card details |
+| `chrome_click` | clicks a link or button by its number, or by its whole label |
+| `chrome_type` | types into a field; never password, code or payment fields |
 | `chrome_tab` | switches to, closes, reloads or goes back or forward in a tab |
 | `chrome_forget_site` | forgets a site you allowed |
 
@@ -50,12 +54,18 @@ Arty Desktop  ->  local service (127.0.0.1:8765)
         |
 This extension (polling the service)  ->  reads, opens, clicks or types in your tabs
         |
-Anything that sends, buys, posts or deletes  ->  Allow / Not now card in Arty Desktop first
+Anything that submits a form, downloads a file, leads to a payment, account or permission page, leaves for a
+site you haven't allowed, or is labelled with words like buy, pay, allow, send, post or delete
+        ->  Allow / Not now card in Arty Desktop first
 ```
 
-Pages Arty reads are handed to it marked as information, not instructions, to help stop a website steering it. Arty
-is also told to leave logins and CAPTCHAs to you - that's an instruction to the model rather than something the
-extension enforces, so keep an eye on it.
+Everything Arty reads from a page, its title, address, labels, field values and text, is handed to it inside a
+marker saying it is information, not instructions, to help stop a website steering it. Text and links a person can't
+see (faded out, moved off the page, tiny or hidden from screen readers) are left out. A click goes ahead only if the
+item still has the label and does the same kind of thing it had when Arty read the page. After Arty reads a page,
+Arty Desktop asks before any command, file change or link in the same reply. Arty is also told to leave logins and
+CAPTCHAs to you - that's an instruction to the model rather than something the extension enforces, so keep an eye
+on it.
 
 ---
 
@@ -79,7 +89,10 @@ extension enforces, so keep an eye on it.
 After pulling a newer version, click the reload icon on its card. Version 1.2 has a fixed extension id that Arty
 Desktop checks, so when updating from 1.1 remove the old card and choose **Load unpacked** again; Arty Desktop
 ignores any other extension. Version 1.3 also needs the pairing code (step 2) once after updating. Version 1.4 adds
-scrolling, looking at a tab and Firefox; Arty Desktop needs the matching update for those.
+scrolling, looking at a tab and Firefox; Arty Desktop needs the matching update for those. Version 1.5 checks that
+Arty Desktop holds the pairing code before using it, so it needs Arty Desktop 1.5.1 or newer; with an older Arty
+Desktop its icon shows the red **!**. With more than one browser paired, each reply uses one of them: the one Arty
+used last, while it is still open.
 
 ## Usage
 
@@ -94,7 +107,11 @@ minute, and only with **HANDS** on.
 
 Google Chrome 156.0.8078.47 on Debian 13 (trixie) with KDE Plasma 6.3.6, alongside Arty Desktop 1.0.0. Version 1.4
 with Chromium 156.0.8078.79 and Firefox ESR 153.7.0 on Debian 13 under Xvfb, against Arty Desktop's local service
-from source. Edge and Brave load the same Chromium manifest but were not tried.
+from source. Edge and Brave load the same Chromium manifest but were not tried. Version 1.5 with Chromium 156 on
+Debian 13 under Xvfb against Arty Desktop's local service from source and the live brain, on a local test page: each
+of the clicks it should ask about (an item number given with another item's words, a submit button labelled Go,
+Allow, Add to basket, an authorise link, a download link) showed the Allow / Not now card, and a click on part of a
+label was refused. Its page code was also run in headless Google Chrome on local test pages.
 
 ## License
 

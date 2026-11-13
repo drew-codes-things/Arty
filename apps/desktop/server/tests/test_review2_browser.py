@@ -20,6 +20,11 @@ BANK_IN_FRONT = {"tabs": [{"id": 3, "active": True, "title": "Inbox (3) - me@mai
 BUY = {"text": "Buy now"}
 
 
+@pytest.fixture(autouse=True)
+def buttons_read_from_the_page():
+    browser._remember_items({"items": [{"n": 1, "kind": "button", "label": "Buy now"}, {"n": 2, "kind": "link", "label": "Next"}]})
+
+
 def stored_sites(path):
     return yaml.safe_load(path.read_text())["browser"]["allowed_sites"]
 

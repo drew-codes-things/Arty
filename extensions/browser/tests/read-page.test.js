@@ -26,7 +26,7 @@ function readPageWith(elements) {
   };
   vm.createContext(context);
   vm.runInContext(`${hintsLine}\n${readPageSource}\nresult = readPage(PRIVATE_FIELD_HINTS);`, context);
-  return context.result.items.map((item) => item.label).join('\n');
+  return JSON.stringify(context.result.items);
 }
 
 test('values typed into private fields never reach Arty', () => {
@@ -41,5 +41,5 @@ test('values typed into private fields never reach Arty', () => {
 });
 
 test('ordinary fields still show what is in them', () => {
-  assert.match(readPageWith([field({ name: 'q', label: 'Search', value: 'weather' })]), /now: "weather"/);
+  assert.match(readPageWith([field({ name: 'q', label: 'Search', value: 'weather' })]), /"value":"weather"/);
 });

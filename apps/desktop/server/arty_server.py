@@ -62,6 +62,7 @@ EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
 FIREFOX_EXTENSION_ORIGIN = r"moz-extension://[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 EXTENSION_ORIGINS = re.compile(rf"{re.escape(EXTENSION_ORIGIN)}|{FIREFOX_EXTENSION_ORIGIN}")
 EXTENSION_ROUTES = {("POST", "/browser/next"), ("POST", "/browser/result")}
+EXTENSION_HELLO_ROUTE = ("POST", "/browser/hello")
 OPEN_ROUTES = {("GET", "/whoami")}
 PAIRING_FILE = cfg.DATA_ROOT / ".arty_browser_pairing"
 PAIRING_CODE = re.compile(r"[0-9a-f]{32}")
@@ -69,6 +70,7 @@ PAIRING_BYTES = 16
 _pairing = {}
 _pairing_lock = threading.Lock()
 SERVICE_PROOF_CONTEXT = "arty-service:"
+BROWSER_PROOF_CONTEXT = "arty-browser-service:"
 NONCE = re.compile(r"[0-9a-f]{32}")
 
 
@@ -110,6 +112,10 @@ def _is_arty_extension(request):
     return hmac.compare_digest(request.headers.get("x-arty-pairing", "").encode(), pairing_code().encode())
 
 
+def _is_extension_saying_hello(request):
+    return (request.method, request.url.path) == EXTENSION_HELLO_ROUTE and bool(EXTENSION_ORIGINS.fullmatch(request.headers.get("origin") or ""))
+
+
 def _is_from_a_web_page(request):
     return "origin" in request.headers or "sec-fetch-site" in request.headers
 
@@ -119,7 +125,8 @@ async def only_local_callers(request, call_next):
     host = (request.headers.get("host") or "").rsplit(":", 1)[0]
     origin = request.headers.get("origin") or ""
     is_open_route = (request.method, request.url.path) in OPEN_ROUTES and not _is_from_a_web_page(request)
-    if request.method == "OPTIONS" or (host in ALLOWED_HOSTS and (is_open_route or _has_token(request) or _is_arty_extension(request))):
+    known_caller = is_open_route or _has_token(request) or _is_arty_extension(request) or _is_extension_saying_hello(request)
+    if request.method == "OPTIONS" or (host in ALLOWED_HOSTS and known_caller):
         return await call_next(request)
     fetch_from = "/".join(request.headers.get(h, "-") for h in ("sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"))
     print(f"[security] refused {request.method} {request.url.path} (origin {origin or 'none'}, host {host or 'none'}, fetch {fetch_from})", flush=True)
@@ -663,9 +670,16 @@ def say(body: SayIn):
 
 
 @app.post("/browser/next")
-def browser_next(timeout: float = 25.0):
+def browser_next(timeout: float = 25.0, browser_id: str = browser.DEFAULT_BROWSER):
     """For the Chrome extension: the next thing to do in the browser, or {} after `timeout`."""
-    return browser.next_command(min(timeout, 55.0)) or {}
+    return browser.next_command(min(timeout, 55.0), browser_id) or {}
+
+
+@app.post("/browser/hello")
+def browser_hello(nonce: str = ""):
+    if not NONCE.fullmatch(nonce):
+        return JSONResponse({"error": "nonce must be 32 lowercase hex characters"}, status_code=400)
+    return {"proof": hmac.new(pairing_code().encode(), f"{BROWSER_PROOF_CONTEXT}{nonce}".encode(), hashlib.sha256).hexdigest()}
 
 
 class SiteIn(BaseModel):

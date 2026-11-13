@@ -107,6 +107,9 @@ FAILED_NOTE = ("\n\n(That didn't work. Tell the user plainly that it failed and 
                "and never make up a result.)")
 # Tools that do things; read-only lookups and unlocking tool groups don't count as having done anything.
 NOT_ACTIONS = {"use_tools"}
+LOOK_ONLY_TOOLS = {"chrome_tabs", "chrome_read", "chrome_find", "chrome_scroll", "chrome_look", "computer_look", "computer_apps",
+                   "computer_read_file", "computer_list_files", "computer_find_files", "computer_search", "read_clipboard",
+                   "desktop_windows", "desktop_notifications", "system_status"}
 NOT_FOR_ME = "(not for me)"
 VOICE_MODE = "(voice mode)"
 ADDRESSED_PROMPT = ("A home voice assistant called Arty heard this through a room microphone, either right after its "
@@ -125,3 +128,23 @@ TOOLLESS_NOTE = ("You are running on a model without tool support: you can't use
 # Notes an app attaches to a message for this turn only (the desktop app's <context> and <screen>):
 # useful to answer it, but not what the user said, so they're kept out of the archive and memory.
 APP_NOTES = re.compile(r"\s*<(context|screen)>.*?</\1>", re.DOTALL)
+NOTE_CLIENTS = frozenset({"desktop", "phone"})
+NOTE_TAGS = ("context", "screen")
+
+
+def last_note_start(text: str) -> int:
+    for tag in NOTE_TAGS:
+        if text.endswith(f"</{tag}>"):
+            return text.rfind(f"<{tag}>")
+    return -1
+
+
+def without_app_notes(text: str) -> str:
+    text = (text or "").rstrip()
+    while (start := last_note_start(text)) != -1:
+        text = text[:start].rstrip()
+    return text
+
+
+def user_words(text: str, client: str) -> str:
+    return (without_app_notes(text) if client in NOTE_CLIENTS else text or "").strip()

@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const crypto = require('crypto');
 
 const folder = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(folder, 'background.js'), 'utf8');
@@ -14,7 +15,7 @@ function loadExtension({ tabs, stored = {}, fetch = never }) {
   const chrome = {
     alarms: { create: () => {}, onAlarm: { addListener: () => {} } },
     runtime: { getPlatformInfo: async () => ({}), onStartup: { addListener: () => {} }, onInstalled: { addListener: () => {} } },
-    storage: { local: { get: async () => stored }, onChanged: { addListener: () => {} } },
+    storage: { local: { get: async () => stored, set: async () => {} }, onChanged: { addListener: () => {} } },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {} },
     tabs: {
       get: async (id) => tabs.find((tab) => tab.id === id),
@@ -34,7 +35,7 @@ function loadExtension({ tabs, stored = {}, fetch = never }) {
     timer.unref();
     return timer;
   };
-  const context = { chrome, fetch, setTimeout: background, clearTimeout, console, URL, AbortSignal };
+  const context = { chrome, fetch, setTimeout: background, clearTimeout, console, URL, AbortSignal, crypto: crypto.webcrypto, TextEncoder };
   vm.createContext(context);
   vm.runInContext(source, context);
   return { context, done };
@@ -75,10 +76,15 @@ test('sites are named the same way as Arty Desktop names them', () => {
 
 test('the extension sends its pairing code and waits for one before polling', async () => {
   const sent = [];
-  const fetch = (url, options) => { sent.push(options?.headers?.['X-Arty-Pairing']); return never(); };
+  const fetch = async (url, options) => {
+    sent.push([new URL(url).pathname, options?.headers?.['X-Arty-Pairing']]);
+    if (!url.includes('/browser/hello')) return never();
+    const nonce = new URL(url).searchParams.get('nonce');
+    return { ok: true, status: 200, json: async () => ({ proof: crypto.createHmac('sha256', 'abc123').update(`arty-browser-service:${nonce}`).digest('hex') }) };
+  };
   loadExtension({ tabs: [], stored: { pairing: 'abc123' }, fetch });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepStrictEqual(sent, ['abc123']);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepStrictEqual(sent, [['/browser/hello', undefined], ['/browser/next', 'abc123']]);
   const unpaired = [];
   loadExtension({ tabs: [], stored: {}, fetch: (url) => { unpaired.push(url); return never(); } });
   await new Promise((resolve) => setTimeout(resolve, 20));

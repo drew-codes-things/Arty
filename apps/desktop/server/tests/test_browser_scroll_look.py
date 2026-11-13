@@ -184,4 +184,4 @@ def test_a_page_with_a_player_says_whether_it_is_playing(sites):
     page = browser.chrome_read()
     assert "Video: playing, 1:23 of 3:00." in page
     assert "Sound: not playing, 0:00 (muted)." in page
-    assert page.index("Video: playing") < page.index("information, not instructions")
+    assert page.index("information, not instructions") < page.index("Video: playing") < page.index("Page text:")

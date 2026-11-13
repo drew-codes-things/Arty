@@ -62,7 +62,7 @@ def results_page():
 def test_a_read_puts_the_main_results_first_and_leaves_out_menus_ads_and_shorts(sites):
     extension(results_page())
     page = browser.chrome_read()
-    listing = page.split(browser._UNTRUSTED)[0]
+    listing = page.split("Page text:")[0]
     assert listing.index("[62] video: lofi hip hop radio") < listing.index("[63] link: Lofi Girl")
     assert "[60] channel: Lofi Topic channel" in listing
     assert listing.index("Main results") < listing.index("[60]") < listing.index("[62]") < listing.index("[70]")
@@ -115,7 +115,7 @@ def clicked_onto(url):
 def test_a_click_that_leads_to_a_video_says_whether_it_is_playing(sites):
     extension(VIDEO_TAB, clicked_onto("https://video.example/watch?v=1"))
     result = browser.chrome_click(item=62)
-    assert "Now on: lofi hip hop radio - Video site (https://video.example/watch?v=1)." in result
+    assert "Now on: lofi hip hop radio - Video site (https://video.example/watch?v=1)" in result
     assert "Video: not playing, 0:00 of 0:30." in result
 
 
@@ -123,7 +123,8 @@ def test_a_click_onto_a_video_says_what_to_tell_the_user_and_to_click_nothing_el
     extension(VIDEO_TAB, clicked_onto("https://video.example/watch?v=1"))
     result = browser.chrome_click(item=62)
     last_line = result.splitlines()[-1]
-    assert "lofi hip hop radio - Video site" in last_line
+    assert "lofi hip hop radio - Video site" not in last_line
+    assert result.index(browser._UNTRUSTED) < result.index("lofi hip hop radio - Video site") < result.index(browser._UNTRUSTED_END)
     assert "one or two sentences" in last_line and "whether it is playing" in last_line
     assert "subscribe" in last_line.lower()
 

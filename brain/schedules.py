@@ -9,7 +9,7 @@ import safety
 import store
 import timing
 from archive import message_text
-from reply_rules import APP_NOTES, CHAT_APP, CLAIMED, PROMISE, REMIND_REQUEST, reminder_from
+from reply_rules import CHAT_APP, CLAIMED, PROMISE, REMIND_REQUEST, reminder_from, without_app_notes
 
 log = logging.getLogger("brain")
 
@@ -47,7 +47,7 @@ def ensure_reminder(conversation: list[dict], tools_used: list[str], answer: str
     """"Remind me ..." must never end with a reminder that was promised but not set: if the model didn't
     call schedule_task, set it here from the user's own words, or say plainly that it wasn't set."""
     users = [m for m in conversation if m.get("role") == "user"]
-    request = APP_NOTES.sub("", message_text(users[-1])) if users else ""
+    request = without_app_notes(message_text(users[-1])) if users else ""
     if not REMIND_REQUEST.search(request) or "schedule_task" in tools_used:
         return answer
     parts = reminder_from(request)

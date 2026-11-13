@@ -46,8 +46,9 @@ Everything else answers 401 without a key.
 
 What the brain takes from the caller as given:
 
-- **The messages.** A `system` message is added to Arty's instructions as extra notes. `<context>` and `<screen>`
-  blocks inside a message are used for that turn but kept out of memory and the archive.
+- **The messages.** A `system` message is added to Arty's instructions as extra notes. From the desktop and phone
+  apps, `<context>` and `<screen>` blocks at the end of a message are used for that turn but kept out of memory and
+  the archive. From any other caller they are left in the message as the user's own words, so the safety check reads them.
 - **The caller's own tools**, only when it sends `X-Arty-Client-Tools: 1` (or `"arty_client_tools": true`). The model
   may ask the caller to run them; the brain never runs them itself. The caller is responsible for asking its user first
   (the desktop app, Arty CLI and Arty Code all do).

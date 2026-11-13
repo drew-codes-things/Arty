@@ -77,7 +77,7 @@ from reply_rules import (
     OFFER_SENTENCE, trim_offers, URL_TAGS, PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING,
     SEARCH_REQUEST, REMIND_REQUEST, CHAT_APP, reminder_from, PROMISE, TOOL_TALK, DO_REQUEST, PRETEND_TOOLS,
     TOOL_META_SENTENCE, TOOL_FAILED, FAILED_NOTE, NOT_ACTIONS, NOT_FOR_ME, VOICE_MODE, ADDRESSED_PROMPT, JSON_BLOCK,
-    ANSWERED_ALREADY_CHARS, TOOLLESS_NOTE, APP_NOTES, TOOLS_NOTE_ECHO)
+    ANSWERED_ALREADY_CHARS, TOOLLESS_NOTE, APP_NOTES, TOOLS_NOTE_ECHO, LOOK_ONLY_TOOLS, without_app_notes, user_words)
 from schedules import (
     create_schedule, ensure_reminder, set_reminder, send_reminder, guarded, due_schedules_now,
     send_calendar_and_deadline_reminders)
@@ -987,7 +987,7 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
     instructions = client_system if agent and client_system else system_prompt(config, client_system, background, toolless)
     history = [{"role": "system", "content": instructions}] + messages
     looked_up = looked_up or ([], "", None)
-    newest_request = APP_NOTES.sub("", message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {})))
+    newest_request = without_app_notes(message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {})))
     # Asked for something written (a post, an email): in the user's own voice (style.py).
     voice = style.voice_note() if style.is_writing_request(newest_request) else ""
     if not agent:
@@ -1009,13 +1009,14 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
     max_rounds = int(config.get("background", {}).get("max_rounds", 30)) if background else int(config.get("max_tool_rounds", MAX_TOOL_ROUNDS))
     tool_log, raw = list(looked_up[0]), {}
     steps_this_turn = client_tool_runs(messages)[0]
+    policy.remember_client_results(context, steps_this_turn, rules)
     context["failed"] = []  # tools that didn't work this turn (see be_honest)
     nudged = False
     replays = 0
     searched_for_it = False
     client_names = {tool["function"]["name"] for tool in client_tools or []}
-    last_request = APP_NOTES.sub("", message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {}))).strip()
-    user_texts = [APP_NOTES.sub("", message_text(m)).strip() for m in messages if m.get("role") == "user"]
+    last_request = without_app_notes(message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {})))
+    user_texts = [without_app_notes(message_text(m)) for m in messages if m.get("role") == "user"]
     think = thinking_for(config, agent_sessions.deciding_request(user_texts) if agent else last_request)
     shown_thinking = on_thinking if agent and client_system else None
     if not background and not agent and WRITE_ONLY_REQUEST.search(last_request):
@@ -1100,7 +1101,7 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 history.append({"role": "user", "content": written_calls.missing_tool_note(missing, offered)})
                 continue
             else:
-                message = {**message, "content": written_calls.text_outside_calls(replayed_text)}
+                message = {**message, "content": written_calls.spoken_text(replayed_text)}
         if not calls:
             answer = message.get("content") or ""
             if background and context.get("blocked"):
@@ -1353,10 +1354,6 @@ def empty_reply(conversation: list[dict]) -> str:
     return LOST_TRACK_AFTER_STEPS.format(steps="1 step" if len(steps) == 1 else f"{len(steps)} steps")
 
 
-def is_own_fallback(answer: str) -> bool:
-    return answer == LOST_TRAIN_OF_THOUGHT or answer.startswith(LOST_TRACK_START)
-
-
 def some_tool_worked(tools_used: list[str], failed: list[tuple[str, str]]) -> bool:
     failed_names = {name for name, _ in failed}
     return any(tool not in failed_names for tool in tools_used)
@@ -1398,10 +1395,8 @@ def reports_an_action(request: str, sentence: str, model: str = "", keep_alive=N
 
 def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]], already_sent: str = "",
               request: str = "", model: str = "", keep_alive=None) -> str:
-    if is_own_fallback(answer):
-        return answer
     failed_names = {name for name, _ in failed}
-    acted = [tool for tool in tools_used if tool not in NOT_ACTIONS and tool not in LOOKUP_TOOLS]
+    acted = [tool for tool in tools_used if tool not in NOT_ACTIONS and tool not in LOOKUP_TOOLS and tool not in LOOK_ONLY_TOOLS]
     if acted and not failed_names & set(acted):
         return answer
     claims = false_claims(answer, tools_used, failed, request, model, keep_alive)
@@ -1527,14 +1522,14 @@ def solo_conversation(messages):
     conversation = []
     for message in messages:
         if message.get("role") in ("user", "assistant"):
-            conversation.append({"role": message["role"], "content": APP_NOTES.sub("", message_text(message)).strip()})
+            conversation.append({"role": message["role"], "content": without_app_notes(message_text(message))})
     return conversation
 
 
-def solo_turn(model_name, messages):
+def solo_turn(model_name, messages, client=""):
     config = load_config()
-    said = message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {}))
-    if declined := safety.check(APP_NOTES.sub("", said), config.get("crisis_help")):
+    said = user_words(message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {})), client)
+    if declined := safety.check(said, config.get("crisis_help")):
         kind, reply = declined
         return reply, [f"safety_{kind}"], {}, None
     body = models.for_runner(config, {"model": model_name, "messages": solo_conversation(messages), "stream": False,
@@ -1719,20 +1714,20 @@ def chat_model(config: dict, requested: str, said: str) -> str:
     return coding_model_or(config, requested)
 
 
-def agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking=None):
+def agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking=None, client=""):
     config = load_config()
     main_config = dict(config)
     holds_another_model = use_requested_model(config, agent_model(config, requested_model), any_installed, session=True)
     try:
-        return agent_reply(config, messages, client_tools, on_text, on_thinking)
+        return agent_reply(config, messages, client_tools, on_text, on_thinking, client)
     finally:
         if holds_another_model:
             main_model_return.release(main_config, AGENT_QUIET_SECONDS)
 
 
-def agent_reply(config, messages, client_tools, on_text, on_thinking):
+def agent_reply(config, messages, client_tools, on_text, on_thinking, client=""):
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-    said = APP_NOTES.sub("", message_text(last_user)).strip() if last_user is not None else ""
+    said = user_words(message_text(last_user), client) if last_user is not None else ""
     if last_user is not None:
         desktop_look.user_active()
         if declined := safety.check(said, config.get("crisis_help")):
@@ -1770,14 +1765,14 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     on_text gets the answer's first sentences early (see drafts.py); the answer always starts with them.
     client names the calling app when it says ("phone": the Arty phone app, which can open calls and texts)."""
     if solo := models.solo_choice(requested_model):
-        return solo_turn(solo["name"], messages)
+        return solo_turn(solo["name"], messages, client)
     if local_addon and (handled := local_addon.turn(messages, requested_model, client_tools, skip_groups, on_text)) is not None:
         return handled
     if agent:
-        return agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking)
+        return agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking, client)
     config = load_config()
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-    said = APP_NOTES.sub("", message_text(last_user)).strip() if last_user is not None else ""
+    said = user_words(message_text(last_user), client) if last_user is not None else ""
     turn_model = chat_model(config, requested_model, said)
     use_requested_model(config, turn_model, any_installed)
     on_coding_model = turn_model != requested_model
@@ -1897,18 +1892,20 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     if outcome["status"] == "waiting":  # can't happen in chat mode, but never lose the turn
         outcome = {"answer": outcome["waiting"]["message"], "tools_used": outcome["tools_used"], "raw": outcome["raw"]}
     answer = tidy_answer(trim_offers(outcome["answer"]))
+    fallback = ""
     if not answer:
         log.warning("reply was empty after tidying; the model wrote: %r", (outcome["answer"] or "")[:300])
-        answer = empty_reply(conversation)
+        answer = fallback = empty_reply(conversation)
     reminded = ensure_reminder(conversation, outcome["tools_used"], answer)
     if reminded != answer and reminded.startswith("Reminder set"):
         outcome["tools_used"].append("schedule_task")  # set here from the user's words
     answer = reminded
     answer = HASHTAG_LINE.sub("", answer)  # hashtags belong in drafted posts, not in answers
     client_used, client_failed = client_tool_runs(conversation)
-    answer = be_honest(answer, client_used + outcome["tools_used"], client_failed + state.get("context", {}).get("failed", []),
-                       draft.everything() if draft else "", said if last_user is not None else "", config["model"],
-                       config.get("keep_alive"))
+    if answer != fallback:
+        answer = be_honest(answer, client_used + outcome["tools_used"], client_failed + state.get("context", {}).get("failed", []),
+                           draft.everything() if draft else "", said if last_user is not None else "", config["model"],
+                           config.get("keep_alive"))
     if draft:
         answer = draft.finish(answer)
     # Small models sometimes describe the conversion but drop the link; never lose a file the user asked for.
@@ -1918,7 +1915,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
             if link.group(1) not in answer:
                 answer += f"\n\n{link.group(0)}"
     user_messages = [m for m in conversation if m.get("role") == "user"]
-    user_text = APP_NOTES.sub("", message_text(user_messages[-1])).strip() if user_messages else ""
+    user_text = user_words(message_text(user_messages[-1]), client) if user_messages else ""
     if is_overheard(answer):
         log.info("voice heard something not meant for Arty; not saving it")
         return NOT_FOR_ME, outcome["tools_used"], outcome["raw"], None

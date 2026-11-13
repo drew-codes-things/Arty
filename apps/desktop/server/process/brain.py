@@ -10,6 +10,7 @@ import json
 import re
 import threading
 import time
+from collections import Counter
 
 import requests
 
@@ -39,6 +40,9 @@ HISTORY_STEP_TURNS = max(1, HISTORY_TURNS // 2)
 MAX_TOOL_ROUNDS = int(_brain.get("max_tool_rounds", 60))
 TOOL_RESULT_CHARS = 6000
 STUCK_REPEATS = 3
+MAX_SAME_STEP = 2
+MAX_CLICKS_PER_REPLY = 15
+CLICK_TOOLS = {"chrome_click"}
 MEDIA_PATH = re.compile(r"/arty-files/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[^/?#]+$")
 MEDIA_TIMEOUT_SECONDS = 120
 TOOLS_USED_NOTE = "For your reply above, you used or tried these tools on their computer: "
@@ -49,6 +53,8 @@ TOOLS_NOTE_ECHO = re.compile(r"[ \t]*(?:\[\s*|<context>\s*)?(?:Tools you used or
 REPEATED_STEP_NOTE = ("\n\n(You did exactly this step in your last turn too. Doing it a third time won't change anything: "
                       "try something different, or tell them plainly what happened.)")
 STOPPED_REPEATING = "I stopped there: I was {doing} over and over and it wasn't getting anywhere. Tell me what you'd like me to try instead."
+STOPPED_CLICKING = ("I stopped after {clicks} clicks in this one reply, which is more than a task like this should need. "
+                    "Tell me if you want me to keep going.")
 MAX_SAVED_ACTIONS = 30
 MAX_SAVED_ACTION_CHARS = 80
 
@@ -330,8 +336,10 @@ def llm_stream(user_input, extra_system=None, note=""):
     note = "\n\n".join(part for part in (note, tools.request_note(user_input)) if part)
     messages.append({"role": "user", "content": user_input + (f"\n\n{note}" if note else "") + tools_note + context.as_note()})
     offer = tools.definitions(user_input)
+    tools.start_reply()
     consented = set()  # things they've said yes to during this reply
     recent_calls = []
+    steps_taken = Counter()
     lead = ""  # sets a later step's words apart from what was said before its tools ran
     for _round in range(MAX_TOOL_ROUNDS + 1):
         reply = yield from _stream(messages, offer, lead)
@@ -344,6 +352,10 @@ def llm_stream(user_input, extra_system=None, note=""):
         signature = _calls_signature(calls)
         if recent_calls[-(STUCK_REPEATS - 1):] == [signature] * (STUCK_REPEATS - 1):
             yield lead + _stopped_repeating(calls)
+            return
+        over_the_limit = _over_the_step_limits(calls, steps_taken)
+        if over_the_limit:
+            yield lead + over_the_limit
             return
         repeated = bool(recent_calls) and recent_calls[-1] == signature
         recent_calls = (recent_calls + [signature])[-STUCK_REPEATS:]
@@ -378,6 +390,23 @@ def llm_stream(user_input, extra_system=None, note=""):
 def _calls_signature(calls):
     functions = [call.get("function") or {} for call in calls]
     return json.dumps([function.get("name") for function in functions] + [function.get("arguments") for function in functions])
+
+
+def _over_the_step_limits(calls, steps_taken):
+    for call in calls:
+        function = call.get("function") or {}
+        name, arguments = function.get("name", ""), function.get("arguments") or "{}"
+        if name in CLICK_TOOLS:
+            steps_taken["clicks"] += 1
+            if steps_taken["clicks"] > MAX_CLICKS_PER_REPLY:
+                return STOPPED_CLICKING.format(clicks=MAX_CLICKS_PER_REPLY)
+        key = tools.step_key(name, arguments)
+        if key is None:
+            continue
+        steps_taken[("step", key)] += 1
+        if steps_taken[("step", key)] > MAX_SAME_STEP:
+            return _stopped_repeating([call])
+    return None
 
 
 def _stopped_repeating(calls):

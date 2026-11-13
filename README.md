@@ -151,18 +151,18 @@ Everything to install is on the [Releases](../../releases) page:
 
 | Download | What it is |
 |---|---|
-| `Arty-1.5.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.5.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.5.1-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.5.1.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
 | `Arty-1.5.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
-| `Arty-Browser-Extension-1.5.0.zip` | [Arty for Chrome](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
-| `Arty-Browser-Extension-1.5.0.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
+| `Arty-Browser-Extension-1.5.1.zip` | [Arty for Chrome](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
+| `Arty-Browser-Extension-1.5.1.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (below).
 
-What changed lately: [release notes for 13 November 2026](docs/release-notes-2026-11-13.md), and before that [12 November 2026](docs/release-notes-2026-11-12.md).
+What changed lately: [release notes for 1.5.1](docs/release-notes-2026-11-13-1.5.1.md), and before that [1.5.0](docs/release-notes-2026-11-13.md).
 
 ---
 

@@ -13,10 +13,15 @@ const SCROLL_TEXT_CHARS = 4000;
 const SCREENSHOT_QUALITY = 70;
 const QUIET_MS = 400;
 const SETTLE_LIMIT_MS = 3000;
-const PRIVATE_FIELD_HINTS = 'pass|pwd|\\bpin\\b|one-time|otp|2fa|mfa|verif|security.?code|cc-|card|cvv|cvc|iban|sort.?code|account.?n|ssn|secret|token';
+const PRIVATE_FIELD_HINTS = 'pass|pwd|\\bpin\\b|pin.?code|one.?time|\\botp\\b|2fa|mfa|verif\\w*.?(code|number)|auth\\w*.?code|security.?(code|answer|question)|memorable|\\bcards?\\b|card.?(num|no\\b|holder|code|cvc|cvv|exp)|cc-|\\bcc.?(num|csc|cvc|exp)|cvv|cvc|\\bcsc\\b|iban|sort.?code|account.?(num|no\\b)|routing|\\bssn\\b|social.?security|national.?insurance|\\bnino?\\b|tax.?id|secret|token|api.?key|private.?key';
 const PRIVATE_FIELD_REFUSAL = 'a password or payment field on this page has something typed in it, so Arty will not take a picture of it. Ask the user to look, or read the page instead';
 const UNPAIRED_TITLE = 'Arty for Chrome: not paired yet. Click here and paste the pairing code from Arty Desktop (tray menu, Chrome sites).';
 const PAIRED_TITLE = 'Arty for Chrome';
+
+const SERVICE_PROOF_CONTEXT = 'arty-browser-service:';
+const RANDOM_ID_BYTES = 16;
+const BROWSER_ID = /^[0-9a-f]{32}$/;
+const OPENABLE_SCHEMES = ['http:', 'https:'];
 
 const FIRST_ITEM_NUMBER = 1;
 const ITEM_NUMBER_LIMIT = 100000;
@@ -40,7 +45,13 @@ async function poll() {
       }
       let command;
       try {
-        const response = await fetch(`${SERVICE}/browser/next?timeout=${POLL_SECONDS}`, { method: 'POST', headers: { 'X-Arty-Pairing': pairing } });
+        if (!(await serviceHoldsCode(pairing))) {
+          await showPaired(false);
+          await sleep(OFFLINE_RETRY_MS);
+          continue;
+        }
+        const browser = await browserId();
+        const response = await fetch(`${SERVICE}/browser/next?timeout=${POLL_SECONDS}&browser_id=${browser}`, { method: 'POST', headers: { 'X-Arty-Pairing': pairing } });
         await showPaired(response.status !== 403);
         if (!response.ok) throw new Error(`HTTP ${response.status}`); // refused or failing: don't spin
         command = await response.json();
@@ -75,6 +86,34 @@ async function sendResult(pairing, id, result) {
     }
     await sleep(RESULT_RETRY_MS);
   }
+}
+
+const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+
+function randomId() {
+  return hex(crypto.getRandomValues(new Uint8Array(RANDOM_ID_BYTES)));
+}
+
+async function proofFor(pairing, nonce) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(pairing), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return hex(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`${SERVICE_PROOF_CONTEXT}${nonce}`))));
+}
+
+async function serviceHoldsCode(pairing) {
+  const nonce = randomId();
+  const response = await fetch(`${SERVICE}/browser/hello?nonce=${nonce}`, { method: 'POST' });
+  if (!response.ok) return false;
+  const { proof } = await response.json();
+  return typeof proof === 'string' && proof === await proofFor(pairing, nonce);
+}
+
+async function browserId() {
+  const stored = await chrome.storage.local.get('browserId');
+  if (typeof stored.browserId === 'string' && BROWSER_ID.test(stored.browserId)) return stored.browserId;
+  const made = randomId();
+  await chrome.storage.local.set({ browserId: made });
+  return made;
 }
 
 async function pairingCode() {
@@ -158,8 +197,29 @@ async function inPage(tab, func, args = []) {
   return injection.result;
 }
 
+async function privateFieldFilledInAnyFrame(tab) {
+  let frames;
+  try {
+    frames = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: privateFieldFilled, args: [PRIVATE_FIELD_HINTS] });
+  } catch (error) {
+    throw new Error(`can't work in this page (${(tab.url || '').split('/')[2] || 'this tab'}): ${error.message}`);
+  }
+  if (!frames?.length) throw new Error("can't work in this page: the browser ran nothing there");
+  return frames.some((frame) => frame.result === true);
+}
+
+function refuseUnlessWebAddress(address) {
+  let parsed = null;
+  try {
+    parsed = new URL(address);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || !OPENABLE_SCHEMES.includes(parsed.protocol)) throw new Error('Arty only opens http and https addresses');
+}
+
 async function screenshot(tab) {
-  if (await inPage(tab, privateFieldFilled, [PRIVATE_FIELD_HINTS])) return { error: PRIVATE_FIELD_REFUSAL };
+  if (await privateFieldFilledInAnyFrame(tab)) return { error: PRIVATE_FIELD_REFUSAL };
   await chrome.tabs.update(tab.id, { active: true });
   const image = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: SCREENSHOT_QUALITY });
   return { tab: tab.id, title: tab.title || '', url: tab.url || '', image };
@@ -186,6 +246,7 @@ async function run(command) {
       return { tabs: tabs.map((t) => ({ id: t.id, title: t.title || '', url: t.url || '', active: t.id === front?.id })) };
     }
     case 'open': {
+      refuseUnlessWebAddress(command.url);
       let tab;
       if (command.newTab) tab = await chrome.tabs.create({ url: command.url, active: true });
       else tab = await chrome.tabs.update((await targetTab()).id, { url: command.url, active: true });
@@ -204,7 +265,7 @@ async function run(command) {
     case 'click': {
       const tab = await targetTab(command.tab);
       refuseIfMoved(command, tab);
-      const clicked = await inPage(tab, clickItem, [command.item ?? null, command.text || '']);
+      const clicked = await inPage(tab, clickItem, [command.item ?? null, command.text || '', command.expected ?? null, command.acts ?? null]);
       if (clicked.error) return clicked;
       await sleep(AFTER_CLICK_MS);
       const after = await chrome.tabs.get(tab.id);
@@ -213,7 +274,7 @@ async function run(command) {
     case 'type': {
       const tab = await targetTab(command.tab);
       refuseIfMoved(command, tab);
-      return inPage(tab, typeInto, [command.item ?? null, command.label || '', command.text || '', !!command.submit]);
+      return inPage(tab, typeInto, [command.item ?? null, command.label || '', command.text || '', !!command.submit, command.expected ?? null, PRIVATE_FIELD_HINTS]);
     }
     case 'scroll': {
       const { tab, missingTab } = await tabToLookAt(command.tab);
@@ -248,12 +309,51 @@ async function run(command) {
 // ---------- these run inside the page ----------
 
 function readPage(privateHints, firstNumber = 1) {
-  const visible = (el) => {
+  const MIN_TEXT_PX = 4;
+  const LABEL_CHARS = 400;
+  const hiddenBox = (el) => {
+    if (el.closest?.('[aria-hidden="true"]')) return true;
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return true;
     const box = el.getBoundingClientRect();
     const style = getComputedStyle(el);
-    return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    if (!(box.width > 1 && box.height > 1)) return true;
+    if (box.right + (globalThis.scrollX || 0) <= 0 || box.bottom + (globalThis.scrollY || 0) <= 0) return true;
+    return style.visibility === 'hidden' || style.display === 'none';
   };
-  const clean = (text) => String(text || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  const visible = (el) => !hiddenBox(el);
+  const rendered = (el) => !el.checkVisibility || el.checkVisibility({ visibilityProperty: true });
+  const textHidden = (el) => rendered(el) && (hiddenBox(el) || parseFloat(getComputedStyle(el).fontSize) < MIN_TEXT_PX);
+  const clean = (text) => String(text || '').trim().replace(/\s+/g, ' ').slice(0, LABEL_CHARS);
+  const labelText = (el) => [...(el.labels || [])].map((label) => label.innerText).join(' ');
+  const fieldName = (el) => clean(labelText(el) || el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
+  const shownWords = (el) => clean(el.innerText) || clean(labelText(el)) || clean(el.value) || clean(el.title);
+  const privateHint = new RegExp(privateHints, 'i');
+  const isPrivateField = (el) => {
+    const labelledBy = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map((id) => (id && document.getElementById?.(id)?.innerText) || '');
+    const names = [el.getAttribute('autocomplete'), el.name, el.id, el.getAttribute('aria-label'), el.placeholder, labelText(el), ...labelledBy];
+    return (el.getAttribute('type') || '').toLowerCase() === 'password' || privateHint.test(names.join(' '));
+  };
+  const DOWNLOAD_FILE = /\.(exe|msi|msix|dmg|pkg|deb|rpm|apk|appimage|run|sh|bat|cmd|ps1|vbs|jar|zip|tar|gz|tgz|xz|bz2|7z|rar|iso|img)$/i;
+  const ACCOUNT_OR_PAYMENT = /(^|[^a-z])(pay|payments?|checkout|billing|purchase|orders?|basket|cart|authori[sz]e|oauth2?|consent|permissions?|grant|account|subscri\w*|unsubscri\w*|delete|remove|log-?out|sign-?out|transfer|donate)([^a-z]|$)/i;
+  const addressOf = (target) => {
+    try {
+      return target ? new URL(target, location.href) : null;
+    } catch {
+      return null;
+    }
+  };
+  const actsOf = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const submits = el.getAttribute('formaction') !== null || (tag === 'button' && !!el.form && (type || 'submit') === 'submit')
+      || (tag === 'input' && (type === 'submit' || type === 'image'));
+    const target = addressOf(submits ? el.getAttribute('formaction') || el.form?.getAttribute('action') : tag === 'a' ? el.getAttribute('href') : '');
+    if (tag === 'a' && (el.getAttribute('download') !== null || DOWNLOAD_FILE.test(target?.pathname || ''))) return { acts: 'downloads a file' };
+    if (target && ACCOUNT_OR_PAYMENT.test(`${target.pathname}${target.search}`)) return { acts: 'payment or account' };
+    if (submits) return { acts: 'submits a form' };
+    const leaves = tag === 'a' && !!target && ['http:', 'https:'].includes(target.protocol) && target.host !== location.host;
+    return leaves ? { acts: 'leaves the site', goes: target.href.slice(0, LABEL_CHARS) } : { acts: '' };
+  };
   const MAX_ITEMS = 250;
   const MIN_MAIN_TEXT = 200;
   const MENU_TAGS = ['nav', 'aside'];
@@ -268,6 +368,7 @@ function readPage(privateHints, firstNumber = 1) {
     [/[/]playlist\b/, 'playlist'], [/[/](channel|c|user)[/]|[/]@/, 'channel'],
   ];
   const HEADING_TAG = /^h[1-3]$/;
+  const SKIPPED_TEXT_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
   const destinationOf = (href) => (LINK_DESTINATIONS.find(([pattern]) => pattern.test(href)) || [null, ''])[1];
   const looksLikeAd = (el) => AD_MARKER.test(el.tagName) || AD_MARKER.test(el.id || '')
     || AD_MARKER.test(typeof el.className === 'string' ? el.className : '') || AD_LABEL.test(el.getAttribute('aria-label') || '');
@@ -300,6 +401,24 @@ function readPage(privateHints, firstNumber = 1) {
     resultLinks.add(href);
     return 'result';
   };
+  const hiddenWords = (root) => {
+    if (!root || typeof document.createTreeWalker !== 'function') return [];
+    const hidden = [];
+    const checked = new Map();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!parent || SKIPPED_TEXT_TAGS.has(parent.tagName) || !String(node.textContent || '').trim()) continue;
+      if (!checked.has(parent)) checked.set(parent, textHidden(parent));
+      if (checked.get(parent) && !hidden.includes(parent)) hidden.push(parent);
+    }
+    const outermost = hidden.filter((el) => !hidden.some((other) => other !== el && other.contains(el)));
+    return outermost.map((el) => String(el.innerText || '').trim()).filter(Boolean);
+  };
+  const withoutHiddenWords = (text, root) => hiddenWords(root).reduce((kept, words) => {
+    const at = kept.indexOf(words);
+    return at < 0 ? kept : kept.slice(0, at) + kept.slice(at + words.length);
+  }, text);
   document.querySelectorAll('[data-arty-n]').forEach((el) => el.removeAttribute('data-arty-n'));
   const items = [];
   const selector = 'a[href], button, input, textarea, select, [role=button], [role=link], [contenteditable=true]';
@@ -308,26 +427,24 @@ function readPage(privateHints, firstNumber = 1) {
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute('type') || '').toLowerCase();
     if (type === 'hidden') continue;
-    const isField = ['input', 'textarea', 'select'].includes(tag) && !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type) || el.isContentEditable;
-    const hints = `${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''} ${el.getAttribute('aria-label') || ''} ${el.placeholder || ''}`.toLowerCase();
-    const isPrivate = type === 'password' || new RegExp(privateHints).test(hints);
+    const isField = ['input', 'textarea', 'select'].includes(tag) && !['button', 'submit', 'reset', 'checkbox', 'radio', 'image'].includes(type) || el.isContentEditable;
+    const isPrivate = isField && isPrivateField(el);
     const kind = tag === 'a' || el.getAttribute('role') === 'link' ? 'link' : isField ? (isPrivate ? 'private field' : 'field') : 'button';
-    let label;
-    if (isField) {
-      label = clean(el.labels?.[0]?.innerText || el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
-      if (el.value && !isPrivate) label += ` (now: "${String(el.value).slice(0, 40)}")`;
-    } else {
-      label = clean(el.getAttribute('aria-label') || el.innerText || el.value || el.title);
-    }
+    const words = isField ? fieldName(el) : shownWords(el);
+    const aria = clean(el.getAttribute('aria-label'));
+    const label = words || aria;
+    const also = !isField && words && aria && aria.toLowerCase() !== words.toLowerCase() ? aria : '';
     if (!label && kind === 'link') continue;
     const n = firstNumber + items.length;
     el.setAttribute('data-arty-n', String(n));
     const to = kind === 'link' ? destinationOf(el.getAttribute('href') || '') : '';
-    items.push({ n, kind, label: label || '(unlabelled)', group: groupOf(el, kind), to });
+    const value = isField && el.value && !isPrivate ? String(el.value).slice(0, 40) : '';
+    items.push({ n, kind, label: label || '(unlabelled)', also, value, group: groupOf(el, kind), to, ...(isField ? { acts: '' } : actsOf(el)) });
   }
   const main = document.querySelector('main, [role=main]');
   const mainText = main && visible(main) ? main.innerText || '' : '';
-  const text = mainText.trim().length >= MIN_MAIN_TEXT ? mainText : document.body?.innerText || '';
+  const root = mainText.trim().length >= MIN_MAIN_TEXT ? main : document.body;
+  const text = withoutHiddenWords(root === main ? mainText : document.body?.innerText || '', root);
   return { title: document.title, url: location.href, text: text.replace(/\n{3,}/g, '\n\n').slice(0, 8000), items };
 }
 
@@ -367,12 +484,22 @@ function waitForQuiet(quietMs, limitMs) {
 }
 
 function privateFieldFilled(privateHints) {
-  const privateHint = new RegExp(privateHints);
+  const hiddenBox = (el) => {
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return true;
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return !(box.width > 1 && box.height > 1) || style.visibility === 'hidden' || style.display === 'none';
+  };
+  const labelText = (el) => [...(el.labels || [])].map((label) => label.innerText).join(' ');
+  const privateHint = new RegExp(privateHints, 'i');
+  const isPrivateField = (el) => {
+    const labelledBy = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map((id) => (id && document.getElementById?.(id)?.innerText) || '');
+    const names = [el.getAttribute('autocomplete'), el.name, el.id, el.getAttribute('aria-label'), el.placeholder, labelText(el), ...labelledBy];
+    return (el.getAttribute('type') || '').toLowerCase() === 'password' || privateHint.test(names.join(' '));
+  };
   for (const el of document.querySelectorAll('input, textarea')) {
-    if (!el.value) continue;
-    const type = (el.getAttribute('type') || '').toLowerCase();
-    const hints = `${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''} ${el.getAttribute('aria-label') || ''} ${el.placeholder || ''}`.toLowerCase();
-    if (type === 'password' || privateHint.test(hints)) return true;
+    if (!el.value || (el.getAttribute('type') || '').toLowerCase() === 'hidden' || hiddenBox(el)) continue;
+    if (isPrivateField(el)) return true;
   }
   return false;
 }
@@ -388,11 +515,16 @@ function scrollPage(direction, textLimit) {
   const lines = [];
   let length = 0;
   let lastBlock = null;
+  const MIN_TEXT_PX = 4;
+  const unseen = (el) => !!el.closest?.('[aria-hidden="true"]')
+    || (el.checkVisibility ? !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : false)
+    || parseFloat(getComputedStyle(el).fontSize) < MIN_TEXT_PX;
   const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node && length < textLimit; node = walker.nextNode()) {
     const text = node.textContent.trim().replace(/\s+/g, ' ');
     const box = text ? node.parentElement?.getBoundingClientRect() : null;
-    if (!box || box.width === 0 || box.bottom < 0 || box.top > window.innerHeight) continue;
+    if (!box || box.width === 0 || box.bottom < 0 || box.top > window.innerHeight || box.right <= 0) continue;
+    if (unseen(node.parentElement)) continue;
     const block = node.parentElement.closest(blockTags);
     if (lines.length && block === lastBlock) lines[lines.length - 1] += ` ${text}`;
     else lines.push(text);
@@ -407,40 +539,111 @@ function scrollPage(direction, textLimit) {
   };
 }
 
-function clickItem(n, text) {
-  let el = n !== null ? document.querySelector(`[data-arty-n="${n}"]`) : null;
-  if (el) {
+function clickItem(n, text, expected = null, expectedActs = null) {
+  const LABEL_CHARS = 400;
+  const STALE = `item ${n} is not on the page any more (the page changed since it was read); read it again`;
+  const hiddenBox = (el) => {
+    if (el.closest?.('[aria-hidden="true"]')) return true;
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return true;
     const box = el.getBoundingClientRect();
     const style = getComputedStyle(el);
-    const shown = box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-    if (!shown) return { error: `item ${n} is not on the page any more (the page changed since it was read); read it again` };
+    if (!(box.width > 1 && box.height > 1)) return true;
+    if (box.right + (globalThis.scrollX || 0) <= 0 || box.bottom + (globalThis.scrollY || 0) <= 0) return true;
+    return style.visibility === 'hidden' || style.display === 'none';
+  };
+  const clean = (words) => String(words || '').trim().replace(/\s+/g, ' ').slice(0, LABEL_CHARS);
+  const same = (words) => clean(words).toLowerCase();
+  const labelText = (el) => [...(el.labels || [])].map((label) => label.innerText).join(' ');
+  const fieldName = (el) => clean(labelText(el) || el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
+  const shownWords = (el) => clean(el.innerText) || clean(labelText(el)) || clean(el.value) || clean(el.title);
+  const isField = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    return ['input', 'textarea', 'select'].includes(tag) && !['button', 'submit', 'reset', 'checkbox', 'radio', 'image'].includes(type) || el.isContentEditable;
+  };
+  const labelOf = (el) => (isField(el) ? fieldName(el) : shownWords(el) || clean(el.getAttribute('aria-label')));
+  const namesOf = (el) => [labelOf(el), clean(el.getAttribute('aria-label'))].filter(Boolean).map(same);
+  const DOWNLOAD_FILE = /\.(exe|msi|msix|dmg|pkg|deb|rpm|apk|appimage|run|sh|bat|cmd|ps1|vbs|jar|zip|tar|gz|tgz|xz|bz2|7z|rar|iso|img)$/i;
+  const ACCOUNT_OR_PAYMENT = /(^|[^a-z])(pay|payments?|checkout|billing|purchase|orders?|basket|cart|authori[sz]e|oauth2?|consent|permissions?|grant|account|subscri\w*|unsubscri\w*|delete|remove|log-?out|sign-?out|transfer|donate)([^a-z]|$)/i;
+  const addressOf = (target) => {
+    try {
+      return target ? new URL(target, location.href) : null;
+    } catch {
+      return null;
+    }
+  };
+  const actsOf = (el) => {
+    if (isField(el)) return '';
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const submits = el.getAttribute('formaction') !== null || (tag === 'button' && !!el.form && (type || 'submit') === 'submit')
+      || (tag === 'input' && (type === 'submit' || type === 'image'));
+    const target = addressOf(submits ? el.getAttribute('formaction') || el.form?.getAttribute('action') : tag === 'a' ? el.getAttribute('href') : '');
+    if (tag === 'a' && (el.getAttribute('download') !== null || DOWNLOAD_FILE.test(target?.pathname || ''))) return 'downloads a file';
+    if (target && ACCOUNT_OR_PAYMENT.test(`${target.pathname}${target.search}`)) return 'payment or account';
+    if (submits) return 'submits a form';
+    const leaves = tag === 'a' && !!target && ['http:', 'https:'].includes(target.protocol) && target.host !== location.host;
+    return leaves ? 'leaves the site' : '';
+  };
+  let el;
+  if (n !== null) {
+    el = document.querySelector(`[data-arty-n="${n}"]`);
+    if (!el || hiddenBox(el)) return { error: STALE };
+    if (expected !== null && same(labelOf(el)) !== same(expected)) {
+      return { error: `item ${n} no longer has the label Arty read (the page changed since it was read); read it again` };
+    }
+  } else {
+    const wanted = same(text);
+    if (!wanted) return { error: 'say what to click: its number from chrome_read, or its whole label' };
+    const selector = 'a[href], button, input, textarea, select, [role=button], [role=link], [contenteditable=true]';
+    const candidates = [...document.querySelectorAll(selector)].filter((candidate) => !isField(candidate) && !hiddenBox(candidate));
+    el = candidates.find((candidate) => namesOf(candidate).includes(wanted));
+    if (!el) return { error: 'nothing on the page has exactly that label; read the page and click by number' };
   }
-  if (!el && text) {
-    const wanted = text.trim().toLowerCase();
-    const candidates = [...document.querySelectorAll('a[href], button, [role=button], [role=link], input[type=submit], input[type=button], summary, label')];
-    const labelOf = (c) => (c.getAttribute('aria-label') || c.innerText || c.value || '').trim().toLowerCase();
-    el = candidates.find((c) => labelOf(c) === wanted) || candidates.find((c) => labelOf(c).includes(wanted));
+  if (expectedActs !== null && actsOf(el) !== expectedActs) {
+    return { error: 'that item does something different from when the page was read; read it again' };
   }
-  if (!el) return { error: `nothing to click matching ${n !== null ? `item ${n}` : `"${text}"`} (read the page again)` };
   el.scrollIntoView({ block: 'center' });
   el.click();
-  return { label: (el.getAttribute('aria-label') || el.innerText || el.value || 'it').trim().slice(0, 80) };
+  return { label: labelOf(el).slice(0, 80) || 'it' };
 }
 
-function typeInto(n, label, text, submit) {
-  let el = n !== null ? document.querySelector(`[data-arty-n="${n}"]`) : null;
-  if (!el && label) {
-    const wanted = label.trim().toLowerCase();
-    const fields = [...document.querySelectorAll('input, textarea, select, [contenteditable=true]')];
-    const labelOf = (f) => (f.labels?.[0]?.innerText || f.getAttribute('aria-label') || f.placeholder || f.name || '').trim().toLowerCase();
-    el = fields.find((f) => labelOf(f) === wanted) || fields.find((f) => labelOf(f).includes(wanted));
+function typeInto(n, label, text, submit, expected, privateHints) {
+  const hiddenBox = (el) => {
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return true;
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return !(box.width > 1 && box.height > 1) || style.visibility === 'hidden' || style.display === 'none';
+  };
+  const clean = (words) => String(words || '').trim().replace(/\s+/g, ' ');
+  const same = (words) => clean(words).toLowerCase();
+  const labelText = (el) => [...(el.labels || [])].map((labelled) => labelled.innerText).join(' ');
+  const fieldName = (el) => clean(labelText(el) || el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
+  const privateHint = new RegExp(privateHints, 'i');
+  const isPrivateField = (el) => {
+    const labelledBy = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map((id) => (id && document.getElementById?.(id)?.innerText) || '');
+    const names = [el.getAttribute('autocomplete'), el.name, el.id, el.getAttribute('aria-label'), el.placeholder, labelText(el), ...labelledBy];
+    return (el.getAttribute('type') || '').toLowerCase() === 'password' || privateHint.test(names.join(' '));
+  };
+  let el = null;
+  if (n !== null) {
+    el = document.querySelector(`[data-arty-n="${n}"]`);
+    if (!el || hiddenBox(el)) return { error: `item ${n} is not on the page any more (the page changed since it was read); read it again` };
+    if (expected !== null && same(fieldName(el)).slice(0, 400) !== same(expected).slice(0, 400)) {
+      return { error: `item ${n} no longer has the label Arty read (the page changed since it was read); read it again` };
+    }
+  } else if (label) {
+    const wanted = same(label);
+    const fields = [...document.querySelectorAll('input, textarea, select, [contenteditable=true]')]
+      .filter((field) => (field.getAttribute('type') || '').toLowerCase() !== 'hidden' && !hiddenBox(field));
+    el = fields.find((field) => same(fieldName(field)) === wanted) || fields.find((field) => same(fieldName(field)).includes(wanted)) || null;
+    if (!el) return { error: 'no field has that label (read the page and give its number)' };
+  } else {
+    el = document.activeElement !== document.body ? document.activeElement : null;
   }
-  if (!el) el = document.activeElement !== document.body ? document.activeElement : null;
   if (!el) return { error: 'no field to type into (read the page and give its number)' };
-  const type = (el.getAttribute('type') || '').toLowerCase();
-  const hints = `${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''}`.toLowerCase();
-  if (type === 'password' || /cc-|card|cvv|cvc|iban|sort.?code/.test(hints)) {
-    return { error: 'that is a password or payment field; Arty never types into those. Ask the user to fill it in' };
+  if (isPrivateField(el)) {
+    return { error: 'that is a password, code or payment field; Arty never types into those. Ask the user to fill it in' };
   }
   el.focus();
   if (el.isContentEditable) {
@@ -456,5 +659,5 @@ function typeInto(n, label, text, submit) {
     if (el.form) el.form.requestSubmit();
     else for (const type of ['keydown', 'keypress', 'keyup']) el.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
   }
-  return { field: (el.labels?.[0]?.innerText || el.getAttribute('aria-label') || el.placeholder || el.name || 'the field').trim().slice(0, 60) };
+  return { field: fieldName(el).slice(0, 60) || 'the field' };
 }

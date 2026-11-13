@@ -40,9 +40,10 @@ def test_reads_a_page_with_numbered_items_and_marks_it_untrusted(monkeypatch):
 
 
 def test_asks_before_clicking_something_that_acts_in_their_name():
-    browser._last_page["text"] = "Tab 7: Shop\n[1] button: Buy now\n[2] link: Reviews"
+    browser._remember_items({"items": [{"n": 1, "kind": "button", "label": "Buy now"}, {"n": 2, "kind": "link", "label": "Reviews"}]})
     assert "Buy now" in browser.needs_ok("chrome_click", {"item": 1})
     assert browser.needs_ok("chrome_click", {"item": 2}) is None
+    browser._remember_items({"items": [{"n": 3, "kind": "button", "label": "Send message"}]})
     assert browser.needs_ok("chrome_click", {"text": "Send message"})
     assert browser.needs_ok("chrome_type", {"text": "hi", "submit": True})
     assert browser.needs_ok("chrome_type", {"text": "hi"}) is None
@@ -72,17 +73,18 @@ def test_open_turns_words_into_a_search():
 
 
 def test_a_click_by_a_number_that_is_not_one_asks_instead_of_crashing():
-    browser._last_page["text"] = "Tab 7: Shop\n[1] button: Buy now"
+    browser._remember_items({"items": [{"n": 1, "kind": "button", "label": "Buy now"}]})
     assert browser.needs_ok("chrome_click", {"item": "the blue one"})
     assert browser.needs_ok("chrome_click", {"item": 9})
 
 
 def test_unlabelled_buttons_and_the_brains_outward_words_ask_first():
-    browser._last_page["text"] = "Tab 7: Feed\n[1] button: (unlabelled)\n[2] link: About"
+    browser._remember_items({"items": [{"n": 1, "kind": "button", "label": "(unlabelled)"}, {"n": 2, "kind": "link", "label": "About"}]})
     assert browser.needs_ok("chrome_click", {"item": 1})
     assert browser.needs_ok("chrome_click", {"item": 2}) is None
     for word in ("Book", "Bid", "Like", "Connect", "Comment", "Apply", "Message", "Invite", "Upload", "Save", "Continue",
                  "Repost", "Retweet"):
+        browser._remember_items({"items": [{"n": 3, "kind": "button", "label": word}]})
         assert browser.needs_ok("chrome_click", {"text": word}), word
 
 
