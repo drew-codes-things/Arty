@@ -41,8 +41,7 @@ class Learning(unittest.TestCase):
         self.assertIn("12 of your messages and 1 of your LinkedIn posts", reply)
         self.assertIn("LinkedIn post:\nI attended Nutanix NEXT", prompts[0])
         note = style.voice_note()
-        self.assertIn("British spelling", note)
-        self.assertIn("correct spelling", note)
+        self.assertIn("correct British English spelling", note)
         self.assertNotIn("I attended Nutanix NEXT", note)  # small models copy an example's facts into new posts
         self.assertIn("never invent", note)
         self.assertFalse(style.due())
@@ -226,6 +225,52 @@ class Drafting(unittest.TestCase):
         self.assertFalse(style.is_new_draft("reply to the email from college"))
         self.assertFalse(style.is_new_draft("improve this post: I went to a thing"))
         self.assertFalse(style.is_new_draft("give me some LinkedIn post ideas"))
+
+
+AMERICAN_CLAIM_PROFILE = (
+    "- **Tone and formality**: Casual and direct.\n"
+    "- **British spelling**: No British spellings observed; uses American variants (e.g., “customize” instead of "
+    "“customise”).\n"
+    "- **Content focus**: Homelabs and networking.")
+
+
+def save_profile(profile):
+    style.STYLE_FILE.write_text(json.dumps({"profile": profile, "updated": 0, "sources": {"messages": 9, "posts": 0}}))
+
+
+class BritishSpelling(unittest.TestCase):
+    def tearDown(self):
+        style.STYLE_FILE.unlink(missing_ok=True)
+
+    def test_drafts_ask_for_british_spelling_even_when_the_learned_profile_says_american(self):
+        save_profile(AMERICAN_CLAIM_PROFILE)
+        prompts = []
+        style.draft("write a LinkedIn post about my homelab", writer("My homelab grew this year.", prompts=prompts))
+        draft_prompt = prompts[0][0]
+        self.assertIn("British English spelling", draft_prompt)
+        self.assertNotIn("American", draft_prompt)
+        self.assertIn("Homelabs and networking", draft_prompt)
+
+    def test_the_voice_note_asks_for_british_spelling_even_when_the_learned_profile_says_american(self):
+        save_profile(AMERICAN_CLAIM_PROFILE)
+        note = style.voice_note()
+        self.assertIn("British English spelling", note)
+        self.assertNotIn("American", note)
+        self.assertIn("Casual and direct", note)
+
+    def test_learning_never_asks_the_model_which_spelling_they_use_and_drops_any_claim(self):
+        prompts = []
+        style.refresh(lambda: (MESSAGES, []), lambda prompt: prompts.append(prompt) or AMERICAN_CLAIM_PROFILE)
+        self.assertNotIn("British", prompts[0])
+        self.assertIn("leave spelling out", prompts[0])
+        saved = style.load()["profile"]
+        self.assertNotIn("American", saved)
+        self.assertNotIn("spelling", saved.lower())
+        self.assertIn("Casual and direct", saved)
+
+    def test_content_lines_that_mention_britain_are_kept(self):
+        profile = "- **Content focus**: British history and the British army.\n- Uses US spelling (color, center)."
+        self.assertEqual(style.without_spelling_claims(profile), "- **Content focus**: British history and the British army.")
 
 
 class WhenItsUsed(unittest.TestCase):

@@ -73,7 +73,11 @@ fewer model swaps, a web search before answering code questions it can't know, a
 - Every notification carries a kind from whatever sent it, and `/v1/announcements` returns it. `POST /v1/notify`
   takes an optional `category`; an unknown one counts as other. A fix Arty offers for a server is an approval.
 - Questions about a recent framework version, a named function, an error message or a command's flags get a web
-  search before the answer, instead of a guess.
+  search before the answer, instead of a guess. Arty also reads the top page (the official docs when the search finds
+  them) and follows its names and code over what it remembers, and says so when nothing it found mentions the tool or
+  function you named.
+- Questions about a rate or price right now ("the Bank of England base rate", "the price of gold today") are looked up
+  on the web, and researched answers know today's date, so the latest change is given as the current one.
 - Each agent round says whether the brain asked the model to think.
 
 ### Faster

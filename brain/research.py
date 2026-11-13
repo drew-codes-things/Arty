@@ -12,6 +12,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as PageTimeout
+from datetime import datetime
 from urllib.parse import urlparse
 
 import quick
@@ -63,7 +64,7 @@ You researched this on the web. Here are your notes from each source, numbered:
 {notes}
 
 """
-PREMISE_PROMPT = NOTES_PROMPT + """Before answering, check the notes against the question. Reply with exactly one of these:
+PREMISE_PROMPT = NOTES_PROMPT + """Today is {today}. Before answering, check the notes against the question. Reply with exactly one of these:
 WRONG: <one sentence correcting it>  if the notes show the question takes for granted something false (a wrong
 place, date, person, team, number, or an event that never happened);
 MISSING  if the notes don't contain the answer to the question;
@@ -83,7 +84,8 @@ NOT_FOUND = ("I couldn't find a reliable answer to that: the sources I found don
              "If you know where it's from (a site, a book, a different year or place), tell me and I'll look again.")
 CORRECTION_NOTE = ("The question gets something wrong. {correction} Start your answer by saying so plainly, then "
                    "answer what the user most likely wants to know.\n\n")
-ANSWER_PROMPT = NOTES_PROMPT + """{correction}Write the answer for the user in Markdown, as one expert answer: merge what the sources say, never source by
+ANSWER_PROMPT = NOTES_PROMPT + """{correction}Today is {today}: a fact dated before today in the notes is still the latest
+you know, so give it as the current answer with its date. Write the answer for the user in Markdown, as one expert answer: merge what the sources say, never source by
 source. Open with the direct answer in one or two sentences, with no heading or title above it. If the question
 is a simple fact (who, when, how much), that's nearly all: add a sentence or two of useful detail and stop. If it
 asks how to do something or what's best, follow with the detail: steps, options, specifics (numbers, names,
@@ -107,7 +109,12 @@ QUICK_QUESTION = re.compile(
     r"\b(best|top \d+|recommend(ed|ation)?s?|recipes?|how (do|can|should) i (make|cook|bake|fix|build|clean|grow)|"
     r"how to (make|cook|bake|fix|build|clean|grow)|reviews?|latest|news|price of|cheapest|worth (it|buying)|who won|"
     r"who is the (current|new)|current(ly)?|this (year|season|week'?s)|last (year|season|world cup|election|game|match)|"
-    r"20[2-3]\d|1[5-9]\d\d|what year|in which year)\b", re.IGNORECASE)
+    r"20[2-3]\d|1[5-9]\d\d|what year|in which year)\b"
+    r"|\b(?:interest|base|bank|exchange|inflation|mortgage|savings|unemployment|tax|vat) rates?\b"
+    r"|\b(?:share|stock|oil|petrol|diesel|fuel|gas|electricity|energy|gold|silver|bitcoin|house) prices?\b"
+    r"|\bhow much (?:is|are|does|do)\b[^.?!]{1,40}\b(?:worth|cost)\b"
+    r"|\b(?:rates?|prices?|costs?|yields?|inflation|value)\b[^.?!]{0,40}\b(?:right now|now|at the moment|today)\b",
+    re.IGNORECASE)
 # About the user's own things ("my latest email"): not for the web, whatever the words.
 ABOUT_THEIR_OWN = re.compile(r"\b(my|our|i'?m|i am|i'?ve|i have|i was)\b", re.IGNORECASE)
 POLITE_ASKING = re.compile(r"\b(can|could|would|will|do) you\b|\byou think\b", re.IGNORECASE)
@@ -217,6 +224,51 @@ def _words(text: str) -> set[str]:
     return {word.rstrip("s") for word in QUERY_WORD.findall(text.lower())} - {word.rstrip("s") for word in GENERAL_WORDS}
 
 
+RESULT_START = re.compile(r"^\d+\.\s+", re.MULTILINE)
+SEARCH_FAILED = ("search is unavailable", "No results")
+NO_RELEVANT_RESULTS = "No results about: {question} (the search only found pages about other things)"
+ASKING_WORDS = {"use", "using", "show", "code", "example", "get", "make", "does", "did", "can", "could", "would", "should",
+                "will", "you", "your", "there", "their", "into", "about", "which", "when", "where", "why", "right", "now",
+                "today", "tell", "give", "explain", "need", "want", "know", "have", "has", "had", "work", "help", "run",
+                "build", "built", "write", "take", "find", "look", "like", "new", "fix", "some", "still", "out", "desktop"}
+FEW_KEY_WORDS = 2
+SOME_KEY_WORDS = 6
+SHARED_WORDS_FOR_SOME = 2
+SHARED_WORDS_FOR_MANY = 3
+
+
+def key_words(question: str) -> set[str]:
+    return _words(question) - {word.rstrip("s") for word in ASKING_WORDS}
+
+
+def shared_words_needed(words: set[str]) -> int:
+    if len(words) <= FEW_KEY_WORDS:
+        return min(1, len(words))
+    return SHARED_WORDS_FOR_SOME if len(words) <= SOME_KEY_WORDS else SHARED_WORDS_FOR_MANY
+
+
+def is_about(text: str, words: set[str]) -> bool:
+    return len(words & _words(text)) >= shared_words_needed(words)
+
+
+def found_nothing(search_text: str) -> bool:
+    return search_text.startswith(SEARCH_FAILED)
+
+
+def relevant_results(search_text: str, question: str) -> str:
+    starts = [match.start() for match in RESULT_START.finditer(search_text)]
+    words = key_words(question)
+    if found_nothing(search_text) or not starts or not words:
+        return search_text
+    header = search_text[:starts[0]]
+    entries = [search_text[start:end] for start, end in zip(starts, starts[1:] + [len(search_text)])]
+    kept = [RESULT_START.sub("", entry, count=1) for entry in entries if is_about(entry, words)]
+    if not kept:
+        return NO_RELEVANT_RESULTS.format(question=question.strip())
+    numbered = [f"{number}. {entry.rstrip()}" for number, entry in enumerate(kept, start=1)]
+    return (header if is_about(header, words) else "") + "\n".join(numbered)
+
+
 def contradicts_question(correction: str, question: str) -> bool:
     """Whether the correction says something written in the question is false: its "not ..." part names it."""
     negated = NEGATED.search(correction)
@@ -225,7 +277,7 @@ def contradicts_question(correction: str, question: str) -> bool:
 
 def check_premise(question: str, notes: str, complete) -> tuple[str, str]:
     """("wrong", the correction), ("missing", "") when the notes don't answer the question, or ("fine", "")."""
-    reply = complete(PREMISE_PROMPT.format(question=question, notes=notes)).strip()
+    reply = complete(PREMISE_PROMPT.format(question=question, notes=notes, today=today_text())).strip()
     found = VERDICT.match(reply)
     verdict, rest = (found.group(1).lower(), found.group(2).strip()) if found else ("fine", reply)
     if verdict == "wrong":
@@ -251,6 +303,10 @@ def subject_of(question: str, complete) -> str:
 def keep_real_citations(answer: str, sources: int) -> str:
     """Drops citation marks that point at no source (a small model numbers past the list)."""
     return CITATION.sub(lambda mark: mark.group(0) if 1 <= int(mark.group(1)) <= sources else "", answer)
+
+
+def today_text() -> str:
+    return datetime.now().strftime("%A %-d %B %Y")
 
 
 def asks_a_plain_fact(query: str) -> bool:
@@ -299,7 +355,7 @@ class PageReader:
 
 def gather(query: str, call_tool, complete, pages: int, browser: bool, quick_complete=None) -> tuple[str, list[str], list[str], str]:
     quick_complete = quick_complete or complete
-    search = call_tool("research__web_search", {"query": query, "results": SEARCH_RESULTS})
+    search = relevant_results(call_tool("research__web_search", {"query": query, "results": SEARCH_RESULTS}), query)
     sources, notes, verdict = [], [], ""
     reader = PageReader(result_urls(search), call_tool, browser)
     stops_early = browser and asks_a_plain_fact(query)
@@ -342,7 +398,7 @@ def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = 
     used = ["research__web_search"]
     search, sources, notes, verdict = gather(query, call_tool, complete, pages, browser, classify)
     if not notes:  # nothing readable: answer from the search results themselves
-        if search.startswith(("search is unavailable", "No results")):
+        if found_nothing(search):
             return f"I couldn't research that: {search}", used
         notes = [f"[1] (search results)\n{search}"]
     verdict, correction = (verdict, "") if verdict else check_premise(query, "\n\n".join(notes), classify)
@@ -356,7 +412,7 @@ def run(question: str, call_tool, complete, pages: int = PAGES, browser: bool = 
     if verdict == "missing":
         return NOT_FOUND.format(query=query), used
     joined = "\n\n".join(notes)
-    answer = complete(ANSWER_PROMPT.format(question=query, notes=joined,
+    answer = complete(ANSWER_PROMPT.format(question=query, notes=joined, today=today_text(),
                                            correction=CORRECTION_NOTE.format(correction=correction) if correction else "")).strip()
     answer = LEADING_TITLE.sub("", OWN_SOURCES.sub("", INSTRUCTION_HEADING.sub("", answer)).strip()).strip()
     answer = keep_real_citations(answer, len(sources))

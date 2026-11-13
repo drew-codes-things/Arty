@@ -55,6 +55,9 @@ the Proxmox console at any time.
   close the window, and Arty's browser comes back with the logins. Arty never gets round CAPTCHAs itself.
 - **Cookie banners** - after opening a page or clicking, the agent accepts a cookie/consent banner if one is
   showing (an "Accept all"-style button inside the banner). It never clicks reject, manage or sign-in buttons.
+- **One tab** - every page Arty opens goes into one working tab. Opening a page closes the browser's other tabs
+  (ones sites opened, crashed ones, ones left from before a restart), so research never piles them up. Chrome
+  starts without the "Restore pages?" bubble.
 - **Repeated chores** - when the agent finds a button or field by its text, it remembers a CSS selector for it per
   site and step in `~/.local/browser-agent/selectors.json` (owner-only, the 300 most recently used, no page text or
   cookies). Next time it tries that selector first, checks the element still has the same kind and text, and

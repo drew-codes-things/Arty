@@ -6,11 +6,13 @@ from datetime import datetime
 
 import calendar_feed
 import connections
+import docs_reading
 import media
 import models
 import notify
 import personal
 import reckon
+import research
 import safety
 import sharing
 import store
@@ -28,6 +30,7 @@ from prompting import local_zone
 from model_choice import session_keep_alive
 
 log = logging.getLogger("brain")
+WEB_SEARCH_TOOL = "research__web_search"
 
 
 NATIVE_TOOL_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OSError, sqlite3.Error, urllib.error.URLError)
@@ -76,7 +79,9 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         if found_no_place(name, result):
             log.info("lookup %s found no place in the message, so it is left to the model", name)
             continue
-        if LOOKUP_FAILED.search(str(result)):
+        if name == WEB_SEARCH_TOOL:
+            result = research.relevant_results(str(result), said)
+        if LOOKUP_FAILED.search(str(result)) or (name == WEB_SEARCH_TOOL and research.found_nothing(result)):
             # Left to the model, a failed check becomes "nothing new": say it couldn't be checked, and why.
             log.warning("lookup %s didn't work: %s", name, str(result)[:200])
             failed.append(str(result).strip())
@@ -84,6 +89,9 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         used.append(name)
         results.append(f"[{name}]\n{str(result)[:LOOKUP_CHARS]}")
         log.info("looked up %s before answering", name)
+        if name == WEB_SEARCH_TOOL and (page := top_page_for(str(result), said)):
+            used.append(docs_reading.FETCH_TOOL)
+            results.append(page)
     if blocked and not results:
         return [], "", blocked
     if not results and not failed:
@@ -92,6 +100,14 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
     return used, ("\n\nAlready looked up for this message. Answer the message from this, and only this, unless it "
                   "asks for something else (don't call these tools again):\n"
                   + "\n\n".join(results)), blocked
+
+
+def top_page_for(search_text: str, said: str) -> str:
+    try:
+        return docs_reading.read_top_page(search_text, said)
+    except Exception as error:
+        log.warning("couldn't read the top page for %r: %r", said[:80], error)
+        return ""
 
 
 def declined_reply(config: dict, *texts: str) -> str | None:

@@ -1,5 +1,6 @@
 """Desktop research: search, read the pages, note each, write one sourced answer. Tools and model faked.
 Run from brain/: python3 -m unittest discover tests"""
+import re
 import sys
 import threading
 import time
@@ -28,13 +29,18 @@ SEARCH = """1. Best chocolate cake
    Bot wall."""
 
 LONG = "Cream the butter and sugar. " * 40
+SNIPPET_LINE = re.compile(r"^(   (?!https?://).*)$", re.MULTILINE)
+
+
+def about_the_query(results, query):
+    return SNIPPET_LINE.sub(lambda line: f"{line.group(1)} {query}", results)
 
 
 def fake_tools(calls):
     def call_tool(name, arguments):
         calls.append((name, arguments))
         if name == "research__web_search":
-            return SEARCH
+            return about_the_query(SEARCH, arguments["query"])
         url = arguments["url"]
         if "blocked" in url:
             return "Page text:\nPlease verify you are human to continue."
@@ -244,7 +250,7 @@ def many_pages(calls, slow_urls=(), opened=None):
     def call_tool(name, arguments):
         calls.append((name, arguments))
         if name == "research__web_search":
-            return MANY
+            return about_the_query(MANY, arguments["query"])
         if name == "workspace__browser_open":
             if opened is not None:
                 opened.set()

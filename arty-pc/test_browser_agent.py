@@ -1,5 +1,7 @@
 import importlib
+import inspect
 import io
+import itertools
 import json
 import os
 import stat
@@ -611,3 +613,245 @@ class TestSelectorCacheFile:
         cache = agent.SelectorCache(str(tmp_path / "selectors.json"))
         cache.remember("shop.test", agent.tidy_step("  Find   NOW "), {"selector": "#f", "kind": "button"})
         assert cache.get("shop.test", agent.tidy_step("find now")) == {"selector": "#f", "kind": "button"}
+
+
+PLAYWRIGHT_HANDLER_MARK = "_pw_impl_instance_"
+
+
+TARGET_IDS = itertools.count(1)
+
+
+class FakeTab:
+    def __init__(self, context, url="about:blank"):
+        self.context = context
+        self.url = url
+        self.handlers = {}
+        self.closed = False
+        self.target_id = f"T{next(TARGET_IDS)}"
+        self.refuses_to_close = False
+
+    def on(self, event, handler):
+        setattr(handler.__self__ if inspect.ismethod(handler) else handler, PLAYWRIGHT_HANDLER_MARK, True)
+        self.handlers.setdefault(event, []).append(handler)
+
+    def crash(self):
+        for handler in self.handlers.get("crash", []):
+            handler(self)
+
+    def close(self):
+        self.closed = True
+        self.context.pages.remove(self)
+
+    @property
+    def frames(self):
+        return []
+
+    def goto(self, url, wait_until=None):
+        self.url = url
+
+    def wait_for_timeout(self, milliseconds):
+        pass
+
+    def wait_for_load_state(self, state):
+        pass
+
+    def evaluate(self, script, *args):
+        return [] if script == agent.LIST_ELEMENTS_JS else False
+
+    def inner_text(self, selector):
+        return LONG_ARTICLE
+
+    def title(self):
+        return "A page"
+
+
+class FakeContext:
+    def __init__(self, open_tabs=1):
+        self.pages = []
+        self.handlers = {}
+        for _ in range(open_tabs):
+            self.pages.append(FakeTab(self, "https://www.example.org/"))
+
+    def set_default_timeout(self, milliseconds):
+        pass
+
+    def on(self, event, handler):
+        self.handlers.setdefault(event, []).append(handler)
+
+    def new_page(self):
+        tab = FakeTab(self)
+        self.pages.append(tab)
+        for handler in self.handlers.get("page", []):
+            handler(tab)
+        return tab
+
+    def new_cdp_session(self, tab):
+        return FakeTabSession(tab)
+
+
+class FakeTabSession:
+    def __init__(self, tab):
+        self.tab = tab
+
+    def send(self, method, params=None):
+        assert method == "Target.getTargetInfo"
+        return {"targetInfo": {"targetId": self.tab.target_id, "type": "page", "url": self.tab.url}}
+
+    def detach(self):
+        pass
+
+
+class FakeBrowserSession:
+    def __init__(self, chrome):
+        self.chrome = chrome
+
+    def send(self, method, params=None):
+        if method == "Target.getTargets":
+            return {"targetInfos": self.chrome.targets()}
+        assert method == "Target.closeTarget"
+        self.chrome.close_target(params["targetId"])
+        return {}
+
+    def detach(self):
+        pass
+
+
+class FakeChrome:
+    def __init__(self, context):
+        self.contexts = [context]
+        self.unseen_tabs = []
+        self.closed_targets = []
+
+    def targets(self):
+        seen = [{"targetId": tab.target_id, "type": "page", "url": tab.url} for tab in self.contexts[0].pages]
+        toolbar = [{"targetId": "UI", "type": "browser_ui", "url": "chrome://omnibox-popup.top-chrome/"}]
+        return seen + self.unseen_tabs + toolbar
+
+    def close_target(self, target_id):
+        for tab in list(self.contexts[0].pages):
+            if tab.target_id == target_id:
+                if tab.refuses_to_close:
+                    raise FakePlaywrightError("Target closed")
+                tab.closed = True
+                self.contexts[0].pages.remove(tab)
+        self.unseen_tabs = [target for target in self.unseen_tabs if target["targetId"] != target_id]
+        self.closed_targets.append(target_id)
+
+    def new_browser_cdp_session(self):
+        return FakeBrowserSession(self)
+
+    def is_connected(self):
+        return True
+
+
+@pytest.fixture
+def attached_browser(monkeypatch):
+    context = FakeContext()
+    chrome = FakeChrome(context)
+    browser = agent.Browser()
+    browser.playwright = types.SimpleNamespace(
+        chromium=types.SimpleNamespace(connect_over_cdp=lambda address: chrome), stop=lambda: None)
+    monkeypatch.setattr(agent, "chrome_listening", lambda: True)
+    return browser, context
+
+
+class TestCrashedTabs:
+    def test_a_crashed_tab_is_closed_and_the_next_page_opens_in_a_new_one(self, attached_browser):
+        browser, context = attached_browser
+        crashed = browser.page()
+        crashed.crash()
+        fresh = browser.page()
+        assert fresh is not crashed
+        assert crashed.closed
+        assert context.pages == [fresh]
+
+    def test_a_tab_opened_after_attaching_is_watched_too(self, attached_browser):
+        browser, context = attached_browser
+        context.pages[0].close()
+        opened = browser.page()
+        opened.crash()
+        assert browser.page() is not opened
+        assert opened.closed
+
+    def test_a_crashed_tab_that_will_not_close_is_left_and_a_new_one_used(self, attached_browser):
+        browser, context = attached_browser
+        stuck = browser.page()
+
+        def refuse():
+            raise FakePlaywrightError("Target closed")
+        stuck.close = refuse
+        stuck.crash()
+        fresh = browser.page()
+        assert fresh is not stuck
+        assert browser.page() is fresh
+
+    def test_a_healthy_tab_is_kept(self, attached_browser):
+        browser, context = attached_browser
+        tab = browser.page()
+        assert browser.page() is tab
+        assert not tab.closed
+
+
+class TestOneWorkingTab:
+    def test_opening_a_page_closes_the_tabs_left_from_earlier_pages(self, attached_browser):
+        browser, context = attached_browser
+        context.new_page()
+        context.new_page()
+        working = context.pages[-1]
+        left_over = context.pages[:-1]
+        result = browser.handle("open", {"url": "https://docs.python.org/3/"})
+        assert context.pages == [working]
+        assert all(tab.closed for tab in left_over)
+        assert result["url"] == "https://docs.python.org/3/"
+
+    def test_a_tab_a_site_opened_is_gone_after_the_next_page_opened(self, attached_browser):
+        browser, context = attached_browser
+        browser.handle("open", {"url": "https://news.example/story"})
+        context.new_page()
+        result = browser.handle("open", {"url": "https://docs.example/guide"})
+        assert len(context.pages) == 1
+        assert context.pages[0].url == result["url"] == "https://docs.example/guide"
+
+    def test_a_tab_that_will_not_close_does_not_stop_the_page_opening(self, attached_browser):
+        browser, context = attached_browser
+        stuck = context.pages[0]
+        stuck.refuses_to_close = True
+        context.new_page()
+        result = browser.handle("open", {"url": "https://docs.example/guide"})
+        assert result["url"] == "https://docs.example/guide"
+        assert stuck in context.pages
+
+    def test_a_crashed_tab_from_before_the_agent_started_is_closed_too(self, attached_browser):
+        browser, context = attached_browser
+        chrome = browser.playwright.chromium.connect_over_cdp("")
+        chrome.unseen_tabs.append({"targetId": "OLD", "type": "page", "url": "https://www.bbc.co.uk/news"})
+        browser.handle("open", {"url": "https://docs.example/guide"})
+        assert chrome.unseen_tabs == []
+        assert "OLD" in chrome.closed_targets
+        assert "UI" not in chrome.closed_targets
+        assert len(context.pages) == 1
+
+    def test_a_browser_that_will_not_list_its_tabs_still_opens_the_page(self, attached_browser):
+        browser, context = attached_browser
+        chrome = browser.playwright.chromium.connect_over_cdp("")
+
+        def refuse():
+            raise FakePlaywrightError("Browser.getTargets failed")
+        chrome.targets = refuse
+        result = browser.handle("open", {"url": "https://docs.example/guide"})
+        assert result["url"] == "https://docs.example/guide"
+
+    def test_reading_never_closes_tabs(self, attached_browser):
+        browser, context = attached_browser
+        context.new_page()
+        browser.handle("read", {})
+        assert len(context.pages) == 2
+
+
+class TestChromeStart:
+    def test_chrome_starts_without_the_restore_pages_bubble(self, monkeypatch):
+        started = []
+        monkeypatch.setattr(agent.subprocess, "Popen", lambda command, **options: started.append(command))
+        monkeypatch.setattr(agent, "chrome_listening", lambda: True)
+        agent.start_chrome()
+        assert "--hide-crash-restore-bubble" in started[0]

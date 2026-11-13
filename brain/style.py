@@ -42,7 +42,7 @@ tone and formality{separately}, sentence length and structure, words and phrases
 off, emoji, exclamation marks and hashtags, how their posts are laid out (paragraphs, where the thanks and hashtags
 go), and what they like to talk about. Describe the style only, not what happened. Only describe what you can see in
 the writing below; don't guess about anything else. Ignore spelling mistakes and typos (drafts will be spelled
-correctly), but say if they use British spelling. Write 8 to 12 short bullet points and nothing else.
+correctly) and leave spelling out. Write 8 to 12 short bullet points and nothing else.
 
 {sources}"""
 
@@ -68,7 +68,7 @@ What you know about them (true; use a fact only where it fits the request):
 How they write:
 {profile}
 
-Write exactly what they asked for, ready to post or send, with correct spelling and grammar. {layout}
+Write exactly what they asked for, ready to post or send, with correct {spelling} and grammar. {layout}
 Use only the facts in their request and the facts above. Never add anything else that would have to be true: no events,
 steps, problems, equipment, numbers, dates, times, places, people, companies, results, achievements or feelings about
 things that happened. Where a good {kind} really needs a detail they didn't give, put a short placeholder in square
@@ -100,6 +100,8 @@ DRAFT:
 Reply with JSON only: {{"invented": [{{"words": "exact words from the draft", "placeholder": "[what to fill in]"}}]}}
 Reply {{"invented": []}} if everything in the draft is supported by the facts."""
 DECLINED = "DECLINE"
+SPELLING = "British English spelling"
+SPELLING_CLAIM = re.compile(r"\bspell(?:ing|ings|ed|t)?\b|\b(?:american|us|british|uk) (?:english|variants?)\b", re.IGNORECASE)
 
 LAYOUTS = {
     "post": "A social post: no greeting and no sign-off; short paragraphs; finish with their usual thanks if it fits, then "
@@ -237,8 +239,12 @@ def fill_in_line(written: str, kind: str) -> str:
     return FILL_IN.format(placeholders=listed, action=action)
 
 
+def without_spelling_claims(profile: str) -> str:
+    return "\n".join(line for line in profile.splitlines() if not SPELLING_CLAIM.search(line))
+
+
 def voice_only(profile: str) -> str:
-    without_examples = PROFILE_EXAMPLE.sub("", profile)
+    without_examples = PROFILE_EXAMPLE.sub("", without_spelling_claims(profile))
     lines = [line for line in without_examples.splitlines() if not QUOTED.search(line)]
     return SPACE_BEFORE_PUNCTUATION.sub(r"\1", "\n".join(lines))
 
@@ -256,7 +262,7 @@ def draft(request: str, complete, name: str = "", known: str = "") -> str | None
                     f"or a placeholder for it like [Tutor's name]; never greet {name or 'the writer'}. End with a sign-off "
                     f"such as \"Thanks,\" and then {name or '[Your name]'}. ")
     written = complete(DRAFT_PROMPT.format(request=request.strip(), known=known, profile=profile, kind=kind, layout=layout,
-                                           sign_off=sign_off, declined=DECLINED)).strip().strip('"')
+                                           sign_off=sign_off, declined=DECLINED, spelling=SPELLING)).strip().strip('"')
     if written.strip(" .") == DECLINED:
         return None
     lines = written.splitlines()
@@ -333,7 +339,8 @@ def build(messages: list[str], posts: list[str], complete) -> dict:
         raise ValueError("I haven't seen enough of your writing yet. Chat with me a bit more, then ask again.")
     what = "chat messages to their assistant, and their public LinkedIn posts" if posts else "chat messages to their assistant"
     separately = " (casual messages and public posts separately)" if posts else ""
-    profile = complete(PROFILE_PROMPT.format(what=what, separately=separately, sources=sources_text(messages, posts))).strip()
+    profile = without_spelling_claims(
+        complete(PROFILE_PROMPT.format(what=what, separately=separately, sources=sources_text(messages, posts)))).strip()
     if not profile:
         raise ValueError("I couldn't describe your writing just now. Try again in a bit.")
     style = {
@@ -374,5 +381,5 @@ def voice_note() -> str:
         return ""
     # Only the description: small models copy the facts from an example post into the new one.
     return ("\n\nWRITING AS THE USER: when you draft posts, emails or messages for them, write in their voice (as described "
-            "below), always with correct spelling and grammar. Use only facts from their request and what you truly know "
-            "about them; never invent events, places, people or achievements.\n" + style["profile"])
+            f"below), always with correct {SPELLING} and grammar. Use only facts from their request and what you truly know "
+            "about them; never invent events, places, people or achievements.\n" + without_spelling_claims(style["profile"]))

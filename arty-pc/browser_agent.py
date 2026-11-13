@@ -484,7 +484,7 @@ def start_chrome():
     """Starts the Google Chrome Arty uses, in its own session so it outlives this agent."""
     subprocess.Popen(
         [CHROME, f"--user-data-dir={PROFILE}", "--password-store=basic", "--no-first-run", "--start-maximized",
-         f"--remote-debugging-port={DEBUG_PORT}", "--remote-debugging-address=127.0.0.1",
+         f"--remote-debugging-port={DEBUG_PORT}", "--remote-debugging-address=127.0.0.1", "--hide-crash-restore-bubble",
          # A page restored from the back/forward cache can't be read by the agent ("back" would hang).
          "--disable-back-forward-cache"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -523,13 +523,57 @@ class Browser:
         self.selectors = SelectorCache(SELECTOR_CACHE_FILE)
         self.pending_selector = None
         self.used_saved_selector = False
+        self.crashed_tabs = set()
 
     def page(self):
         if self.browser is None or not self.browser.is_connected() or not self.browser.contexts:
             self.attach()
-        if not self.context.pages:
+        self.close_crashed_tabs()
+        if not self.context.pages or self.context.pages[-1] in self.crashed_tabs:
             self.context.new_page()
         return self.context.pages[-1]
+
+    def watch_for_crash(self, tab):
+        tab.on("crash", self.remember_crash)
+
+    def remember_crash(self, tab):
+        self.crashed_tabs.add(tab)
+
+    def close_crashed_tabs(self):
+        for tab in [tab for tab in self.context.pages if tab in self.crashed_tabs]:
+            print(f"the tab on {tab.url} crashed; closing it so the next page opens in a new tab", flush=True)
+            try:
+                tab.close()
+            except PlaywrightError as error:
+                print(f"could not close the crashed tab: {first_line(error)}", flush=True)
+                continue
+            self.crashed_tabs.discard(tab)
+
+    def close_other_tabs(self, working):
+        try:
+            self.close_tabs_except(working)
+        except PlaywrightError as error:
+            print(f"could not tidy away the other tabs: {first_line(error)}", flush=True)
+
+    def close_tabs_except(self, working):
+        working_session = self.context.new_cdp_session(working)
+        working_id = working_session.send("Target.getTargetInfo")["targetInfo"]["targetId"]
+        working_session.detach()
+        session = self.browser.new_browser_cdp_session()
+        try:
+            for target in session.send("Target.getTargets")["targetInfos"]:
+                if target["type"] == "page" and target["targetId"] != working_id:
+                    self.close_target(session, target)
+        finally:
+            session.detach()
+        self.crashed_tabs = {tab for tab in self.crashed_tabs if tab is working}
+
+    @staticmethod
+    def close_target(session, target):
+        try:
+            session.send("Target.closeTarget", {"targetId": target["targetId"]})
+        except PlaywrightError as error:
+            print(f"could not close the tab on {target['url']}: {first_line(error)}", flush=True)
 
     def attach(self):
         if not chrome_listening():
@@ -537,6 +581,10 @@ class Browser:
         self.browser = self.playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{DEBUG_PORT}")
         self.context = self.browser.contexts[0]
         self.context.set_default_timeout(ACTION_TIMEOUT_MS)
+        self.crashed_tabs = set()
+        for tab in self.context.pages:
+            self.watch_for_crash(tab)
+        self.context.on("page", self.watch_for_crash)
 
     def close(self):
         """Lets go of the browser but leaves it running, so its signed-in sessions survive the agent restarting."""
@@ -628,6 +676,7 @@ class Browser:
             raise ValueError(reason)
         page = self.page()
         if action == "open":
+            self.close_other_tabs(page)
             url = args["url"]
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url

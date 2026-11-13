@@ -116,7 +116,7 @@ class ToolHub:
             self.tools, self.routes, self.loaded_at = tools, routes, time.time()
             log.info("loaded %d tools", len(tools))
 
-    def call(self, name, arguments):
+    def call(self, name, arguments, limit=TOOL_RESULT_CHARS):
         route = self.routes.get(name)
         if not route:
             return f"unknown tool {name}"
@@ -127,7 +127,7 @@ class ToolHub:
         except (urllib.error.URLError, TimeoutError) as error:
             return f"tool unavailable: {error}"
         text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
-        return text[:TOOL_RESULT_CHARS]
+        return text[:limit]
 
 
 hub = ToolHub()
