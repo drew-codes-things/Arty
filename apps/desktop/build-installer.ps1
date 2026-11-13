@@ -76,7 +76,7 @@ Write-Host '==> Bundling the Microsoft Visual C++ runtime next to Python'
 Copy-RuntimeDlls "$Stage\python"
 
 Write-Host '==> Copying the backend and its assets'
-& robocopy server "$Stage\server" /E /XD __pycache__ tests /NFL /NDL /NJH /NJS /NP | Out-Null
+& robocopy server "$Stage\server" /E /XD __pycache__ tests .pytest_cache .mypy_cache .ruff_cache /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
 & robocopy models\kokoro "$Stage\models\kokoro" /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }

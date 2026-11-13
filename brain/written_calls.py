@@ -11,6 +11,7 @@ THINK_CLOSING = "</think>"
 THINKING = re.compile(r"<think>.*?</think>", re.S)
 CALL_MARKUP = re.compile(r"</?tool_call>|\[TOOL_CALLS\]|</?think>", re.I)
 SAFE_TOOL_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+CODE = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`", re.S)
 JSON_READER = json.JSONDecoder()
 
 
@@ -85,6 +86,14 @@ def spoken_text(text: str) -> str:
         visible = visible[:start] + visible[end:]
     visible = visible.strip()
     return "" if CALL_MARKUP.search(visible) else visible
+
+
+def has_call_markup(text: str) -> bool:
+    return bool(CALL_MARKUP.search(CODE.sub("", text or "")))
+
+
+def without_call_markup(text: str) -> str:
+    return spoken_text(text) if has_call_markup(text) else text
 
 
 def bare_name(name: str) -> str:

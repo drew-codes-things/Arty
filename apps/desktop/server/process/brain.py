@@ -55,6 +55,15 @@ REPEATED_STEP_NOTE = ("\n\n(You did exactly this step in your last turn too. Doi
 STOPPED_REPEATING = "I stopped there: I was {doing} over and over and it wasn't getting anywhere. Tell me what you'd like me to try instead."
 STOPPED_CLICKING = ("I stopped after {clicks} clicks in this one reply, which is more than a task like this should need. "
                     "Tell me if you want me to keep going.")
+DECLINED_STEP = ("The user said no to this step when asked, so it was not done. "
+                 "Tell the user they said no to it, in those plain words. It was their choice, not a restriction, "
+                 "a setting or an error, so do not describe it as one, and do not try another way round it. "
+                 "Ask what they would like instead.")
+UNANSWERED_STEP = ("The user did not answer the question about this step in time, so it was not done. "
+                   "Tell the user it was not done because they did not answer, and ask whether they want it done.")
+TYPED_NOTE_TAG = re.compile(r"<(\s*/?\s*(?:context|screen)\b[^<>]*)>", re.I)
+TYPED_NOTE_TAG_ESCAPED = "\u2039\\1\u203a"
+ANGLE_BRACKETS = str.maketrans("", "", "<>")
 MAX_SAVED_ACTIONS = 30
 MAX_SAVED_ACTION_CHARS = 80
 
@@ -81,7 +90,7 @@ class Activity(str):
 
     def __new__(cls, label, where, confirm=None):
         piece = super().__new__(cls, "")
-        piece.label, piece.where, piece.confirm = label, where, confirm
+        piece.label, piece.where, piece.confirm = _without_angle_brackets(label), where, confirm
         return piece
 
 
@@ -122,8 +131,17 @@ def save_turn(user_text, reply, actions=()):
     _save_history(trimmed(history))
 
 
+def _without_angle_brackets(label):
+    return label.translate(ANGLE_BRACKETS) if isinstance(label, str) else label
+
+
+def _with_typed_tags_escaped(text):
+    return TYPED_NOTE_TAG.sub(TYPED_NOTE_TAG_ESCAPED, text)
+
+
 def _tools_note(actions):
-    return f"\n\n<context>{TOOLS_USED_NOTE}{'; '.join(map(str, actions))}{TOOLS_NOTE_END}</context>" if actions else ""
+    labels = "; ".join(_without_angle_brackets(str(action)) for action in actions or ())
+    return f"\n\n<context>{TOOLS_USED_NOTE}{labels}{TOOLS_NOTE_END}</context>" if actions else ""
 
 
 def _without_tools_note(text):
@@ -139,7 +157,9 @@ def _as_sent(history):
             sent.append({"role": role, "content": _without_tools_note(str(content or ""))})
             pending_note = _tools_note(message.get("actions"))
             continue
-        sent.append({"role": role, "content": f"{content}{pending_note}" if role == "user" else content})
+        if role == "user":
+            content = f"{_with_typed_tags_escaped(str(content or ''))}{pending_note}"
+        sent.append({"role": role, "content": content})
         if role == "user":
             pending_note = ""
     return sent, pending_note
@@ -334,7 +354,8 @@ def llm_stream(user_input, extra_system=None, note=""):
     remembered, tools_note = _as_sent(trimmed(load_history()))
     messages += remembered
     note = "\n\n".join(part for part in (note, tools.request_note(user_input)) if part)
-    messages.append({"role": "user", "content": user_input + (f"\n\n{note}" if note else "") + tools_note + context.as_note()})
+    messages.append({"role": "user", "content": _with_typed_tags_escaped(user_input) + (f"\n\n{note}" if note else "") + tools_note
+                     + context.as_note()})
     offer = tools.definitions(user_input)
     tools.start_reply()
     consented = set()  # things they've said yes to during this reply
@@ -376,7 +397,7 @@ def llm_stream(user_input, extra_system=None, note=""):
                     result = tools.run(name, arguments)
                 else:
                     tools.consent_refused(name, arguments)
-                    result = "They didn't allow that, so it wasn't done. Don't try another way round it; say so and ask what they'd like."
+                    result = DECLINED_STEP if confirm.was_answered(ask) else UNANSWERED_STEP
             else:
                 result = tools.run(name, arguments)
             print(f"[tool] {name} -> {len(str(result))} chars", flush=True)

@@ -1069,8 +1069,8 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
 
             def risky(text, may_nudge=may_nudge, may_search=may_search):
                 if agent:
-                    return bool(PROMPT_LEAK.search(text))
-                if PROMPT_LEAK.search(text) or TOOL_TALK.search(text):
+                    return bool(PROMPT_LEAK.search(text)) or written_calls.has_call_markup(text)
+                if PROMPT_LEAK.search(text) or TOOL_TALK.search(text) or written_calls.has_call_markup(text):
                     return True
                 if may_nudge and (PROMISE.search(text) or CLAIMED.search(text)):
                     return True
@@ -1103,7 +1103,7 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
             else:
                 message = {**message, "content": written_calls.spoken_text(replayed_text)}
         if not calls:
-            answer = message.get("content") or ""
+            answer = written_calls.without_call_markup(message.get("content") or "")
             if background and context.get("blocked"):
                 # Small models tend to report "please sign in" and stop; pause and ask properly instead.
                 host = context.pop("blocked")
@@ -1156,20 +1156,21 @@ def run_agent(config, state, background=False, chat_approved=None, task=None, cl
                 answer += cut_short_note(config, raw, agent)
             state["groups"] = sorted(requested)
             return {"status": "done", "answer": answer, "tools_used": tool_log, "raw": raw}
-        written = (message.get("content") or "").strip()
+        written = written_calls.without_call_markup(message.get("content") or "").strip()
         if not background and not agent and all(call.get("function", {}).get("name") == "use_tools" for call in calls) \
                 and len(written) >= ANSWERED_ALREADY_CHARS and not ACTION_REQUEST.search(last_request) \
                 and not (PROMISE.search(written) or CLAIMED.search(written)):
             # It answered a plain question, then asked for tools it doesn't need (the next round would only
             # chat about the unlocked tools): keep the answer. Not when it's about to actually do something.
             state["groups"] = sorted(requested)
-            return {"status": "done", "answer": message["content"], "tools_used": tool_log, "raw": raw}
+            return {"status": "done", "answer": written, "tools_used": tool_log, "raw": raw}
         if draft:
             draft.before_tools()
         client_calls = calls if agent else [call for call in calls if call.get("function", {}).get("name") in client_names]
         if client_calls:
             state["groups"] = sorted(requested)
-            return {"status": "client_tools", "calls": client_calls, "content": message.get("content") or "",
+            return {"status": "client_tools", "calls": client_calls,
+                    "content": written_calls.without_call_markup(message.get("content") or ""),
                     "tools_used": tool_log + [c["function"]["name"] for c in client_calls], "raw": raw}
         add({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
         for call in calls:

@@ -46,6 +46,10 @@ def wait(ask, timeout=TIMEOUT):
     return answered and ask.ok
 
 
+def was_answered(ask):
+    return ask._answered.is_set()
+
+
 def cancel_all():
     with _lock:
         ids = list(_pending)
