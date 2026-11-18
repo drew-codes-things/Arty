@@ -1,6 +1,7 @@
 import { answerGuard, flashNewQuestion } from "./answerguard.js";
 import { fill, formatClock, formatDay, formatMoment, fromUnixSeconds, h, sectionHead, showToast, twoStepButton, withBusy } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
+import { MAX_FACT_CHARS, MAX_NAME_CHARS, likelyOwner, matchingEntities } from "./memory.js";
 import { RESULT_PREVIEW_CHARS, capitalised, isWaitingForAnswer, resultPreview, taskActions } from "./tasks.js";
 
 const LECTURE_REFRESH_MS = 15000;
@@ -163,6 +164,61 @@ function eventCard(event, start, api, reload) {
     remove ? h("div", { class: "row" }, remove) : null);
 }
 
+async function changeMemory(work, done, reload) {
+  try {
+    await work();
+    showToast(done);
+  } catch (error) {
+    showToast(error.message);
+  }
+  reload();
+}
+
+function factEditor(entity, fact, api, reload) {
+  const box = h("textarea", { rows: "2", maxlength: String(MAX_FACT_CHARS), "aria-label": `Edit what Arty remembers about ${entity.name}` });
+  box.value = fact;
+  const save = h("button", { type: "submit", class: "button small primary" }, "Save");
+  const cancel = h("button", { type: "button", class: "button small", onclick: reload }, "Cancel");
+  const form = h("form", { class: "memory-edit" }, box, h("div", { class: "row" }, save, cancel));
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    withBusy(save, () => changeMemory(() => api.editMemory(entity.name, fact, box.value.trim()), "Saved", reload));
+  });
+  return form;
+}
+
+function factItem(entity, fact, api, reload) {
+  const item = h("li", { class: "memory-fact" });
+  const edit = h("button", { type: "button", class: "link-button" }, "Edit");
+  edit.addEventListener("click", () => {
+    item.replaceChildren(factEditor(entity, fact, api, reload));
+    item.querySelector("textarea").focus();
+  });
+  const remove = twoStepButton("Delete", "Tap to delete", () => changeMemory(() => api.deleteMemory(entity.name, fact), "Forgotten", reload));
+  item.replaceChildren(h("span", {}, fact), h("div", { class: "row" }, edit, remove));
+  return item;
+}
+
+function entityCard(entity, api, reload) {
+  const forgetAll = twoStepButton("Forget all", "Tap to forget all", () => changeMemory(() => api.deleteMemory(entity.name), "Forgotten", reload));
+  return h("article", { class: "card memory-entity" },
+    h("div", { class: "card-meta" }, h("span", {}, entity.entityType || ""), forgetAll),
+    h("h3", {}, entity.name),
+    h("ul", {}, (entity.observations ?? []).map((fact) => factItem(entity, fact, api, reload))));
+}
+
+function addMemoryForm(entities, api, reload) {
+  const about = h("input", { type: "text", name: "entity", required: true, maxlength: String(MAX_NAME_CHARS), value: likelyOwner(entities) });
+  return simpleForm([
+    field("About", about),
+    field("Arty should remember", h("textarea", { name: "fact", rows: "2", required: true, maxlength: String(MAX_FACT_CHARS), placeholder: "e.g. Supports Bristol Rovers" })),
+  ], "Remember", async ({ entity, fact }) => {
+    await api.addMemory(entity, fact);
+    showToast("Remembered");
+    reload();
+  });
+}
+
 export async function renderMemory(container, api) {
   const reload = () => renderMemory(container, api);
   loading(container, "Memory");
@@ -175,16 +231,12 @@ export async function renderMemory(container, api) {
   const list = h("div");
   const search = h("input", { type: "search", placeholder: "Search memory", "aria-label": "Search memory" });
   const show = () => {
-    const query = search.value.trim().toLowerCase();
-    const matches = entities.filter((entity) => !query || [entity.name, entity.entityType, ...(entity.observations ?? [])]
-      .some((text) => String(text ?? "").toLowerCase().includes(query)));
-    list.replaceChildren(...(matches.length ? matches.map((entity) => h("article", { class: "card memory-entity" },
-      h("div", { class: "card-meta" }, entity.entityType || ""),
-      h("h3", {}, entity.name),
-      h("ul", {}, (entity.observations ?? []).map((observation) => h("li", {}, observation))))) : [h("p", { class: "notice" }, "Nothing found.")]));
+    const matches = matchingEntities(entities, search.value);
+    list.replaceChildren(...(matches.length ? matches.map((entity) => entityCard(entity, api, reload)) : [h("p", { class: "notice" }, "Nothing found.")]));
   };
   search.addEventListener("input", show);
-  fill(container, sectionHead("Memory"), search, h("div", { class: "notice" }, `${entities.length} things Arty remembers.`), list);
+  fill(container, sectionHead("Memory"), addMemoryForm(entities, api, reload), search,
+    h("div", { class: "notice" }, `Arty remembers ${entities.length} ${entities.length === 1 ? "thing" : "things"}. Changes here reach every chat, on every app.`), list);
   show();
   return undefined;
 }

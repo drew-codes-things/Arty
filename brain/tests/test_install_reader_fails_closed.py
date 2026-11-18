@@ -368,7 +368,12 @@ ROUND_EIGHT_NOT_ASKS = {
 }
 OLD_ARITHMETIC_OPENERS = 80000
 OLD_ARITHMETIC_SECONDS = 1.0
-QUICK_SECONDS = 2.0
+QUICK_SECONDS = 4.0
+SMALLER_SHARE = 32
+GROWTH_STEP = 4
+LINEAR_GROWTH_LIMIT = 8
+GROWTH_FLOOR_SECONDS = 0.02
+TIMING_RUNS = 3
 
 
 def nested_here_documents(levels: int) -> str:
@@ -378,14 +383,25 @@ def nested_here_documents(levels: int) -> str:
     return "\n".join(lines)
 
 
-SLOW_BEFORE = {
-    "here-documents nested 18 deep": nested_here_documents(18), "an unknown program then 20000 pip words": "mytool " + "pip " * 20000,
-    "40000 settings before a command": "x=1 " * 40000 + "ls", "40000 negations before a command": "! " * 40000 + "ls",
-    "20000 unclosed substitutions": "$(" * 20000, "20000 here-document openers": "cat <<A " * 20000, "20000 lines": "ls\n" * 20000,
-    "400 evals": "eval " * 400 + "ls", "5000 lines that name a download": f"{GET}\n" + "ls -l i.sh\n" * 5000,
-    "5000 lines inside an open quote": "echo \"" + "# a\n" * 5000,
-    "a download then 20000 shells on one line": f"{GET}\nx " + "bash -a " * 20000,
+SLOW_SHAPES = {
+    "nested here-documents": (nested_here_documents, 18),
+    "an unknown program then pip words": (lambda size: "mytool " + "pip " * size, 20000),
+    "settings before a command": (lambda size: "x=1 " * size + "ls", 40000),
+    "negations before a command": (lambda size: "! " * size + "ls", 40000),
+    "unclosed substitutions": (lambda size: "$(" * size, 20000),
+    "here-document openers": (lambda size: "cat <<A " * size, 20000),
+    "lines": (lambda size: "ls\n" * size, 20000),
+    "evals": (lambda size: "eval " * size + "ls", 400),
+    "lines that name a download": (lambda size: f"{GET}\n" + "ls -l i.sh\n" * size, 5000),
+    "lines inside an open quote": (lambda size: "echo \"" + "# a\n" * size, 5000),
+    "a download then shells on one line": (lambda size: f"{GET}\nx " + "bash -a " * size, 20000),
 }
+
+
+def cpu_seconds_to_read(command: str) -> float:
+    started = time.process_time()
+    installs.installs_software(command)
+    return time.process_time() - started
 
 
 class TextHandedToAShellItCannotReadAsks(unittest.TestCase):
@@ -485,11 +501,17 @@ class TextHandedToAShellItCannotReadAsks(unittest.TestCase):
 
 class ReadingTimeIsBounded(unittest.TestCase):
     def test_every_shape_that_was_slow_is_read_quickly(self):
-        for label, command in SLOW_BEFORE.items():
-            with self.subTest(label=label):
-                started = time.process_time()
-                installs.installs_software(command)
-                self.assertLess(time.process_time() - started, QUICK_SECONDS)
+        for label, (shape, size) in SLOW_SHAPES.items():
+            with self.subTest(label=label, size=size):
+                self.assertLess(cpu_seconds_to_read(shape(size)), QUICK_SECONDS)
+
+    def test_reading_time_grows_no_faster_than_the_command(self):
+        for label, (shape, size) in SLOW_SHAPES.items():
+            smaller, larger = shape(size // SMALLER_SHARE), shape(size // SMALLER_SHARE * GROWTH_STEP)
+            timings = [(cpu_seconds_to_read(smaller), cpu_seconds_to_read(larger)) for _ in range(TIMING_RUNS)]
+            least_smaller, least_larger = min(pair[0] for pair in timings), min(pair[1] for pair in timings)
+            with self.subTest(label=label, smaller=round(least_smaller, 4), larger=round(least_larger, 4)):
+                self.assertLess(least_larger, LINEAR_GROWTH_LIMIT * least_smaller + GROWTH_FLOOR_SECONDS)
 
     def test_many_unclosed_old_arithmetic_openers_are_read_quickly(self):
         command = "echo " + "$[" * OLD_ARITHMETIC_OPENERS

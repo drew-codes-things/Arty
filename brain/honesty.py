@@ -8,7 +8,7 @@ import models
 
 from archive import message_text
 from settings import ARTY_ENGINE_URL
-from reply_rules import TOOL_FAILED, NOT_ACTIONS, LOOK_ONLY_TOOLS, HELD_CALL_RESULTS
+from reply_rules import TOOL_FAILED, is_client_refusal, NOT_ACTIONS, LOOK_ONLY_TOOLS, HELD_CALL_RESULTS
 from steering import LOOKUP_TOOLS
 from memory_facts import prefix_for
 
@@ -69,7 +69,7 @@ def was_held_back(result: str) -> bool:
 
 
 def did_not_work(result: str) -> bool:
-    return bool(TOOL_FAILED.search(result)) or was_held_back(result)
+    return bool(TOOL_FAILED.search(result)) or is_client_refusal(result) or was_held_back(result)
 
 
 def tool_results(conversation: list[dict], whole_conversation: bool = False) -> list[dict]:

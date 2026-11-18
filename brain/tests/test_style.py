@@ -13,8 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import style  # noqa: E402
 
-LINKEDIN = """### Jordan (1w)
-I attended Nutanix NEXT as part of my work experience week.
+POST_START = "Spent the week fixing the garden fence"
+LINKEDIN = f"""### Jordan (1w)
+{POST_START} with my neighbour, and it finally stands straight.
 
 #AI #Infrastructure
 ### Someone else (2w) (repost)
@@ -27,7 +28,7 @@ class Learning(unittest.TestCase):
     def test_posts_are_split_and_reposts_left_out(self):
         posts = style.split_posts(LINKEDIN)
         self.assertEqual(len(posts), 1)
-        self.assertTrue(posts[0].startswith("I attended Nutanix NEXT"))
+        self.assertTrue(posts[0].startswith(POST_START))
 
     def test_short_messages_tests_and_repeats_are_left_out(self):
         picked = style.pick_messages(MESSAGES + [MESSAGES[0]])
@@ -39,10 +40,10 @@ class Learning(unittest.TestCase):
         reply = style.refresh(lambda: (MESSAGES, style.split_posts(LINKEDIN)),
                               lambda prompt: prompts.append(prompt) or "- Casual and friendly\n- British spelling")
         self.assertIn("12 of your messages and 1 of your LinkedIn posts", reply)
-        self.assertIn("LinkedIn post:\nI attended Nutanix NEXT", prompts[0])
+        self.assertIn(f"LinkedIn post:\n{POST_START}", prompts[0])
         note = style.voice_note()
         self.assertIn("correct British English spelling", note)
-        self.assertNotIn("I attended Nutanix NEXT", note)  # small models copy an example's facts into new posts
+        self.assertNotIn(POST_START, note, "small models copy an example's facts into new posts")
         self.assertIn("never invent", note)
         self.assertFalse(style.due())
 

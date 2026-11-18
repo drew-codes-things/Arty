@@ -21,11 +21,11 @@ Store.
 
 | Screen | What it does |
 |---|---|
-| Chat | Chats kept on the phone, a model picker (Arty's models and the solo models), attachments, Arty's files and pictures, read aloud |
+| Chat | Chats kept on the phone, a model picker (Arty Auto first, then each model once; a chat keeps its model), the model and role under each reply, a status line (turns, steps, speed, tokens, cache hit, context), attachments, Arty's files and pictures, read aloud |
 | Updates | Reminders, briefings, task results and alerts as they happen, with Approve / Deny |
 | Tasks | Background tasks: start one, approve, deny, mark done or cancel |
 | Calendar | The next 30 days from Arty and Google; add events in plain words, remove Arty's own |
-| More | Schedules, lectures (record or add a recording; read the notes), memory search, read-aloud, **Notifications** (a switch per kind: email, server, tasks, approvals, reminders, calendar, lectures, Arty's own notices, other; a switched-off kind doesn't pop up or count on the badge but stays in Updates), the keys, **Approved devices** (every computer you approved, with a two-tap **Turn off** and a **Can control Arty CLI** switch), and **Computers** (follow Arty CLI on a computer that ran `/remote`: its transcript, Allow / Deny for its questions, a message box and Stop) |
+| More | Schedules, lectures (record or add a recording; read the notes), memory (search, add, edit and delete what Arty remembers, for every app), read-aloud, **Notifications** (a switch per kind: email, server, tasks, approvals, reminders, calendar, lectures, Arty's own notices, other; a switched-off kind doesn't pop up or count on the badge but stays in Updates), the keys, **Approved devices** (every computer you approved, with a two-tap **Turn off** and a **Can control Arty CLI** switch), and **Computers** (follow Arty CLI on a computer that ran `/remote`: its transcript, Allow / Deny for its questions, a message box and Stop) |
 | Approve a computer | Opened by the link a computer shows when it asks to join (`/ios/?authorise=CODE`): type the code it shows, then Approve or Deny. A failed approve has **Try again**. In a browser with no Arty key it shows the code with a link and a QR code to starfire's Arty devices page (when the brain has `BRAIN_STARFIRE_URL`), or **Paste an API key instead** |
 
 A new question (an approval in Updates or Tasks, or a computer's Allow / Deny) shows a short **New question** flash, and
@@ -66,7 +66,9 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
 | `index.html`, `app.css` | The page and its look (Arty's colours, IBM Plex fonts from the Android app) |
 | `js/api.js` | The brain API: keys on every request, chat jobs with polling, uploads, downloads, announcements |
 | `js/chat.js`, `js/conversations.js` | Chat screen and the chats saved on the phone (same history window as Android) |
+| `js/turnstatus.js` | The model list (Arty Auto first, then each model once), the model and role under each reply, and the status line under the chat box |
 | `js/manage.js`, `js/updates.js`, `js/tasks.js` | Tasks, calendar, schedules, lectures, memory, approved devices and Updates |
+| `js/memory.js` | Search and the default "About" for the Memory page, where facts Arty remembers can be added, edited and deleted |
 | `js/answerguard.js` | The one-second hold and "New question" flash on approval cards |
 | `js/authorise.js` | The "approve this computer" sheet, and the starfire link and QR code when this browser has no key |
 | `js/qr.js`, `js/vendor/qrcode-generator.js` | Draws QR codes as SVG (qrcode-generator 2.0.4, MIT, see `js/vendor/LICENSE-qrcode-generator.txt`) |

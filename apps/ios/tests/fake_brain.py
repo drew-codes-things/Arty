@@ -23,6 +23,12 @@ ANSWER = ("Here's what I found:\n\n- **Weather:** dry, 12C\n- Bins tonight\n\n"
           f"[report.txt](http://192.0.2.13:8443/arty-files/f1/{FILE_TOKEN}/report.txt)\n\n"
           f"![chart](http://192.0.2.13:8443/arty-files/f2/{FILE_TOKEN}/chart.png)\n\n<script>alert(1)</script>")
 
+AUTO_LISTING = {"id": "auto", "name": "Arty Auto", "object": "model",
+                "description": "Picks the model for each message: pictures and videos on looker:7b, code on qwen3:14b, "
+                               "everything else on qwen3:14b with Arty's tools"}
+FAKE_WINDOW = 24576
+FAKE_USAGE = {"prompt_tokens": 6120, "completion_tokens": 88, "context_tokens": 6208, "cached_tokens": 5900, "tokens_per_second": 27.4}
+
 ids = itertools.count(100)
 lock = threading.Lock()
 jobs: dict[str, dict] = {}
@@ -49,6 +55,35 @@ announcements = [
 lectures = [{"id": 1, "title": "Networking week 6", "status": "done", "duration": 3000, "cards": 12, "error": None,
              "created": time.time() - 86400, "notes": "## Subnetting\n- /24 has 254 hosts", "transcript": "..."}]
 memory = {"entities": [{"name": "Sam", "entityType": "person", "observations": ["Plays five-a-side on Thursdays", "Lives nearby"]}]}
+
+
+def fake_memory_edit(action, body):
+    entity = next((e for e in memory["entities"] if e["name"].lower() == str(body.get("entity", "")).lower()), None)
+    if action == "add":
+        if entity is None:
+            memory["entities"].append({"name": body["entity"], "entityType": "topic", "observations": [body["fact"]]})
+        else:
+            entity["observations"].append(body["fact"])
+        return 201, {"entity": body["entity"], "fact": body["fact"]}
+    if entity is None:
+        return 404, {"error": {"message": f"nothing is saved about {body.get('entity')}"}}
+    if action == "edit":
+        entity["observations"] = [body["new"] if fact == body["old"] else fact for fact in entity["observations"]]
+        return 200, {"entity": entity["name"], "fact": body["new"]}
+    if action == "delete" and "fact" in body:
+        entity["observations"].remove(body["fact"])
+        return 200, {"entity": entity["name"], "removed": "fact"}
+    if action == "delete":
+        memory["entities"].remove(entity)
+        return 200, {"entity": entity["name"], "removed": "entity"}
+    return 404, {"error": {"message": "not found"}}
+
+
+def fake_pick(body: dict) -> dict:
+    said = json.dumps((body.get("messages") or [{}])[-1].get("content", "")).lower()
+    auto = body.get("model") == "auto"
+    role = ("code" if "python" in said else "agent" if "weather" in said or "calendar" in said else "chat") if auto else None
+    return {"model": "qwen3:14b", "role": role, "auto": auto, "context_window": FAKE_WINDOW}
 
 
 class FakeBrain(BaseHTTPRequestHandler):
@@ -105,10 +140,10 @@ class FakeBrain(BaseHTTPRequestHandler):
                 return self.send_bytes(PNG_PIXEL, "image/png")
             return self.send_bytes(b"report body", "text/plain")
         if segments == ["v1", "models"]:
-            return self.send_json(200, {"data": [
+            return self.send_json(200, {"auto": AUTO_LISTING, "data": [
                 {"id": "Arty", "object": "model", "model": "qwen3:14b"},
-                {"id": "arty/qwen3:14b", "name": "Arty (qwen3:14b)", "object": "model"},
-                {"id": "solo/side-model:12b", "name": "side-model:12b (on its own: no Arty, no memory)", "object": "model"},
+                {"id": "arty/qwen3:14b", "name": "Arty (qwen3:14b)", "object": "model", "model": "qwen3:14b"},
+                {"id": "solo/side-model:12b", "name": "side-model:12b (on its own: no Arty, no memory)", "object": "model", "model": "side-model:12b"},
             ]})
         if len(segments) == 4 and segments[:3] == ["v1", "chat", "jobs"]:
             with lock:
@@ -117,8 +152,9 @@ class FakeBrain(BaseHTTPRequestHandler):
                     return self.send_json(404, {"error": {"message": "no such chat job"}})
                 job["polls"] += 1
                 if job["polls"] <= POLLS_BEFORE_ANSWER:
-                    return self.send_json(200, {"status": "running", "partial": "Here's what I found:"})
-                return self.send_json(200, {"status": "done", "answer": ANSWER, "tools_used": ["weather", "calendar"]})
+                    return self.send_json(200, {"status": "running", "partial": "Here's what I found:", "arty": job["pick"]})
+                report = {**job["pick"], "steps": 2, "usage": FAKE_USAGE}
+                return self.send_json(200, {"status": "done", "answer": ANSWER, "tools_used": ["weather", "calendar"], "arty": report})
         if segments == ["v1", "announcements"]:
             after = int(query.get("after", ["0"])[0])
             deadline = time.time() + min(float(query.get("wait", ["0"])[0]), MAX_FAKE_WAIT_SECONDS)
@@ -159,10 +195,12 @@ class FakeBrain(BaseHTTPRequestHandler):
             announcements.append({"id": announcements[-1]["id"] + 1, "kind": "alert", "title": body.get("title", "Alert"),
                                   "message": body.get("message", ""), "task_id": None, "actions": [], "created": time.time()})
             return self.send_json(201, {"ok": True})
+        if len(segments) == 3 and segments[:2] == ["v1", "memory"]:
+            return self.send_json(*fake_memory_edit(segments[2], body))
         if segments == ["v1", "chat", "jobs"]:
             job_id = f"job{next(ids)}"
             with lock:
-                jobs[job_id] = {"polls": 0}
+                jobs[job_id] = {"polls": 0, "pick": fake_pick(body)}
             return self.send_json(202, {"id": job_id})
         if segments == ["v1", "tasks"]:
             task = {"id": next(ids), "title": body["instructions"][:40], "instructions": body["instructions"], "status": "queued",

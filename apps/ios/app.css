@@ -247,6 +247,23 @@ h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: 600; letter-spacing: -.012em; }
 .send:hover { background: var(--accent-fill-hover); }
 .send:active { transform: scale(var(--press-scale)); }
 .send:disabled { background: var(--raised); color: var(--faint); cursor: not-allowed; }
+.message-model { color: var(--faint); font-family: var(--mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.status-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px var(--s-3);
+  padding: 0 var(--s-4) var(--s-2); background: var(--bg); color: var(--faint); font-family: var(--mono); font-size: var(--fs-xs);
+}
+.status-bar[hidden] { display: none; }
+.status-part { white-space: nowrap; }
+.status-part.secondary { color: var(--faint); opacity: .85; }
+.context-ring { display: inline-flex; align-items: center; gap: var(--s-1); white-space: nowrap; }
+.context-ring .ring {
+  --used: 0; --ring-colour: var(--muted);
+  width: 12px; height: 12px; border-radius: 50%;
+  background: conic-gradient(var(--ring-colour) calc(var(--used) * 1%), var(--line-strong) 0);
+  -webkit-mask: radial-gradient(circle, transparent 3px, #000 3.5px); mask: radial-gradient(circle, transparent 3px, #000 3.5px);
+}
+.context-ring .ring.warn { --ring-colour: var(--warn); }
+.context-ring .ring.full { --ring-colour: var(--accent); }
 
 input[type="text"], input[type="password"], input[type="search"], textarea, select {
   width: 100%; min-width: 0; min-height: var(--control-h); padding: 0 var(--s-4); border-radius: var(--r-pill); border: 1px solid var(--line-strong);
@@ -358,6 +375,10 @@ input:disabled, textarea:disabled { opacity: .5; }
 .view > .button { width: 100%; margin-bottom: var(--s-2); }
 .memory-entity h3 { font-size: var(--fs-lg); }
 .memory-entity ul { margin: var(--s-2) 0 0; padding-left: 1.25em; color: var(--muted); font-size: var(--fs-md); }
+.memory-fact { margin-bottom: var(--s-2); overflow-wrap: anywhere; }
+.memory-fact .row { gap: 0; }
+.memory-edit { display: grid; gap: var(--s-2); }
+.memory-edit textarea { width: 100%; }
 
 .drawer { position: fixed; inset: 0; z-index: 20; display: flex; }
 .drawer-panel {

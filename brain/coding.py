@@ -13,17 +13,17 @@ ARTEFACT_JOB = (r"returns?|takes|accepts|checks|computes|calculates|converts|par
 FENCED_CODE = re.compile(r"```[\w+#.-]*[ \t]*\n")
 PROBLEM_REPORT = re.compile(
     r"Traceback \(most recent call last\)"
-    r"|^\s*File \"[^\"]+\", line \d+"
+    r"|^[ \t]*File \"[^\"]+\", line \d+"
     r"|\b[A-Z]\w*(?:Error|Exception): \S"
     r"|\b(?:[A-Z][a-z]+){2,}(?:Error|Exception)\b"
-    r"|^\s+at \S+ ?\(.*\.\w+:\d+(?::\d+)?\)"
-    r"|\b[\w./\\-]+\.\w+(?::\d+){1,2}:\s*(?:fatal )?error\b"
-    r"|\b[\w./\\-]+\.\w+\(\d+,\d+\): error\b"
+    r"|^[ \t]+at \S+ ?\(.*\.\w+:\d+(?::\d+)?\)"
+    r"|(?<=[\w./\\-])\.\w+(?::\d+){1,2}:\s*(?:fatal )?error\b"
+    r"|(?<=[\w./\\-])\.\w+\(\d+,\d+\): error\b"
     r"|\berror(?:\[E\d{4}\]| TS\d{4}| CS\d{4}):"
     r"|\bSegmentation fault\b|\bnpm ERR!|\bundefined reference to\b|\bcannot find symbol\b|\bpanic: runtime error\b",
     re.MULTILINE)
 CODE_LINE = re.compile(
-    r"^\s*(?:def \w+\(|class \w+[(:]|function \w*\(|return\b|import \w|from [\w.]+ import\b|#include\b|"
+    r"^[ \t]*(?:def \w+\(|class \w+[(:]|function \w*\(|return\b|import \w|from [\w.]+ import\b|#include\b|"
     r"(?:public|private|protected) \w|(?:const|let|var) \w+ ?=|(?:if|for|while) ?\(.*\)\s*\{|for \w+ in .+:$|"
     r"\}\s*$|SELECT\b.+\bFROM\b)", re.MULTILINE)
 PASTED_CODE_LINES = 2
@@ -41,7 +41,7 @@ WORK_ON_CODE = re.compile(
     r"\b(?:fix|debug|review|refactor|explain|optimi[sz]e|improve|clean up|test)\s+(?:my|this|the following|some|your)\s+code\b"
     r"(?!\s+(?:for|to|of|on)\b)|\b(?:fix|review|explain)\s+the\s+code\s*[?.!:]", re.IGNORECASE)
 ASKS_ABOUT_A_LANGUAGE = re.compile(
-    rf"\b(?:how|what|why|which|explain|show|write|difference|when|can|should)\b[^\n]*?\b(?:in|using|with) (?:{STRICT_LANGUAGES})\b",
+    rf"\b(?:how|what|why|which|explain|show|write|difference|when|can|should)\b[^\n]{{0,200}}?\b(?:in|using|with) (?:{STRICT_LANGUAGES})\b",
     re.IGNORECASE)
 ASKS_FOR_WORK = re.compile(
     r"\b(?:write|create|make|build|generate|fix|debug|refactor|review|explain|optimi[sz]e|improve|rewrite|convert|"
@@ -71,6 +71,16 @@ def asks_for_code_work(text: str) -> bool:
     if not AMBIGUOUS_ARTEFACT_WORD.search(text):
         return False
     return bool(CODING_VERB.search(text)) or (bool(ASKS_FOR_WORK.search(text)) and bool(PROGRAMMING_SIGNAL.search(text)))
+
+
+CLASSIFIED_EDGE_CHARS = 4000
+
+
+def classified_part(text: str | None) -> str:
+    text = text or ""
+    if len(text) <= 2 * CLASSIFIED_EDGE_CHARS:
+        return text
+    return text[:CLASSIFIED_EDGE_CHARS] + "\n" + text[-CLASSIFIED_EDGE_CHARS:]
 
 
 def is_request(text: str | None) -> bool:

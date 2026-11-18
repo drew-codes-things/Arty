@@ -90,6 +90,13 @@ import app.arty.ArtyViewModel
 import app.arty.PendingFile
 import app.arty.R
 import app.arty.core.ArtyClient
+import app.arty.core.TurnReport
+import app.arty.core.TurnStatus
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import app.arty.core.Attachment
 import app.arty.core.ModelOption
 import app.arty.data.Conversation
@@ -142,6 +149,7 @@ private fun ChatLayout(vm: ArtyViewModel, drawer: androidx.compose.material3.Dra
                 else MessageList(vm)
             }
             InputBar(vm)
+            StatusBar(vm)
         }
     }
 }
@@ -149,8 +157,10 @@ private fun ChatLayout(vm: ArtyViewModel, drawer: androidx.compose.material3.Dra
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelSheet(models: List<ModelOption>, current: String, onChoose: (String) -> Unit, onDismiss: () -> Unit) {
-    val main = models.firstOrNull { it.id == Conversation.DEFAULT_MODEL }
-    val shown = models.filter { it.id == Conversation.DEFAULT_MODEL || main == null || main.model.isBlank() || it.model != main.model }
+    val listed = TurnStatus.pickerModels(models)
+    val known = models.any { it.id == current }
+    val missing = ModelOption(current, TurnStatus.modelLabel(models, current) + if (known || models.isEmpty()) "" else " (not available)", "")
+    val shown = if (listed.any { it.id == current }) listed else listed.take(1) + missing + listed.drop(1)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle(color = ArtyColors.LineStrong) },
@@ -159,7 +169,7 @@ private fun ModelSheet(models: List<ModelOption>, current: String, onChoose: (St
             Text("Model", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp))
             Text("Which model Arty thinks with", style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextDim,
                 modifier = Modifier.padding(start = 8.dp, top = 2.dp, bottom = 12.dp))
-            if (shown.isEmpty()) {
+            if (models.isEmpty()) {
                 Text("Arty isn't reachable, so its models can't be listed right now.", style = MaterialTheme.typography.bodyMedium,
                     color = ArtyColors.TextFaint, modifier = Modifier.padding(8.dp))
             }
@@ -178,8 +188,8 @@ private fun ModelRow(model: ModelOption, selected: Boolean, onClick: () -> Unit)
     ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(model.model.ifBlank { model.name }, style = MaterialTheme.typography.titleSmall)
-                if (model.id == Conversation.DEFAULT_MODEL) {
+                Text(model.name, style = MaterialTheme.typography.titleSmall)
+                if (model.id == TurnStatus.AUTO_ID) {
                     Spacer(Modifier.width(8.dp))
                     Text("Default", style = MaterialTheme.typography.labelSmall, color = ArtyColors.SignalText,
                         modifier = Modifier.clip(CircleShape).background(ArtyColors.SignalSoft).padding(horizontal = 7.dp, vertical = 1.dp))
@@ -202,8 +212,7 @@ private fun ChatTopBar(vm: ArtyViewModel, onMenu: () -> Unit) {
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.startCall() else vm.notice = "Calls need microphone access. You can allow it in Settings > Apps > Arty."
     }
-    val chosen = vm.models.firstOrNull { it.id == vm.current.model }
-    val modelName = chosen?.model?.ifBlank { null } ?: if (vm.current.model == Conversation.DEFAULT_MODEL) "Arty" else chosen?.name ?: vm.current.model
+    val modelName = TurnStatus.modelLabel(vm.models, vm.current.model)
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -306,7 +315,7 @@ private fun MessageList(vm: ArtyViewModel) {
             }
         }
         vm.thinkingSince?.let { since ->
-            item(key = THINKING_KEY) { Box(Modifier.arrival(this, arrivals, "$chatId:$THINKING_KEY:$since")) { Thinking(since, vm.partialReply) } }
+            item(key = THINKING_KEY) { Box(Modifier.arrival(this, arrivals, "$chatId:$THINKING_KEY:$since")) { Thinking(since, vm.partialReply, vm.thinkingPick) } }
         }
     }
 }
@@ -345,6 +354,7 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
                 }
                 return@Column
             }
+            ReplyModel(message.report)
             MarkdownText(message.content)
             PhoneAction.fromJson(message.phoneAction)?.let { action ->
                 ArtyOutlinedButton(onClick = { vm.openPhoneAction(action) }, modifier = Modifier.padding(top = 6.dp)) {
@@ -382,7 +392,7 @@ private fun ArtyAvatar() {
 }
 
 @Composable
-private fun Thinking(since: Long, partial: String?) {
+private fun Thinking(since: Long, partial: String?, pick: TurnReport?) {
     var elapsed by remember { mutableLongStateOf(0L) }
     LaunchedEffect(since) {
         while (true) {
@@ -399,6 +409,7 @@ private fun Thinking(since: Long, partial: String?) {
                 Spacer(Modifier.width(10.dp))
                 Text("writing$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.TextDim)
             }
+            Column(Modifier.padding(start = 40.dp)) { ReplyModel(pick) }
             MarkdownText(partial)
         }
         return
@@ -408,6 +419,57 @@ private fun Thinking(since: Long, partial: String?) {
         Spacer(Modifier.width(10.dp))
         Text("thinking$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.TextDim, modifier = Modifier.width(96.dp))
         Text("${elapsed}s", style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) { ReplyModel(pick) }
+    }
+}
+
+@Composable
+private fun ReplyModel(report: TurnReport?) {
+    val label = TurnStatus.replyModelLabel(report)
+    if (label.isEmpty()) return
+    Text(label, style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(bottom = 4.dp))
+}
+
+private const val CONTEXT_WARN_PERCENT = 75
+private const val CONTEXT_FULL_PERCENT = 90
+private const val WHOLE_TURN_DEGREES = 360f
+private const val TOP_DEGREES = -90f
+private const val WHOLE_PERCENT = 100f
+
+@Composable
+private fun StatusBar(vm: ArtyViewModel) {
+    val stats = TurnStatus.chatStats(vm.current.messages.map { it.role to it.report })
+    if (stats.turns == 0) return
+    Row(
+        Modifier.fillMaxWidth().background(ArtyColors.Surface).padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            TurnStatus.statusLine(stats).forEach { line ->
+                Text(line, style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        stats.contextUsed?.let { used -> ContextRing(used) }
+    }
+}
+
+@Composable
+private fun ContextRing(used: Int) {
+    val shade = when {
+        used >= CONTEXT_FULL_PERCENT -> ArtyColors.Signal
+        used >= CONTEXT_WARN_PERCENT -> ArtyColors.Caution
+        else -> ArtyColors.TextDim
+    }
+    Row(Modifier.semantics(mergeDescendants = true) { contentDescription = "Context window $used% full" }, verticalAlignment = Alignment.CenterVertically) {
+        Canvas(Modifier.size(16.dp)) {
+            val line = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+            drawArc(ArtyColors.Line, 0f, WHOLE_TURN_DEGREES, useCenter = false, style = line)
+            drawArc(shade, TOP_DEGREES, WHOLE_TURN_DEGREES * used / WHOLE_PERCENT, useCenter = false, style = line)
+        }
+        Spacer(Modifier.width(6.dp))
+        Text("$used%", style = MaterialTheme.typography.labelSmall, color = shade)
     }
 }
 

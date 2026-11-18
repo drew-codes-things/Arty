@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
@@ -50,6 +51,8 @@ import app.arty.core.Announcement
 import app.arty.core.ArtyTask
 import app.arty.core.CalendarEvent
 import app.arty.core.Lecture
+import app.arty.core.MemoryEntity
+import app.arty.core.MemorySearch
 import app.arty.core.Schedule
 import app.arty.lectures.LectureRecorder
 import java.io.File
@@ -95,8 +98,15 @@ internal fun EmptyState(text: String) {
 }
 
 @Composable
-private fun TextInputDialog(title: String, fields: List<Pair<String, String>>, confirm: String, onDismiss: () -> Unit, onConfirm: (List<String>) -> Unit) {
-    var values by remember { mutableStateOf(fields.map { "" }) }
+private fun TextInputDialog(
+    title: String,
+    fields: List<Pair<String, String>>,
+    confirm: String,
+    onDismiss: () -> Unit,
+    initial: List<String> = fields.map { "" },
+    onConfirm: (List<String>) -> Unit,
+) {
+    var values by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = MaterialTheme.typography.titleMedium) },
@@ -345,40 +355,101 @@ private fun ScheduleCard(schedule: Schedule, vm: ArtyViewModel, modifier: Modifi
     }
 }
 
+private sealed interface MemoryChange {
+    data object Adding : MemoryChange
+    data class Editing(val entity: MemoryEntity, val fact: String) : MemoryChange
+    data class Deleting(val entity: MemoryEntity, val fact: String?) : MemoryChange
+}
+
 @Composable
 fun MemoryScreen(vm: ArtyViewModel) {
     var filter by remember { mutableStateOf("") }
+    var change by remember { mutableStateOf<MemoryChange?>(null) }
     LaunchedEffect(Unit) { vm.refreshMemory() }
-    val shown = vm.memory.filter { entity ->
-        filter.isBlank() || entity.name.contains(filter, ignoreCase = true) || entity.observations.any { it.contains(filter, ignoreCase = true) }
-    }
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader("What Arty knows", vm.loading, vm::refreshMemory)
-        OutlinedTextField(
-            value = filter, onValueChange = { filter = it },
-            placeholder = { Text("Search memory") },
-            singleLine = true,
-            shape = CircleShape,
-            colors = artyFieldColors(),
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-        )
-        if (shown.isEmpty() && !vm.loading) EmptyState(if (filter.isBlank()) "Arty hasn't remembered anything yet." else "Nothing matches \"$filter\".")
-        val arrivals = rememberArrivals()
-        LazyColumn(contentPadding = PaddingValues(12.dp, 0.dp, 12.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(shown, key = { it.name }) { entity ->
-                Card(ArtyColors.Caution, Modifier.arrival(this, arrivals, entity.name)) {
-                    Text(entity.type.replaceFirstChar(Char::titlecase), style = KickerStyle, color = ArtyColors.Caution)
-                    Text(entity.name, style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.size(6.dp))
-                    entity.observations.forEach { observation ->
-                        Row(Modifier.padding(vertical = 2.dp)) {
-                            Text("•", color = ArtyColors.Signal, modifier = Modifier.width(16.dp))
-                            Text(observation, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
+    val shown = MemorySearch.matching(vm.memory, filter)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader("What Arty knows", vm.loading, vm::refreshMemory)
+            OutlinedTextField(
+                value = filter, onValueChange = { filter = it },
+                placeholder = { Text("Search memory") },
+                singleLine = true,
+                shape = CircleShape,
+                colors = artyFieldColors(),
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+            )
+            if (shown.isEmpty() && !vm.loading) EmptyState(if (filter.isBlank()) "Arty hasn't remembered anything yet. Tap + to add something." else "Nothing matches \"$filter\".")
+            val arrivals = rememberArrivals()
+            LazyColumn(contentPadding = PaddingValues(12.dp, 0.dp, 12.dp, 88.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(shown, key = { it.name }) { entity ->
+                    MemoryCard(entity, Modifier.arrival(this, arrivals, entity.name), onChange = { change = it })
                 }
             }
         }
+        FloatingActionButton(
+            onClick = { change = MemoryChange.Adding },
+            containerColor = ArtyColors.Signal, contentColor = ArtyColors.OnSignal,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        ) { Icon(Icons.Filled.Add, "Add to memory") }
+    }
+    MemoryDialog(vm, change, onDone = { change = null })
+}
+
+@Composable
+private fun MemoryCard(entity: MemoryEntity, modifier: Modifier, onChange: (MemoryChange) -> Unit) {
+    Card(ArtyColors.Caution, modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(entity.type.replaceFirstChar(Char::titlecase), style = KickerStyle, color = ArtyColors.Caution)
+                Text(entity.name, style = MaterialTheme.typography.titleSmall)
+            }
+            ArtyIconButton(onClick = { onChange(MemoryChange.Deleting(entity, null)) }) {
+                Icon(Icons.Filled.Delete, "Forget everything about ${entity.name}", tint = ArtyColors.TextFaint)
+            }
+        }
+        Spacer(Modifier.size(6.dp))
+        entity.observations.forEach { fact ->
+            Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("•", color = ArtyColors.Signal, modifier = Modifier.width(16.dp))
+                Text(fact, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                ArtyIconButton(onClick = { onChange(MemoryChange.Editing(entity, fact)) }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Edit, "Edit", tint = ArtyColors.TextFaint, modifier = Modifier.size(18.dp))
+                }
+                ArtyIconButton(onClick = { onChange(MemoryChange.Deleting(entity, fact)) }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Delete, "Delete", tint = ArtyColors.TextFaint, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryDialog(vm: ArtyViewModel, change: MemoryChange?, onDone: () -> Unit) {
+    when (change) {
+        null -> Unit
+        MemoryChange.Adding -> TextInputDialog(
+            "Add to Arty's memory",
+            listOf("About" to "e.g. Rowan, or a person, place or project", "Arty should remember" to "e.g. Supports Bristol Rovers"),
+            "Remember",
+            onDismiss = onDone,
+            initial = listOf(MemorySearch.likelyOwner(vm.memory), ""),
+            onConfirm = { vm.addMemory(it[0].take(MemorySearch.MAX_NAME_CHARS), it[1].take(MemorySearch.MAX_FACT_CHARS)); onDone() },
+        )
+        is MemoryChange.Editing -> TextInputDialog(
+            "Edit what Arty remembers about ${change.entity.name}",
+            listOf("Fact" to ""),
+            "Save",
+            onDismiss = onDone,
+            initial = listOf(change.fact),
+            onConfirm = { vm.editMemory(change.entity, change.fact, it[0].take(MemorySearch.MAX_FACT_CHARS)); onDone() },
+        )
+        is MemoryChange.Deleting -> AlertDialog(
+            onDismissRequest = onDone,
+            title = { Text(if (change.fact == null) "Forget everything about ${change.entity.name}?" else "Forget this?") },
+            text = { Text(change.fact ?: "All ${change.entity.observations.size} facts go, for every chat on every app.") },
+            confirmButton = { ArtyTextButton("Forget", onClick = { vm.deleteMemory(change.entity, change.fact); onDone() }) },
+            dismissButton = { ArtyTextButton("Keep", onClick = onDone, colour = ArtyColors.TextDim) },
+        )
     }
 }
 

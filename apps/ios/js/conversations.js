@@ -4,6 +4,7 @@ export const HISTORY_STEP = 8;
 export const MAX_CONVERSATIONS = 100;
 export const DEFAULT_MODEL = "Arty";
 export const RETIRED_MAIN_MODEL = "assistant-core";
+export const NEW_CHAT_MODEL = "auto";
 
 export const CONVERSATIONS_KEY = "arty.conversations";
 const ID_BYTES = 16;
@@ -32,8 +33,18 @@ export function titleFor(text, attachments = []) {
   return source.slice(0, TITLE_LENGTH);
 }
 
+const ENTRIES_NOW_AUTO = new Set([DEFAULT_MODEL, RETIRED_MAIN_MODEL]);
+
+function currentModelName(model) {
+  return ENTRIES_NOW_AUTO.has(model) ? NEW_CHAT_MODEL : model;
+}
+
+export function newChatModel(preferences) {
+  return currentModelName(preferences?.modelChoice) || NEW_CHAT_MODEL;
+}
+
 function withCurrentModelName(conversation) {
-  return conversation?.model === RETIRED_MAIN_MODEL ? { ...conversation, model: DEFAULT_MODEL } : conversation;
+  return ENTRIES_NOW_AUTO.has(conversation?.model) ? { ...conversation, model: NEW_CHAT_MODEL } : conversation;
 }
 
 export class ConversationStore {
@@ -65,7 +76,7 @@ export class ConversationStore {
     return this.readAll().find((conversation) => conversation.id === id) ?? null;
   }
 
-  create(model = DEFAULT_MODEL) {
+  create(model = NEW_CHAT_MODEL) {
     return { id: this.newId(), title: "New chat", model, messages: [], updated: this.now() };
   }
 

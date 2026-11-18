@@ -1,13 +1,16 @@
-import { ConversationStore, historyToSend, randomId, titleFor } from "./conversations.js";
+import { ConversationStore, historyToSend, newChatModel, randomId, titleFor } from "./conversations.js";
 import { h, showToast } from "./dom.js";
 import { fileNameFromPath, mediaKind } from "./links.js";
 import { renderMarkdown, speakableText } from "./markdown.js";
 import { phoneLink, splitPhoneAction } from "./phone.js";
 import { loadPreferences, savePreferences } from "./settings.js";
+import { chatStats, modelLabel, pickerModels, replyModelLabel, statusLine } from "./turnstatus.js";
 
 const THINKING_TICK_MS = 1000;
 const SPEECH_LANGUAGE = "en-GB";
 const MAX_COMPOSER_HEIGHT = 160;
+const RING_WARN_PERCENT = 75;
+const RING_FULL_PERCENT = 90;
 
 const sendIcon = () => h("span", { "aria-hidden": "true" }, "↑");
 
@@ -39,12 +42,13 @@ export class ChatView {
       event.preventDefault();
       this.send();
     });
-    container.replaceChildren(h("div", { class: "model-row" }, h("label", { for: "model" }, "Model"), this.modelSelect), this.messageList, composer);
+    this.statusBar = h("div", { class: "status-bar", "aria-label": "Chat status", hidden: true });
+    container.replaceChildren(h("div", { class: "model-row" }, h("label", { for: "model" }, "Model"), this.modelSelect), this.messageList, composer, this.statusBar);
   }
 
   start() {
     const { lastChat } = loadPreferences(this.storage);
-    this.current = (lastChat && this.store.get(lastChat)) || this.store.create();
+    this.current = (lastChat && this.store.get(lastChat)) || this.store.create(newChatModel(loadPreferences(this.storage)));
     this.render();
     this.loadModels();
     this.resumePendingTurn();
@@ -60,15 +64,19 @@ export class ChatView {
   }
 
   renderModels() {
-    const options = this.models.map((model) => h("option", { value: model.id }, model.name));
-    if (!this.models.some((model) => model.id === this.current.model)) {
-      options.unshift(h("option", { value: this.current.model }, `${this.current.model}${this.models.length ? " (not available)" : ""}`));
+    const choices = pickerModels(this.models);
+    const options = choices.map((model) => h("option", { value: model.id, title: model.description || null }, model.name));
+    if (!choices.some((model) => model.id === this.current.model)) {
+      const known = this.models.some((model) => model.id === this.current.model);
+      const label = modelLabel(this.models, this.current.model);
+      options.splice(1, 0, h("option", { value: this.current.model }, `${label}${known || !this.models.length ? "" : " (not available)"}`));
     }
     this.modelSelect.replaceChildren(...options);
     this.modelSelect.value = this.current.model;
   }
 
   chooseModel(model) {
+    savePreferences(this.storage, { modelChoice: model });
     this.current = { ...this.current, model };
     if (this.current.messages.length) this.current = this.store.save(this.current);
   }
@@ -86,7 +94,7 @@ export class ChatView {
   }
 
   newChat() {
-    this.current = this.store.create(this.current?.model);
+    this.current = this.store.create(newChatModel(loadPreferences(this.storage)));
     this.render();
   }
 
@@ -168,7 +176,7 @@ export class ChatView {
   }
 
   beginTurn(conversationId) {
-    this.turn = { conversationId, partial: "", started: Date.now() };
+    this.turn = { conversationId, partial: "", pick: null, started: Date.now() };
     clearInterval(this.tick);
     this.tick = setInterval(() => this.updateElapsed(), THINKING_TICK_MS);
     this.render();
@@ -180,9 +188,16 @@ export class ChatView {
         this.turn.partial = partial;
         if (this.current.id === conversationId) this.render();
       },
+      onPick: (pick) => {
+        if (this.turn.pick?.model === pick.model && this.turn.pick?.role === pick.role) return;
+        this.turn.pick = pick;
+        if (this.current.id === conversationId) this.render();
+      },
     });
     const { text, action } = result.failed ? { text: result.text, action: null } : splitPhoneAction(result.text);
-    this.finishTurn(conversationId, { role: "assistant", content: text, failed: result.failed, tools: result.toolsUsed ?? [], phone: action });
+    this.finishTurn(conversationId, {
+      role: "assistant", content: text, failed: result.failed, tools: result.toolsUsed ?? [], phone: action, ...(result.arty ? { arty: result.arty } : {}),
+    });
   }
 
   resumePendingTurn() {
@@ -218,8 +233,29 @@ export class ChatView {
     if (items.length === 0) items.push(this.emptyState());
     this.messageList.replaceChildren(...items);
     this.sendButton.disabled = this.busy;
+    this.renderStatus();
     this.updateElapsed();
     requestAnimationFrame(() => { this.messageList.scrollTop = this.messageList.scrollHeight; });
+  }
+
+  renderStatus() {
+    const stats = chatStats(this.current.messages);
+    if (stats.turns === 0) {
+      this.statusBar.hidden = true;
+      return;
+    }
+    const parts = statusLine(stats).map((line, index) => h("span", { class: index ? "status-part secondary" : "status-part" }, line));
+    if (Number.isInteger(stats.contextUsed)) parts.push(this.contextRing(stats.contextUsed));
+    this.statusBar.replaceChildren(...parts);
+    this.statusBar.hidden = false;
+  }
+
+  contextRing(percent) {
+    const level = percent >= RING_FULL_PERCENT ? " full" : percent >= RING_WARN_PERCENT ? " warn" : "";
+    const ring = h("span", { class: `ring${level}`, "aria-hidden": "true" });
+    ring.style.setProperty("--used", String(percent));
+    return h("span", { class: "context-ring", title: `Context window ${percent}% full`, "aria-label": `Context window ${percent}% full` },
+      ring, h("span", {}, `${percent}%`));
   }
 
   emptyState() {
@@ -230,9 +266,11 @@ export class ChatView {
   thinkingElement() {
     const partial = h("div", { class: "bubble" });
     partial.innerHTML = renderMarkdown(splitPhoneAction(this.turn.partial).text);
+    const pickLabel = replyModelLabel(this.turn.pick);
     return h("div", { class: "thinking" },
       h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
       h("span", { class: "elapsed" }, "Thinking..."),
+      pickLabel ? h("span", { class: "message-model" }, pickLabel) : null,
       this.turn.partial ? partial : null);
   }
 
@@ -250,7 +288,9 @@ export class ChatView {
       h("button", { type: "button", class: "link-button", onclick: () => this.copy(message.content) }, "Copy"),
     ];
     if (message.failed && isLast && !this.turn) actions.push(h("button", { type: "button", class: "link-button accent", onclick: () => this.retry() }, "Retry"));
+    const modelLabel = replyModelLabel(message.arty);
     return h("div", { class: `message assistant${message.failed ? " failed" : ""}` },
+      modelLabel ? h("div", { class: "message-model" }, modelLabel) : null,
       bubble,
       message.phone ? this.phoneActionElement(message.phone) : null,
       message.tools?.length ? h("div", { class: "message-tools" }, message.tools.map((tool) => h("span", { class: "chip" }, tool))) : null,

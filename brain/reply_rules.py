@@ -109,6 +109,31 @@ TOOL_META_SENTENCE = re.compile(r"[^.!?\n]*(\b(none of the|the provided|the avai
                                 r"[^.!?\n]*[.!?:]?", re.I)
 # A tool result that says it didn't work: the start of hub.call's errors, MCP errors and native refusals.
 TOOL_FAILED = re.compile(r"^\W*(unknown tool|tool error|tool unavailable|error\b|failed\b|blocked\b|(i )?(couldn't|could not|can't|cannot)\b)", re.I)
+ANY_TEXT = "{any}"
+CLIENT_REFUSAL_TEXTS = (
+    "The user didn't allow that, so it wasn't done. Don't try another way round it; say so and ask what they'd like.",
+    "The user didn't allow that, so it wasn't done. They said what to do instead: {any}. Do that, and don't try another "
+    "way round what they refused.",
+    "Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan step by step "
+    "and ask the user to switch plan mode off (/mode default) to carry it out.",
+    "Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan step by step "
+    "with present_plan so the user can approve it and switch plan mode off.",
+    "A permission rule in the settings forbids this, so it wasn't done. Don't try another way round it; tell the user.",
+    "A permission rule in the settings forbids some commands, and this command hides which programs it runs from that "
+    "rule ({any}), so it wasn't run. If it is allowed, write it again as plain words without those; don't try another "
+    "way round the rule.",
+)
+
+
+def refusal_pattern(text: str) -> str:
+    return re.escape(text).replace(re.escape(ANY_TEXT), ".+").replace("'", "['’]")
+
+
+CLIENT_REFUSED = re.compile("|".join(map(refusal_pattern, CLIENT_REFUSAL_TEXTS)), re.I | re.DOTALL)
+
+
+def is_client_refusal(result: str) -> bool:
+    return bool(CLIENT_REFUSED.fullmatch(result.strip()))
 PRIVATE_CALL_NOT_RUN = ("Not run: this call held part of Arty's own private instructions, and they are never written, sent "
                         "or run. Nothing was done. Make the call again without that text.")
 SIBLING_CALL_NOT_RUN = ("Not run: another call in the same step held part of Arty's own private instructions, so nothing in "

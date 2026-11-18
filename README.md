@@ -537,7 +537,6 @@ A full run of 17 test questions passed 16; everything left over passed when re-t
 cd brain && python3 -m unittest discover -s tests
 (cd hub && /opt/ai-hub/bin/python -m unittest discover -s tests)   # needs mcp 2
 python3 -m pytest -q mcp voice/tests tests arty-pc chat-bots   # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
-(cd downloads && python3 -m unittest discover -p 'test_*.py')
 (cd code-runner && RUNNER_URL=http://<runner address>:8790 RUNNER_TOKEN=<the token> python3 -m unittest discover -s tests)   # live tests skip without RUNNER_URL
 ARTY_URL=http://<AI_ADDRESS>:8081/v1 ARTY_KEY=... python3 tests/e2e_battery.py   # scored eval against the live brain, see --help
 cd apps/ios && node --test tests/

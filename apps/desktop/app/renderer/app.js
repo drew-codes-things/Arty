@@ -280,13 +280,20 @@ function handle(event, stream) {
       add('error', event.message);
       if (callState.on) hangUp();
       break;
+    case 'numbers':
+      stream.numbers = event.arty;
+      break;
     case 'done':
       stream.replying = false;
       showMedia(stream.reply);
+      labelReply(stream.reply, stream.numbers);
       if (event.reply) notifyIfAway(event.reply);
+      refreshStatus();
       break;
     case 'interrupted':
       stream.replying = false;
+      labelReply(stream.reply, stream.numbers);
+      refreshStatus();
       break;
     default:
       break;
@@ -499,8 +506,8 @@ function modelOption(model, current) {
   text.className = 'model-text';
   const title = document.createElement('span');
   title.className = 'model-title';
-  title.textContent = model.model || model.name;
-  if (model.id === 'Arty') {
+  title.textContent = model.name;
+  if (model.id === AUTO_MODEL_ID) {
     const tag = document.createElement('span');
     tag.className = 'model-tag';
     tag.textContent = 'Default';
@@ -508,7 +515,7 @@ function modelOption(model, current) {
   }
   const detail = document.createElement('span');
   detail.className = 'model-detail';
-  detail.textContent = model.description || model.name;
+  detail.textContent = model.description || model.model || model.name;
   text.append(title, detail);
   const tick = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   tick.setAttribute('viewBox', '0 0 24 24');
@@ -519,18 +526,18 @@ function modelOption(model, current) {
   return option;
 }
 
-function showModel(model) {
-  $('model-name').textContent = model ? (model.model || model.name) : 'Arty';
+const AUTO_MODEL_ID = 'auto';
+
+function showModel(model, id) {
+  $('model-name').textContent = model ? model.name : (id === AUTO_MODEL_ID ? AUTO_MODEL_NAME : id || AUTO_MODEL_NAME);
 }
 
 async function loadModels() {
   try {
     const { models, current } = await (await api(`/models`)).json();
+    showModel(models.find((model) => model.id === current), current);
     if (!models.length) return;
-    const main = models.find((model) => model.id === 'Arty');
-    const shown = models.filter((model) => model.id === 'Arty' || !main?.model || model.model !== main.model);
-    $('model-menu').replaceChildren(...shown.map((model) => modelOption(model, current)));
-    showModel(models.find((model) => model.id === current) || main);
+    $('model-menu').replaceChildren(...models.map((model) => modelOption(model, current)));
     modelsLoaded = true;
   } catch { /* shown as offline by refreshHealth */ }
 }
@@ -720,15 +727,148 @@ async function showCalendar() {
 function showView(view) {
   $('updates').hidden = view !== 'updates';
   $('calendar').hidden = view !== 'calendar';
+  $('memory').hidden = view !== 'memory';
   log.hidden = view !== null;
   $('upd').classList.toggle('on', view === 'updates');
   $('cal').classList.toggle('on', view === 'calendar');
+  $('mem').classList.toggle('on', view === 'memory');
   if (view === 'updates') showUpdates();
   if (view === 'calendar') showCalendar();
+  if (view === 'memory') showMemory();
 }
 
 $('cal').addEventListener('click', () => showView($('calendar').hidden ? 'calendar' : null));
 $('upd').addEventListener('click', () => showView($('updates').hidden ? 'updates' : null));
+$('mem').addEventListener('click', () => showView($('memory').hidden ? 'memory' : null));
+
+const CONFIRM_MS = 3000;
+const MAX_FACT_CHARS = 300;
+let memoryEntities = [];
+
+function memoryStatus(text) {
+  $('memory-status').textContent = text;
+  $('memory-status').hidden = !text;
+}
+
+async function changeMemory(action, change) {
+  try {
+    const response = await api(`/memory/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
+    });
+    const answer = await response.json().catch(() => ({}));
+    memoryStatus(response.ok ? '' : answer.error?.message || 'Arty couldn’t change its memory.');
+    return response.ok;
+  } catch {
+    memoryStatus('Couldn’t reach the local Arty service.');
+    return false;
+  } finally {
+    await showMemory();
+  }
+}
+
+function textButton(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'text-button';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function confirmingButton(label, confirmLabel, onConfirm) {
+  let armed = false;
+  const button = textButton(label, () => {
+    if (armed) { onConfirm(); return; }
+    armed = true;
+    button.textContent = confirmLabel;
+    button.classList.add('confirm');
+    setTimeout(() => { armed = false; button.textContent = label; button.classList.remove('confirm'); }, CONFIRM_MS);
+  });
+  return button;
+}
+
+function factEditor(entity, fact) {
+  const form = document.createElement('form');
+  form.className = 'memory-edit';
+  const box = document.createElement('input');
+  box.value = fact;
+  box.maxLength = MAX_FACT_CHARS;
+  box.setAttribute('aria-label', `Edit what Arty remembers about ${entity.name}`);
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'text-button';
+  save.textContent = 'Save';
+  form.append(box, save, textButton('Cancel', () => renderMemory()));
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    changeMemory('edit', { entity: entity.name, old: fact, new: box.value.trim() });
+  });
+  return form;
+}
+
+function factRow(entity, fact) {
+  const item = document.createElement('li');
+  item.className = 'memory-fact';
+  const text = document.createElement('span');
+  text.textContent = fact;
+  const actions = document.createElement('span');
+  actions.className = 'fact-actions';
+  actions.append(
+    textButton('Edit', () => { item.replaceChildren(factEditor(entity, fact)); item.querySelector('input').focus(); }),
+    confirmingButton('Delete', 'Sure?', () => changeMemory('delete', { entity: entity.name, fact })),
+  );
+  item.append(text, actions);
+  return item;
+}
+
+function memoryCard(entity) {
+  const card = document.createElement('div');
+  card.className = 'memory-card';
+  const head = document.createElement('div');
+  head.className = 'memory-head';
+  const name = document.createElement('span');
+  name.className = 'what';
+  name.textContent = entity.name;
+  const kind = document.createElement('span');
+  kind.className = 'more';
+  kind.textContent = entity.entityType || '';
+  head.append(name, kind, confirmingButton('Forget all', 'Forget all of it?', () => changeMemory('delete', { entity: entity.name })));
+  const facts = document.createElement('ul');
+  facts.append(...(entity.observations ?? []).map((fact) => factRow(entity, fact)));
+  card.append(head, facts);
+  return card;
+}
+
+function renderMemory() {
+  const shown = matchingEntities(memoryEntities, $('memory-search').value);
+  if (shown.length) {
+    $('memory-list').replaceChildren(...shown.map(memoryCard));
+    return;
+  }
+  const empty = document.createElement('div');
+  empty.className = 'empty';
+  empty.textContent = memoryEntities.length ? 'Nothing matches.' : 'Arty hasn’t remembered anything yet. Add something above.';
+  $('memory-list').replaceChildren(empty);
+}
+
+async function showMemory() {
+  try {
+    const answer = await (await api('/memory')).json();
+    memoryEntities = answer.entities ?? [];
+    if (answer.error) memoryStatus(answer.error);
+  } catch {
+    memoryStatus('Couldn’t load Arty’s memory.');
+  }
+  if (!$('memory-about').value) $('memory-about').value = likelyOwner(memoryEntities);
+  renderMemory();
+}
+
+$('memory-search').addEventListener('input', renderMemory);
+$('memory-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const fact = $('memory-fact').value.trim();
+  if (await changeMemory('add', { entity: $('memory-about').value.trim(), fact })) $('memory-fact').value = '';
+});
 
 // ---------- updates ----------
 
@@ -826,6 +966,7 @@ $('forget').addEventListener('click', async () => {
   await api(`/reset`, { method: 'POST' }).catch(() => {});
   log.replaceChildren();
   showEmpty();
+  showStatus([]);
 });
 
 $('hide').addEventListener('click', () => window.arty?.hide());
@@ -862,6 +1003,35 @@ window.arty?.onTransparency((solidity) => {
   document.body.classList.toggle('see-through', solidity < 1);
 });
 
+function labelReply(element, numbers) {
+  const label = replyModelLabel(numbers);
+  if (!element || !label) return;
+  const tag = document.createElement('div');
+  tag.className = 'msg-model';
+  tag.textContent = label;
+  element.before(tag);
+}
+
+function showStatus(messages) {
+  const stats = chatStats(messages);
+  $('status-bar').hidden = stats.turns === 0;
+  $('status-text').textContent = statusLine(stats);
+  const ring = $('status-ring');
+  const used = stats.contextUsed;
+  ring.hidden = !Number.isInteger(used);
+  if (ring.hidden) return;
+  ring.className = `context-ring ${contextLevel(used)}`;
+  ring.title = `Context window ${used}% full`;
+  ring.setAttribute('aria-label', ring.title);
+  ring.querySelector('.ring').style.setProperty('--used', String(used));
+  $('status-ring-text').textContent = `${used}%`;
+}
+
+async function refreshStatus() {
+  const answer = await api(`/history`).then((response) => response.json()).catch(() => null);
+  if (answer) showStatus(answer.messages ?? []);
+}
+
 // ---------- start ----------
 
 function showEmpty() {
@@ -879,7 +1049,9 @@ async function loadHistory() {
       if (typeof message.content !== 'string' || !message.content) continue;
       const element = add(message.role === 'user' ? 'you' : 'arty', message.content);
       if (message.role !== 'user') showMedia(element);
+      if (message.role !== 'user') labelReply(element, message.arty);
     }
+    showStatus(messages);
     return true;
   } catch {
     return false;

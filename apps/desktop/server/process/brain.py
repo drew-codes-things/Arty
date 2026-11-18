@@ -25,13 +25,19 @@ _brain = _config.get("brain") or {}
 API_KEY = str(_brain.get("api_key") or "")
 MAIN_MODEL = "Arty"
 RETIRED_MAIN_MODEL = "assistant-core"
+AUTO_MODEL = "auto"
+AUTO_NAME = "Arty Auto"
+AUTO_HINT = "Picks the best model for each message"
+NOW_AUTO = {MAIN_MODEL, RETIRED_MAIN_MODEL, ""}
+NAMED_BY_MODEL = ("arty/", "solo/")
+MEMORY_ACTIONS = {"add", "edit", "delete"}
 
 
 def as_current_name(model_id):
-    return MAIN_MODEL if model_id == RETIRED_MAIN_MODEL else model_id
+    return AUTO_MODEL if model_id in NOW_AUTO else model_id
 
 
-MODEL = as_current_name(str(_brain.get("model") or MAIN_MODEL))
+MODEL = as_current_name(str(_brain.get("model") or AUTO_MODEL))
 CLIENT_NAME = "desktop"
 TIMEOUT_SECONDS = float(_brain.get("timeout_seconds", 600))
 # The conversation sent with each message: HISTORY_TURNS to HISTORY_TURNS + HISTORY_STEP_TURNS exchanges.
@@ -94,6 +100,26 @@ class Activity(str):
         return piece
 
 
+class TurnNumbers(str):
+    def __new__(cls, report):
+        piece = super().__new__(cls, "")
+        piece.report = report
+        return piece
+
+
+def turn_numbers(reports, computer_steps):
+    known = [report for report in reports if isinstance(report, dict)]
+    if not known:
+        return None
+    combined = {key: known[0][key] for key in ("model", "role", "auto", "context_window") if key in known[0]}
+    combined["steps"] = sum(int(report.get("steps") or 0) for report in known) + computer_steps
+    measured = [report for report in known if isinstance(report.get("usage"), dict)]
+    if measured:
+        combined["usage"] = measured[-1]["usage"]
+        combined["context_window"] = measured[-1].get("context_window", combined.get("context_window"))
+    return combined
+
+
 # ---------- history ----------
 
 def _history_path():
@@ -120,13 +146,15 @@ def _save_history(messages):
         tmp.replace(path)
 
 
-def save_turn(user_text, reply, actions=()):
+def save_turn(user_text, reply, actions=(), numbers=None):
     """Keeps the exchange as the user heard it (a cut-off reply is saved cut off)."""
     if not user_text:
         return
     answer = {"role": "assistant", "content": reply or "(no reply)"}
     if actions:
         answer["actions"] = [str(action)[:MAX_SAVED_ACTION_CHARS] for action in list(actions)[:MAX_SAVED_ACTIONS]]
+    if numbers:
+        answer["arty"] = dict(numbers)
     history = load_history() + [{"role": "user", "content": user_text}, answer]
     _save_history(trimmed(history))
 
@@ -215,14 +243,17 @@ def _stream(messages, offer_tools, lead=""):
             except ValueError:
                 detail = response.text[:200]
             raise BrainError(f"Arty's brain hit an error: {detail or response.status_code}")
-        content, calls = [], {}
+        content, calls, report = [], {}, None
         try:
             for line in response.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data: "):
                     continue
                 if line == "data: [DONE]":
                     break
-                delta = ((json.loads(line[len("data: "):]).get("choices") or [{}])[0]).get("delta") or {}
+                event = json.loads(line[len("data: "):])
+                if isinstance(event.get("arty"), dict):
+                    report = event["arty"]
+                delta = ((event.get("choices") or [{}])[0]).get("delta") or {}
                 if delta.get("content"):
                     yield (lead if not content else "") + delta["content"]
                     content.append(delta["content"])
@@ -233,7 +264,7 @@ def _stream(messages, offer_tools, lead=""):
             raise BrainError("Lost the connection to Arty's brain partway through the answer.") from None
         except ValueError as error:
             raise BrainError(f"Arty's brain sent something unreadable: {error}") from None
-    return {"role": "assistant", "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)]}
+    return {"role": "assistant", "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)], "arty": report}
 
 
 ANNOUNCEMENT_WAIT_SECONDS = 55
@@ -328,16 +359,54 @@ def set_model(model_id):
     MODEL = as_current_name(model_id)
 
 
+def _own_label(entry):
+    model, name = str(entry.get("model") or ""), str(entry.get("name") or entry["id"])
+    return (model or name) if entry["id"].startswith(NAMED_BY_MODEL) else name
+
+
+def picker_models(listed, auto=None):
+    hint = (auto or {}).get("description") or AUTO_HINT
+    picked = [{"id": AUTO_MODEL, "name": AUTO_NAME, "model": "", "description": hint}]
+    seen = set()
+    for entry in listed:
+        if entry.get("id") in (AUTO_MODEL, MAIN_MODEL, None):
+            continue
+        name, model = _own_label(entry), str(entry.get("model") or "")
+        if name in seen or model in seen:
+            continue
+        seen.update(label for label in (name, model) if label)
+        picked.append({"id": entry["id"], "name": name, "model": model, "description": entry.get("description", "")})
+    return picked
+
+
 def list_models():
     """The brain's models as [{id, name}], or raises BrainError."""
     try:
         response = requests.get(f"{_base()}/models", timeout=10, headers=_headers())
         response.raise_for_status()
-    except requests.RequestException as error:
+        reply = response.json()
+    except (requests.RequestException, ValueError) as error:
         raise BrainError(f"Couldn't list Arty's models: {error}") from None
-    return [{"id": m["id"], "name": "Arty (main model)" if m["id"] == MAIN_MODEL else m.get("name", m["id"]),
-             "model": m.get("model", ""), "description": m.get("description", "")}
-            for m in response.json().get("data", [])]
+    return picker_models(reply.get("data", []), reply.get("auto"))
+
+
+def memory():
+    try:
+        response = requests.get(f"{_base()}/memory", timeout=30, headers=_headers())
+        response.raise_for_status()
+        return response.json().get("entities") or []
+    except (requests.RequestException, ValueError) as error:
+        raise BrainError(f"Couldn't read Arty's memory: {error}") from None
+
+
+def change_memory(action, change):
+    if action not in MEMORY_ACTIONS:
+        raise ValueError(f"unknown memory change: {action}")
+    try:
+        response = requests.post(f"{_base()}/memory/{action}", json=change, timeout=30, headers=_headers())
+        return response.status_code, response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise BrainError(f"Couldn't change Arty's memory: {error}") from None
 
 
 def _clip(text):
@@ -362,22 +431,25 @@ def llm_stream(user_input, extra_system=None, note=""):
     recent_calls = []
     steps_taken = Counter()
     lead = ""  # sets a later step's words apart from what was said before its tools ran
+    reports = []
+    computer_steps = 0
     for _round in range(MAX_TOOL_ROUNDS + 1):
         reply = yield from _stream(messages, offer, lead)
+        reports.append(reply.get("arty"))
         calls = reply.get("tool_calls") or []
         content = reply.get("content") or ""
         if content.strip():
             lead = "\n\n"
         if not calls:
-            return
+            break
         signature = _calls_signature(calls)
         if recent_calls[-(STUCK_REPEATS - 1):] == [signature] * (STUCK_REPEATS - 1):
             yield lead + _stopped_repeating(calls)
-            return
+            break
         over_the_limit = _over_the_step_limits(calls, steps_taken)
         if over_the_limit:
             yield lead + over_the_limit
-            return
+            break
         repeated = bool(recent_calls) and recent_calls[-1] == signature
         recent_calls = (recent_calls + [signature])[-STUCK_REPEATS:]
         messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
@@ -400,12 +472,17 @@ def llm_stream(user_input, extra_system=None, note=""):
                     result = DECLINED_STEP if confirm.was_answered(ask) else UNANSWERED_STEP
             else:
                 result = tools.run(name, arguments)
+            computer_steps += 1
             print(f"[tool] {name} -> {len(str(result))} chars", flush=True)
             sent_result = _clip(result) + (REPEATED_STEP_NOTE if repeated else "")
             messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "content": sent_result})
         # Lets the caller notice a hang-up between steps of a long job.
         yield ""
-    yield "I stopped after a lot of steps. Tell me if you want me to keep going."
+    else:
+        yield "I stopped after a lot of steps. Tell me if you want me to keep going."
+    numbers = turn_numbers(reports, computer_steps)
+    if numbers:
+        yield TurnNumbers(numbers)
 
 
 def _calls_signature(calls):

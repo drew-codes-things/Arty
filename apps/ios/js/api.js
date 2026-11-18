@@ -139,7 +139,8 @@ export class ArtyApi {
 
   async models() {
     const reply = await this.request("GET", "/v1/models");
-    return (reply.data ?? []).map((model) => ({
+    const listed = reply.auto ? [reply.auto, ...(reply.data ?? [])] : (reply.data ?? []);
+    return listed.map((model) => ({
       id: model.id, name: model.name || model.id, model: model.model || "", description: model.description || "",
     }));
   }
@@ -202,11 +203,11 @@ export class ArtyApi {
     const job = await this.request("GET", `/v1/chat/jobs/${encodeURIComponent(id)}`);
     return {
       id, status: job.status, answer: job.answer ?? null, toolsUsed: job.tools_used ?? [],
-      error: job.error ?? null, partial: job.partial ?? null,
+      error: job.error ?? null, partial: job.partial ?? null, arty: job.arty ?? null,
     };
   }
 
-  async waitForAnswer(id, { onPartial = () => {}, isCancelled = () => false, sleep = realSleep, now = Date.now } = {}) {
+  async waitForAnswer(id, { onPartial = () => {}, onPick = () => {}, isCancelled = () => false, sleep = realSleep, now = Date.now } = {}) {
     const started = now();
     while (now() - started < GIVE_UP_MS) {
       if (isCancelled()) return { cancelled: true };
@@ -218,8 +219,11 @@ export class ArtyApi {
         if (error.status === GONE) return { failed: true, text: EXPIRED_MESSAGE };
         if (!TUNNEL_BLIPS.has(error.status)) return { failed: true, text: error.message };
       }
-      if (job && job.status === "done") return { failed: false, text: job.answer ?? "", toolsUsed: job.toolsUsed };
+      if (job && job.status === "done") {
+        return { failed: false, text: job.answer ?? "", toolsUsed: job.toolsUsed, ...(job.arty ? { arty: job.arty } : {}) };
+      }
       if (job && job.status !== "running") return { failed: true, text: `Arty hit an error: ${job.error}` };
+      if (job?.arty) onPick(job.arty);
       if (job?.partial) onPartial(job.partial);
       await sleep(POLL_MS);
     }
@@ -299,6 +303,18 @@ export class ArtyApi {
 
   async memory() {
     return (await this.request("GET", "/v1/memory")).entities ?? [];
+  }
+
+  async addMemory(entity, fact) {
+    return this.request("POST", "/v1/memory/add", { entity, fact });
+  }
+
+  async editMemory(entity, old, fact) {
+    return this.request("POST", "/v1/memory/edit", { entity, old, new: fact });
+  }
+
+  async deleteMemory(entity, fact) {
+    return this.request("POST", "/v1/memory/delete", fact === undefined ? { entity } : { entity, fact });
   }
 
   async lectures() {

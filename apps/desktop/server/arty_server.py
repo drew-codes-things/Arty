@@ -217,6 +217,7 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
     spoken = []
     shown = []  # everything shown, spoken or not (a draft to copy is only shown)
     actions = []
+    numbers = None
     index = 0
     interrupted = False
     if look:
@@ -245,6 +246,10 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
                 if stop_at() is not None:
                     interrupted = True
                     break
+                if isinstance(delta, brain.TurnNumbers):
+                    numbers = delta.report
+                    yield _ndjson({"type": "numbers", "arty": numbers})
+                    continue
                 if isinstance(delta, brain.Activity):
                     if not delta.confirm and delta.label:
                         actions.append(delta.label)
@@ -279,7 +284,7 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
         heard = f"{heard}..." if heard else ""
     else:
         heard = " ".join(shown)
-    brain.save_turn(user_text, heard, actions=actions)
+    brain.save_turn(user_text, heard, actions=actions, numbers=numbers)
     yield _ndjson({"type": "interrupted" if interrupted else "done", "chunks": index, "reply": heard})
 
 
@@ -761,8 +766,27 @@ class ModelIn(BaseModel):
 def model_set(body: ModelIn):
     """Switches the brain model this app uses, and remembers it in the config."""
     brain.set_model(body.id)
-    cfg.set_value("brain", "model", body.id)
-    return {"current": body.id}
+    cfg.set_value("brain", "model", brain.current_model())
+    return {"current": brain.current_model()}
+
+
+@app.get("/memory")
+def memory_list():
+    try:
+        return {"entities": brain.memory()}
+    except brain.BrainError as error:
+        return JSONResponse({"entities": [], "error": str(error)}, status_code=502)
+
+
+@app.post("/memory/{action}")
+def memory_change(action: str, change: dict):
+    if action not in brain.MEMORY_ACTIONS:
+        return JSONResponse({"error": {"message": "not found"}}, status_code=404)
+    try:
+        status, answer = brain.change_memory(action, change)
+    except brain.BrainError as error:
+        return JSONResponse({"error": {"message": str(error)}}, status_code=502)
+    return JSONResponse(answer, status_code=status)
 
 
 @app.get("/media")

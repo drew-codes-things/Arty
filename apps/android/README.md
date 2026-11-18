@@ -63,8 +63,11 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
 
 ## Features
 
-- **Chat** - type or tap the mic, with replies read aloud if you like. Past chats and the model picker are in the
-  drawer, and the paperclip attaches photos and files.
+- **Chat** - type or tap the mic, with replies read aloud if you like. Past chats are in the drawer, and the
+  paperclip attaches photos and files. The model picker at the top lists **Arty Auto** first (the default: it picks
+  the model for each message and each reply says which model and role it used), then every model Arty offers, once
+  each; a chat keeps the model it was set to. The bar under the message box shows turns, steps, speed, tokens,
+  cache hit and how full the context window is.
 - **Calls** - a hands-free voice call with Arty, from the app or the home-screen widget.
 - **Updates** - everything Arty sends you: reminders, the morning and evening briefings, task results and homelab
   alerts, with Approve / Deny on anything waiting for you. New ones also arrive as notifications. On the lock screen
@@ -73,6 +76,7 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
   A new question in the app shows a short **New question** label and its buttons stay off until it has been on
   screen for one second; a button on a notice is ignored in the first second after the notice appears.
 - **Tasks**, **Schedules** and **Memory** - what Arty's working on, what's planned, and what it remembers about you.
+  Memory can be searched, added to, edited and deleted; changes reach every chat on every app.
 - **Calendar** - your events, and adding new ones.
 - **Computers** (under More) - follow Arty CLI on a computer that ran `/remote`: read what it's doing, answer its
   permission questions with Allow or Deny, send it a message, or Stop the current turn. A phone with its own device key

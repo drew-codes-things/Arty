@@ -285,21 +285,21 @@ class ModelList:
         return {"data": [{"id": model_id} for model_id in self.ids]}
 
 
-def test_the_main_model_is_listed_as_arty(monkeypatch):
+def test_arty_auto_is_listed_first_in_place_of_the_main_model(monkeypatch):
     monkeypatch.setattr(brain.requests, "get", lambda *args, **kwargs: ModelList(["Arty", "arty/qwen3:14b"]))
-    assert [model["name"] for model in brain.list_models()] == ["Arty (main model)", "arty/qwen3:14b"]
+    assert [model["name"] for model in brain.list_models()] == ["Arty Auto", "arty/qwen3:14b"]
 
 
-def test_choosing_the_main_model_by_its_old_name_picks_arty(monkeypatch):
+def test_choosing_the_main_model_by_its_old_name_picks_arty_auto(monkeypatch):
     monkeypatch.setattr(brain, "MODEL", brain.MODEL)
     brain.set_model("assistant-core")
-    assert brain.current_model() == "Arty"
+    assert brain.current_model() == "auto"
     brain.set_model("arty/qwen3:14b")
     assert brain.current_model() == "arty/qwen3:14b"
 
 
-def test_a_config_saved_with_the_old_name_starts_on_arty():
-    assert brain.as_current_name("assistant-core") == "Arty"
+def test_a_config_saved_with_the_old_name_starts_on_arty_auto():
+    assert brain.as_current_name("assistant-core") == "auto"
     assert brain.as_current_name("arty/qwen3:14b") == "arty/qwen3:14b"
 
 

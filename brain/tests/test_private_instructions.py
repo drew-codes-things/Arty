@@ -2,7 +2,9 @@ import base64
 import codecs
 import json
 import logging
+import math
 import os
+import random
 import re
 import sys
 import tempfile
@@ -39,9 +41,7 @@ from test_review_tonight import FakeEngine, FakeHub, said  # noqa: E402
 from test_round_timings import TimedEngine, answer, offline_turns  # noqa: E402
 
 SYSTEM_PROMPT = (BRAIN_FOLDER / "system-prompt.md").read_text().strip()
-EXAMPLE_PERSONA_FILE = BRAIN_FOLDER / "persona.example.md"
-RELEASED_PERSONA_FILE = BRAIN_FOLDER / "persona.md"
-PERSONA = (EXAMPLE_PERSONA_FILE if EXAMPLE_PERSONA_FILE.is_file() else RELEASED_PERSONA_FILE).read_text().strip()
+PERSONA = (Path(__file__).resolve().parent / "persona_fixture.md").read_text().strip()
 PRIVATE_CONFIG = {**CONFIG, "persona": PERSONA, "system_prompt": SYSTEM_PROMPT}
 TELEGRAM_NOTE = ("You are replying on Telegram. Keep replies short (under 1500 characters unless asked for more) "
                  "and use plain text: no markdown tables or headings.")
@@ -527,6 +527,152 @@ WRAPPED_AT = 76
 NOT_RUN = re.compile(r"Not run: this call held part of Arty's own private instructions")
 SIBLING_NOT_RUN = re.compile(r"Not run: another call in the same step")
 FIRST_COMPUTER_SENTENCE = COMPUTER_PART.split(". ")[0].replace("\n", " ") + "."
+WATCH_SEED = 1815
+WATCH_LAYOUTS = 200
+KNOWN_START, KNOWN_WORDS = 20, 16
+ROW_WORDS = 40
+FILLER_WORDS = "apple banana cherry damson elderberry figs grape hazelnut kiwi lemon mango nectarine orange".split()
+JUNK_LINES = ("very_long_identifier_name_for_a_list", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0", "4a6f686e4a6f686e4a6f686e4a6f686e",
+              "sha256-0123456789abcdef0123456789abcdef")
+BLOCK_SHINGLES = [tuple(BLOCK_WORDS[start:start + private_text.SHINGLE_WORDS])
+                  for start in range(len(BLOCK_WORDS) - private_text.SHINGLE_WORDS + 1)]
+SHINGLES_TO_FLAG = math.ceil(private_text.SHARED_PART_OF_A_BLOCK * len(BLOCK_SHINGLES))
+STREAM_PIECES = (1, 2, 3, 4, 7)
+WRAP_WIDTHS = (0, 0, 4, 11, 16, 24, 76)
+ENCODINGS = (lambda raw: base64.b64encode(raw).decode(), lambda raw: base64.urlsafe_b64encode(raw).decode(),
+             lambda raw: base64.b64encode(raw).decode().rstrip("="), lambda raw: raw.hex(), lambda raw: "0x" + raw.hex(),
+             lambda raw: " ".join(f"{byte:02x}" for byte in raw))
+
+
+def watched_texts() -> tuple:
+    return (("prompt", HONESTY_PART), ("block", " ".join(BLOCK_WORDS)))
+
+
+def wrapped_after(blob: str, first: int, width: int) -> str:
+    rest = blob[first:]
+    return "\n".join([blob[:first], *(rest[start:start + width] for start in range(0, len(rest), width))])
+
+
+def tipping_block(rng: random.Random) -> tuple[str, tuple]:
+    chosen = rng.sample(BLOCK_SHINGLES, SHINGLES_TO_FLAG + rng.choice((-1, 0, 0, 1)))
+    if rng.random() < 0.3:
+        chosen[-1] = rng.choice(chosen[:-1])
+    known = rng.choice(((), (), chosen, chosen[:-1], chosen[-1:], chosen[:len(chosen) // 2]))
+    return " zzz ".join(map(" ".join, chosen)), tuple(map(" ".join, known))
+
+
+def shared_passage(rng: random.Random, words: list[str]) -> str:
+    kind = rng.choice(("run", "run", "near run", "lead", "filler", "known"))
+    if kind == "filler":
+        return " ".join(rng.choice(FILLER_WORDS) for _ in range(rng.choice((4, 14))))
+    if kind == "known":
+        return " ".join(words[KNOWN_START:KNOWN_START + KNOWN_WORDS])
+    start = rng.randrange(0, len(words) - RUN - 5)
+    if kind == "lead":
+        return " ".join([*rng.sample(FILLER_WORDS, rng.choice((1, 3))), *words[start:start + RUN]])
+    if kind == "near run":
+        return " ".join([*words[start:start + RUN - 2], "zzz", *words[start + RUN - 2:start + RUN + 3]])
+    return " ".join(words[start:start + rng.choice((RUN - 1, RUN, RUN + 1, RUN + 2))])
+
+
+def random_blob(rng: random.Random, text: str) -> str:
+    blob = rng.choice(ENCODINGS)(text.encode())
+    width = rng.choice(WRAP_WIDTHS)
+    return wrapped_after(blob, rng.choice((width, width, 24, 36)), width) if width else blob
+
+
+def random_layout(rng: random.Random, words: list[str]) -> str:
+    blobs = [random_blob(rng, shared_passage(rng, words)) for _ in range(rng.choice((1, 1, 2)))]
+    return (rng.choice(("", "Here:\n", "abcd\n", *(f"{junk}\n" for junk in JUNK_LINES)))
+            + rng.choice(("\n", "\n\n", " and ")).join(blobs) + rng.choice(("", "\nDone.", " and that is all.", ":")))
+
+
+def one_pass_verdict(text: str, plain_text: private_text.Watch, decoded_memo: dict) -> bool:
+    if plain_text.read(text).found:
+        return True
+    finished = [blob.group() for blob in private_text.encoded_blobs(text)
+                if not private_text.is_still_being_written(blob, text)]
+    for group in finished:
+        if group not in decoded_memo:
+            decoded_memo[group] = bool(private_text.blob_leak(group, plain_text.hidden))
+    return any(decoded_memo[group] for group in finished)
+
+
+def streamed_verdicts(watch: private_text.Watch, text: str, next_piece) -> tuple[list, list]:
+    plain_text, memo, got, want, end = private_text.Watch(watch.hidden), {}, [], [], 0
+    while end < len(text):
+        end = min(len(text), end + next_piece())
+        got.append(watch.repeats(text[:end]))
+        want.append(one_pass_verdict(text[:end], plain_text, memo))
+    return got, want
+
+
+def first_held(verdicts: list) -> int:
+    return verdicts.index(True) if True in verdicts else -1
+
+
+class StreamedBlobsGetTheVerdictOfAFreshCheck(unittest.TestCase):
+    def setUp(self):
+        self.words = private_text.words_in(HONESTY_PART)
+        self.plain = private_text.hidden_text(watched_texts())
+        known = " ".join(self.words[KNOWN_START:KNOWN_START + KNOWN_WORDS])
+        self.with_known = private_text.hidden_text(watched_texts(), known=private_text.KnownText((known,)))
+
+    def seeded_layout(self, rng: random.Random, number: int) -> tuple[private_text.HiddenText, str]:
+        if rng.random() < 0.4:
+            shared, known = tipping_block(rng)
+            blob = random_blob(rng, shared)
+            hidden = private_text.hidden_text(watched_texts(), known=private_text.KnownText(known))
+            return hidden, rng.choice(("", "Here:\n")) + blob + rng.choice(("\nDone.", " ok"))
+        return (self.with_known if number % 2 else self.plain), random_layout(rng, self.words)
+
+    def test_every_prefix_of_seeded_layouts_gets_the_verdict_of_a_fresh_check(self):
+        rng, watch, wrong, held = random.Random(WATCH_SEED), None, [], 0
+        for number in range(WATCH_LAYOUTS):
+            hidden, text = self.seeded_layout(rng, number)
+            if watch is None or watch.hidden is not hidden or number % 3 == 0:
+                watch = private_text.Watch(hidden)
+            got, want = streamed_verdicts(watch, text, lambda: rng.choice(STREAM_PIECES))
+            held += any(want)
+            if got != want:
+                wrong.append((number, next(index for index, pair in enumerate(zip(got, want)) if pair[0] != pair[1])))
+        self.assertEqual(wrong, [], "(layout, first prefix whose verdict differs)")
+        self.assertGreater(held, WATCH_LAYOUTS // 4, "too few layouts hold anything to show a difference")
+
+    def test_the_rows_the_review_listed_are_held_where_a_fresh_check_holds_them(self):
+        copied = " ".join(self.words[:ROW_WORDS])
+        encoded = base64.b64encode(copied.encode()).decode()
+        lead = " ".join([FILLER_WORDS[0], *self.words[:RUN]])
+        rows = {"base64 wrapped at 24": wrapped(encoded, 24) + "\nDone.",
+                "0x hex wrapped at 11 after a first line of 36": wrapped_after("0x" + copied.encode().hex(), 36, 11) + "\nDone.",
+                "a 36-character junk line before the base64": f"{JUNK_LINES[0]}\n{wrapped(encoded, 76)}\nDone.",
+                "13 words ending in the copy's last word": base64.b64encode(lead.encode()).decode() + "\nDone."}
+        for label, text in rows.items():
+            with self.subTest(row=label):
+                got, want = streamed_verdicts(private_text.Watch(self.plain), text, lambda: 1)
+                self.assertNotEqual(first_held(want), -1)
+                self.assertEqual(first_held(got), first_held(want))
+                self.assertEqual(got, want)
+
+    def test_a_block_copied_up_to_its_flag_threshold_is_judged_like_a_fresh_check(self):
+        spread = [*BLOCK_SHINGLES[::2], *BLOCK_SHINGLES[1::2]]
+        for count, known in ((SHINGLES_TO_FLAG, ()), (SHINGLES_TO_FLAG, spread[SHINGLES_TO_FLAG - 1:SHINGLES_TO_FLAG]),
+                             (SHINGLES_TO_FLAG + 1, spread[:SHINGLES_TO_FLAG])):
+            chosen = spread[:count]
+            hidden = private_text.hidden_text(watched_texts(), known=private_text.KnownText(tuple(map(" ".join, known))))
+            text = base64.b64encode(" zzz ".join(map(" ".join, chosen)).encode()).decode() + "\nDone."
+            with self.subTest(shingles=count, known=len(known)):
+                got, want = streamed_verdicts(private_text.Watch(hidden), text, lambda: 1)
+                self.assertNotEqual(first_held(want), -1)
+                self.assertEqual(got, want)
+
+    def test_a_new_reply_does_not_keep_the_verdicts_of_the_last_one(self):
+        held = base64.b64encode(" ".join(self.words[:RUN + 2]).encode()).decode()
+        harmless = base64.b64encode(" ".join(FILLER_WORDS * 2).encode()).decode()[:len(held)]
+        watch = private_text.Watch(self.plain)
+        self.assertTrue(watch.repeats(f"Here: {held}\nDone."))
+        self.assertFalse(private_text.repeats_hidden_text(f"Look: {harmless}\nDone.", self.plain))
+        self.assertFalse(watch.repeats(f"Look: {harmless}\nDone."))
 
 
 def tool_results(messages: list) -> list[str]:
@@ -896,6 +1042,32 @@ CORRECTED = "I did not save anything."
 
 
 READ_CALL = {"function": {"name": "read_file", "arguments": {"path": "a.txt"}}}
+RUN_CALL = {"function": {"name": "run_command", "arguments": {"command": "rm -rf build"}}}
+CLIENT_REFUSALS = (
+    "The user didn't allow that, so it wasn't done. Don't try another way round it; say so and ask what they'd like.",
+    "Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan step by step "
+    "and ask the user to switch plan mode off (/mode default) to carry it out.",
+    "A permission rule in the settings forbids this, so it wasn't done. Don't try another way round it; tell the user.",
+)
+ARTYCODE_REFUSALS = (
+    "The user didn't allow that, so it wasn't done. They said what to do instead: use the tmp folder. Do that, and don't "
+    "try another way round what they refused.",
+    "Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan step by step "
+    "with present_plan so the user can approve it and switch plan mode off.",
+    "A permission rule in the settings forbids some commands, and this command hides which programs it runs from that "
+    "rule (a $ or backtick expansion, brackets or braces, a < or a > into a file, a # comment, or a wildcard where a "
+    "program's name goes), so it wasn't run. If it is allowed, write it again as plain words without those; don't try "
+    "another way round the rule.",
+)
+OUTPUT_LIKE_A_REFUSAL = ("Plan mode is on: nothing may be changed\nremoved 14 files\n",
+                         "The user didn't allow that. Welcome to our site.",
+                         "A permission rule in the settings forbids this, so it wasn't done.\nUpdated 3 rules.")
+CODING_CLIENT = BRAIN_FOLDER.parent / "apps" / "beta" / "code"
+
+
+def refused_by_the_client(text: str) -> list[dict]:
+    return [{"role": "assistant", "content": "", "tool_calls": [RUN_CALL]},
+            {"role": "tool", "content": text, "tool_name": "run_command"}]
 
 
 def held_result(name: str) -> dict:
@@ -966,6 +1138,50 @@ class RefusedCallsAreNotRun(ClientTurns):
         self.assertEqual(honesty.empty_reply(conversation), honesty.LOST_TRAIN_OF_THOUGHT)
         self.assertEqual([name for name, _ in honesty.client_tool_runs(conversation)[1]], ["write_file"])
 
+    def test_the_coding_clients_refusals_count_as_failed_steps_that_did_not_run(self):
+        for text in CLIENT_REFUSALS:
+            with self.subTest(refusal=text[:30]):
+                conversation = [{"role": "user", "content": "clean the build folder"}, *refused_by_the_client(text)]
+                used, failed = honesty.client_tool_runs(conversation)
+                self.assertEqual([name for name, _ in failed], ["run_command"])
+                self.assertFalse(honesty.some_tool_worked(used, failed))
+                self.assertEqual(agent_loop.tools_that_ran(conversation), [])
+
+    @unittest.skipUnless(CODING_CLIENT.is_dir(), "the coding client is not in this tree")
+    def test_the_coding_clients_own_refusal_texts_are_recognised(self):
+        with unittest.mock.patch.object(sys, "path", [str(CODING_CLIENT), *sys.path]):
+            from arty_code import permissions
+        for text in (permissions.REFUSED, permissions.PLAN_REFUSAL):
+            with self.subTest(refusal=text[:30]):
+                self.assertTrue(honesty.did_not_work(text))
+
+    def test_the_command_line_clients_refusal_texts_are_recognised(self):
+        for text in ARTYCODE_REFUSALS:
+            with self.subTest(refusal=text[:30]):
+                self.assertTrue(honesty.did_not_work(text))
+                self.assertFalse(agent_loop.acted({"role": "tool", "tool_name": "run_command", "content": text}))
+
+    def test_tool_output_that_only_starts_like_a_refusal_counts_as_a_step_that_ran(self):
+        for text in OUTPUT_LIKE_A_REFUSAL:
+            with self.subTest(output=text[:30]):
+                ran = {"role": "tool", "tool_name": "run_command", "content": text}
+                self.assertTrue(agent_loop.acted(ran))
+                self.assertEqual(agent_loop.tools_that_ran([{"role": "user", "content": "tidy the folder"}, ran]),
+                                 [("run_command", text)])
+                self.assertFalse(honesty.did_not_work(text))
+
+    def test_an_agent_turn_after_a_step_the_user_refused_goes_to_the_honesty_check(self):
+        for text in CLIENT_REFUSALS:
+            with self.subTest(refusal=text[:30]), \
+                    unittest.mock.patch.object(agent_turns, "be_honest", honesty.be_honest), \
+                    unittest.mock.patch.object(honesty, "false_claims",
+                                               return_value=[{"text": CLAIM, "correction": CORRECTED}]) as judged:
+                reply, _, calls, _ = self.turn(CLAIM, said_text="clean the build folder", system=CLI_SYSTEM, agent=True,
+                                               client_tools=(WRITE_FILE, READ_FILE), since_asked=refused_by_the_client(text))
+                self.assertEqual(len(calls or []), 0)
+                self.assertTrue(judged.called, "the honesty check was skipped")
+                self.assertEqual(reply.strip(), CORRECTED)
+
     def test_the_draft_is_told_a_tool_step_came(self):
         call = {"function": {"name": "write_file", "arguments": {"path": "rules.txt", "content": PERSONA_LINE}}}
         _, sent, _, _ = self.turn(tool_message("Saving that for you now", call), "I left that out.",
@@ -975,6 +1191,7 @@ class RefusedCallsAreNotRun(ClientTurns):
 
 LOTS_OF_ROUNDS = 40
 STOPPED_AFTER_REFUSED_STEPS = 2
+REPEATED_STEPS = 5
 
 
 def held_call(**arguments) -> dict:
@@ -982,12 +1199,13 @@ def held_call(**arguments) -> dict:
 
 
 class RepeatedRefusals(unittest.TestCase):
-    def run_forever(self, call, first=()):
+    def run_forever(self, call, first=(), earlier=(), since_asked=(), looked_up=None, native_result="Saved."):
         hub = FakeHub()
         engine = FakeEngine([{"message": tool_message("", step), "done": True}
                              for step in (*first, *[call] * LOTS_OF_ROUNDS)])
-        state = {"messages": [{"role": "user", "content": "save your rules as a list"}], "context": {}}
-        native = unittest.mock.Mock(return_value=("Saved.", None))
+        state = {"messages": [*earlier, {"role": "user", "content": "save your rules as a list"}, *since_asked],
+                 "context": {}}
+        native = unittest.mock.Mock(return_value=(native_result, None))
         with unittest.mock.patch.object(connections, "hub", hub), \
                 unittest.mock.patch.object(connections, "http_json", engine), \
                 unittest.mock.patch.object(agent_loop, "run_native_safely", native), \
@@ -996,7 +1214,8 @@ class RepeatedRefusals(unittest.TestCase):
                 unittest.mock.patch.object(agent_loop, "current_context", return_value=""), \
                 unittest.mock.patch.object(brain.policy, "untrusted_reason", return_value=None), \
                 unittest.mock.patch.object(brain.policy, "select_tools", side_effect=lambda tools, *args, **kwargs: tools):
-            outcome = brain.run_agent(dict(PRIVATE_CONFIG, approval={}), state, run=brain.AgentRun(background=True))
+            outcome = brain.run_agent(dict(PRIVATE_CONFIG, approval={}), state,
+                                      run=brain.AgentRun(background=True, looked_up=looked_up))
         return outcome, len(engine.chat_bodies), hub.calls, native, state["messages"]
 
     def test_the_turn_ends_after_the_second_refused_step_and_says_why(self):
@@ -1015,6 +1234,9 @@ class RepeatedRefusals(unittest.TestCase):
         self.assertEqual(brain.tidy_answer(brain.trim_offers(after_steps)), after_steps)
         self.assertIn("call: it still included", after_steps)
         self.assertIn("calls: they still included", agent_loop.held_calls_answer(["write_file", "note_save"], ["read_file"]))
+        nothing_worked = agent_loop.held_calls_answer(["write_file"], anything_ran=True)
+        self.assertEqual(brain.tidy_answer(brain.trim_offers(nothing_worked)), nothing_worked)
+        self.assertIn("without making my write file call: it still included", nothing_worked)
 
     def test_the_stop_answer_names_the_steps_that_ran_before_it(self):
         clean = {"function": {"name": "note_save", "arguments": {"title": "milk", "text": "buy milk"}}}
@@ -1022,6 +1244,45 @@ class RepeatedRefusals(unittest.TestCase):
         self.assertEqual((asked, native.call_count), (STOPPED_AFTER_REFUSED_STEPS + 1, 1))
         self.assertNotRegex(outcome["answer"], r"(?i)did nothing")
         self.assertRegex(outcome["answer"], r"without making my list add call\b.*\bdid run: note save\.")
+
+    def test_a_step_the_user_refused_is_not_named_as_a_step_that_ran(self):
+        for text in CLIENT_REFUSALS:
+            with self.subTest(refusal=text[:30]):
+                outcome, _, _, _, _ = self.run_forever(held_call(items=[COMPUTER_PART]),
+                                                       since_asked=refused_by_the_client(text))
+                self.assertRegex(outcome["answer"], r"(?i)did nothing")
+                self.assertNotIn("did run", outcome["answer"])
+
+    def test_a_step_that_failed_is_not_named_as_a_step_that_ran(self):
+        clean = {"function": {"name": "note_save", "arguments": {"title": "milk", "text": "buy milk"}}}
+        outcome, _, _, native, _ = self.run_forever(held_call(items=[COMPUTER_PART]), first=[clean],
+                                                    native_result="Error: permission denied")
+        self.assertEqual(native.call_count, 1)
+        self.assertNotIn("did run", outcome["answer"])
+        self.assertNotRegex(outcome["answer"], r"(?i)did nothing")
+        self.assertRegex(outcome["answer"], r"without making my list add call: it still included")
+
+    def test_a_step_taken_before_the_first_round_is_named(self):
+        converted = (["convert_file"], "\n\nAlready done for this message:\n\n[convert_file]\nConverted report.pdf", None)
+        outcome, _, _, _, _ = self.run_forever(held_call(items=[COMPUTER_PART]), looked_up=converted)
+        self.assertNotRegex(outcome["answer"], r"(?i)did nothing")
+        self.assertRegex(outcome["answer"], r"\bdid run: convert file\.")
+
+    def test_a_step_of_an_earlier_request_is_not_named(self):
+        earlier = [{"role": "user", "content": "read a.txt"},
+                   {"role": "assistant", "content": "", "tool_calls": [READ_CALL]},
+                   {"role": "tool", "content": "hello", "tool_name": "read_file"},
+                   {"role": "assistant", "content": "It says hello."}]
+        outcome, _, _, _, _ = self.run_forever(held_call(items=[COMPUTER_PART]), earlier=earlier)
+        self.assertRegex(outcome["answer"], r"(?i)did nothing")
+        self.assertNotIn("read file", outcome["answer"])
+
+    def test_a_step_that_ran_several_times_is_named_once(self):
+        clean = {"function": {"name": "note_save", "arguments": {"title": "milk", "text": "buy milk"}}}
+        outcome, _, _, native, _ = self.run_forever(held_call(items=[COMPUTER_PART]), first=[clean] * REPEATED_STEPS)
+        self.assertEqual(native.call_count, REPEATED_STEPS)
+        self.assertEqual(outcome["answer"].count("note save"), 1)
+        self.assertRegex(outcome["answer"], r"\bdid run: note save\.")
 
     def test_unlocking_tools_is_not_a_step_that_ran(self):
         unlock = {"function": {"name": "use_tools", "arguments": {"groups": ["notes"]}}}

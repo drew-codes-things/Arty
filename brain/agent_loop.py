@@ -31,7 +31,7 @@ from settings import ARTY_ENGINE_URL
 from native_tools import NATIVE_TOOLS, BACKGROUND_ONLY_EXCLUDED
 from reply_rules import (PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING, SEARCH_REQUEST, PROMISE,
     TOOL_TALK, DO_REQUEST, PRETEND_TOOLS, TOOL_FAILED, FAILED_NOTE, ANSWERED_ALREADY_CHARS, NOT_ACTIONS, without_app_notes,
-    PRIVATE_CALL_NOT_RUN, SIBLING_CALL_NOT_RUN, HELD_CALL_RESULTS)
+    PRIVATE_CALL_NOT_RUN, SIBLING_CALL_NOT_RUN, HELD_CALL_RESULTS, is_client_refusal)
 from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ONLY_NOTE, asks_for_code, asks_for_the_computer,
     WRITE_AND_RUN_NOTE, READ_LINK_NOTE, asks_to_read_a_link, thinking_for, HOW_TO_NOTE, asks_how_to,
     steer_last_request, steer_away_from_repeats, with_thinking, with_context, parse_arguments, DESKTOP_TOOLS,
@@ -41,7 +41,7 @@ from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ON
 from connections import TOOL_RESULT_CHARS
 from prompting import system_prompt, with_tool_guide, current_context
 from native_calls import run_native_safely
-from honesty import client_tool_runs
+from honesty import client_tool_runs, did_not_work
 
 log = logging.getLogger("brain")
 
@@ -205,7 +205,7 @@ def acted(message: dict) -> bool:
         return False
     result = message_text(message).strip()
     return result not in (NOT_RUN_YET, HIDDEN_TOOL_RESULT) and not result.startswith(
-        (written_calls.NOTHING_HAPPENED, REFUSED_RESULT, *HELD_CALL_RESULTS))
+        (written_calls.NOTHING_HAPPENED, REFUSED_RESULT, *HELD_CALL_RESULTS)) and not is_client_refusal(result)
 
 
 def tools_that_ran(messages: list) -> list[tuple[str, str]]:
@@ -935,8 +935,17 @@ def refuse_calls_holding_private_text(turn: AgentTurn, message: dict, calls: lis
         return None
     turn.keep_groups()
     names = [(call.get("function") or {}).get("name") or "" for call, holds in zip(calls, held) if holds]
-    ran = [name for name, _ in tools_that_ran(turn.messages)]
-    return turn.outcome("done", answer=held_calls_answer(names, ran))
+    return turn.outcome("done", answer=stop_answer(turn, names))
+
+
+def steps_taken_first(turn: AgentTurn) -> list[str]:
+    return list(turn.run.looked_up[0]) if turn.run.looked_up else []
+
+
+def stop_answer(turn: AgentTurn, names: list[str]) -> str:
+    taken_first, ran = steps_taken_first(turn), tools_that_ran(turn.messages)
+    worked = taken_first + [name for name, result in ran if not did_not_work(result)]
+    return held_calls_answer(names, worked, anything_ran=bool(taken_first or ran))
 
 
 def plain_tool_name(name: str) -> str:
@@ -947,13 +956,13 @@ def plain_tool_names(names: list[str]) -> list[str]:
     return list(dict.fromkeys(plain_tool_name(name) or UNNAMED_TOOL for name in names))
 
 
-def held_calls_answer(names: list[str], ran: list[str] = ()) -> str:
-    held, steps = plain_tool_names(names), plain_tool_names(ran)
+def held_calls_answer(names: list[str], worked: list[str] = (), anything_ran: bool = False) -> str:
+    held, steps = plain_tool_names(names), plain_tool_names(worked)
     calls, plural = " and ".join(held), "s" if len(held) > 1 else ""
-    if not steps:
+    if not (steps or anything_ran):
         return HELD_CALLS_ANSWER.format(calls=calls, plural=plural)
-    return HELD_CALLS_AFTER_STEPS_ANSWER.format(calls=calls, plural=plural, held="they" if plural else "it",
-                                                steps=", ".join(steps))
+    not_made = HELD_CALLS_NOT_MADE.format(calls=calls, plural=plural, held="they" if plural else "it")
+    return not_made + (STEPS_THAT_WORKED.format(steps=", ".join(steps)) if steps else "") + ASK_AGAIN
 
 
 def answered_before_unlocking(turn: AgentTurn, calls: list, written: str) -> bool:
@@ -1066,11 +1075,12 @@ HIDDEN_TOOL_RESULT = "That tool isn't available here."
 REFUSED_STEPS_BEFORE_STOPPING = 2
 HELD_ARGUMENTS = {"left_out": "these arguments held part of Arty's own private instructions"}
 UNNAMED_TOOL = "tool"
+ASK_AGAIN = " Ask me again and I'll do it without that part."
 HELD_CALLS_ANSWER = ("I stopped there and did nothing: my {calls} call{plural} still included part of my own private "
-                     "instructions, which I never write, send or run. Ask me again and I'll do it without that part.")
-HELD_CALLS_AFTER_STEPS_ANSWER = ("I stopped there without making my {calls} call{plural}: {held} still included part of my "
-                                 "own private instructions, which I never write, send or run. Before that, these steps did "
-                                 "run: {steps}. Ask me again and I'll do it without that part.")
+                     "instructions, which I never write, send or run." + ASK_AGAIN)
+HELD_CALLS_NOT_MADE = ("I stopped there without making my {calls} call{plural}: {held} still included part of my own "
+                       "private instructions, which I never write, send or run.")
+STEPS_THAT_WORKED = " Before that, these steps did run: {steps}."
 
 
 agent_sessions = AgentSessions()

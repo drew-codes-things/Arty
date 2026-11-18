@@ -31,8 +31,9 @@ class ArtyClient(
     private var identityProvenAtMs: Long? = null
 
     fun models(): List<ModelOption> {
-        val data = request("GET", "/v1/models").getJSONArray("data")
-        return data.objects().map {
+        val reply = request("GET", "/v1/models")
+        val listed = listOfNotNull(reply.optJSONObject("auto")) + reply.getJSONArray("data").objects()
+        return listed.map {
             ModelOption(it.getString("id"), it.optString("name", it.getString("id")), it.optString("model"), it.optString("description"))
         }
     }
@@ -81,6 +82,7 @@ class ArtyClient(
             toolsUsed = job.optJSONArray("tools_used")?.strings().orEmpty(),
             error = job.optStringOrNull("error"),
             partial = job.optStringOrNull("partial"),
+            report = TurnReport.fromJson(job.optJSONObject("arty")),
         )
     }
 
@@ -189,6 +191,20 @@ class ArtyClient(
         request("GET", "/v1/memory").optJSONArray("entities")?.objects().orEmpty().map {
             MemoryEntity(it.optString("name"), it.optString("entityType"), it.optJSONArray("observations")?.strings().orEmpty())
         }
+
+    fun addMemory(entity: String, fact: String) {
+        request("POST", "/v1/memory/add", JSONObject().put("entity", entity).put("fact", fact))
+    }
+
+    fun editMemory(entity: String, old: String, fact: String) {
+        request("POST", "/v1/memory/edit", JSONObject().put("entity", entity).put("old", old).put("new", fact))
+    }
+
+    fun deleteMemory(entity: String, fact: String? = null) {
+        val body = JSONObject().put("entity", entity)
+        fact?.let { body.put("fact", it) }
+        request("POST", "/v1/memory/delete", body)
+    }
 
     fun remoteSessions(): List<RemoteSession> =
         request("GET", "/v1/remote/sessions").optJSONArray("sessions")?.objects().orEmpty().map { it.toRemoteSession() }

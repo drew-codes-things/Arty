@@ -25,6 +25,7 @@ data class ChatJob(
     val error: String?,
     /** The answer's first sentences while Arty writes the rest; the answer starts with them. */
     val partial: String? = null,
+    val report: TurnReport? = null,
 ) {
     val finished: Boolean get() = status != "running"
 }

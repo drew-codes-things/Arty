@@ -55,6 +55,46 @@ test("models keep their ids and fall back to the id as the name", async () => {
   ]);
 });
 
+test("the brain's Arty Auto entry comes first in the models", async () => {
+  const { fetchImpl } = fakeFetch(reply(200, {
+    data: [{ id: "Arty", model: "qwen3:14b" }],
+    auto: { id: "auto", name: "Arty Auto", description: "Picks the model for each message" },
+  }));
+  const models = await new ArtyApi(KEYS, { fetchImpl }).models();
+  assert.deepEqual(models.map((m) => [m.id, m.name, m.description]), [
+    ["auto", "Arty Auto", "Picks the model for each message"],
+    ["Arty", "Arty", ""],
+  ]);
+});
+
+test("waiting passes on the model Arty Auto picked and returns it with the answer's numbers", async () => {
+  const pick = { model: "coder:9b", role: "code", auto: true, context_window: 16384 };
+  const report = { ...pick, steps: 1, usage: { prompt_tokens: 900, completion_tokens: 40, context_tokens: 940 } };
+  const { fetchImpl } = fakeFetch(
+    reply(200, { status: "running", arty: pick }),
+    reply(200, { status: "done", answer: "Fixed.", tools_used: ["run_code"], arty: report }),
+  );
+  const picks = [];
+  const result = await new ArtyApi(KEYS, { fetchImpl }).waitForAnswer("job1", { onPick: (chosen) => picks.push(chosen), sleep: async () => {} });
+  assert.deepEqual(picks, [pick]);
+  assert.deepEqual(result, { failed: false, text: "Fixed.", toolsUsed: ["run_code"], arty: report });
+});
+
+test("memory facts are added, edited and deleted through the brain's memory routes", async () => {
+  const { calls, fetchImpl } = fakeFetch(reply(201, { entity: "Rowan", fact: "Likes tea" }), reply(200, {}), reply(200, {}), reply(200, {}));
+  const api = new ArtyApi(KEYS, { fetchImpl });
+  await api.addMemory("Rowan", "Likes tea");
+  await api.editMemory("Rowan", "Likes tea", "Likes coffee");
+  await api.deleteMemory("Rowan", "Likes coffee");
+  await api.deleteMemory("Garden");
+  assert.deepEqual(calls.map((c) => [c.method, c.url, JSON.parse(c.body)]), [
+    ["POST", "/v1/memory/add", { entity: "Rowan", fact: "Likes tea" }],
+    ["POST", "/v1/memory/edit", { entity: "Rowan", old: "Likes tea", new: "Likes coffee" }],
+    ["POST", "/v1/memory/delete", { entity: "Rowan", fact: "Likes coffee" }],
+    ["POST", "/v1/memory/delete", { entity: "Garden" }],
+  ]);
+});
+
 test("a chat starts a job as the ios client with files as content parts", async () => {
   const { calls, fetchImpl } = fakeFetch(reply(202, { id: "job1" }));
   const id = await new ArtyApi(KEYS, { fetchImpl }).startChat([

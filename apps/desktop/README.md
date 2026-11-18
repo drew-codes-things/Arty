@@ -53,6 +53,11 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
   front. That check needs to know which window is in front: Windows and X11 always say, KDE on Wayland only with
   `kdotool` installed, and other Wayland desktops (GNOME and the rest) don't say at all. Without it, input goes to
   whichever window has focus, so keep password managers closed while Arty is using the computer.
+- **Models** - the menu next to Arty's name lists **Arty Auto** first (the default: it picks the model for each
+  message, and each reply says which model and role it used), then every model Arty offers, once each. The bar
+  above the message box shows turns, steps, speed, tokens, cache hit and how full the context window is.
+- **Memory** - the **MEM** chip lists what Arty remembers, with search, add, edit and delete; changes reach every
+  chat on every app.
 - **Updates** - the **UPD** chip shows reminders, briefings, task results and approvals with a count of new ones.
   New ones are read out, and pop up as a desktop notification while the window isn't focused.
 - **Screen and clipboard** - "Ask about my screen" (**Ctrl+Alt+Space**) and "Explain what I copied"

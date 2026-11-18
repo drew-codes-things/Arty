@@ -233,11 +233,13 @@ def warm_picture_model(config: dict):
     return thread
 
 
-def chat_model(config: dict, requested: str, said: str, new_picture: bool = False) -> str:
+def chat_model(config: dict, requested: str, said: str, new_picture: bool = False, code_asked: bool | None = None) -> str:
     if requested in MAIN_ENTRY_IDS and new_picture and routes_picture_chats(config):
         return picture_model_or(config, requested)
     routes_coding_chats = bool(config.get("coding_model")) and bool(config.get("route_coding_chats", True))
-    if requested not in MAIN_ENTRY_IDS or not routes_coding_chats or not coding.is_request(said):
+    if requested not in MAIN_ENTRY_IDS or not routes_coding_chats:
+        return requested
+    if not (coding.is_request(coding.classified_part(said)) if code_asked is None else code_asked):
         return requested
     if not coding.is_big_job(said) and not models.is_loaded(config["coding_model"]):
         return requested

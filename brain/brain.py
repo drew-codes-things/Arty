@@ -23,6 +23,7 @@ import uuid
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import auto_choice
 import calendar_feed
 import code_sandbox
 import connections
@@ -35,6 +36,7 @@ import hidden_notes
 import keepalive
 import lectures
 import media
+import memory_edits
 import model_choice
 import models
 import notify
@@ -64,7 +66,7 @@ from schedules import create_schedule, ensure_reminder
 from steering import matches_lookup, parse_arguments
 from connections import complete_text, http_json, load_config
 from replies import tidy_answer, as_written, never_an_offer
-from memory_facts import (remember_reply, forget_reply, restore_memory_reply, extract_memories, SECRET_PATTERN,
+from memory_facts import (remember_reply, forget_reply, restore_memory_reply, extract_memories, memory_hub, SECRET_PATTERN,
     NOT_A_FACT, REMEMBER_REQUEST, as_fact, draft_facts)
 from model_choice import (MODEL_ID, ENGINE_DOWN, VISION_KEEP_ALIVE, VISION_MAIN_RETURN_SECONDS, chosen_model,
     session_keep_alive, use_requested_model, arty_description, chat_model, main_model_return)
@@ -99,6 +101,7 @@ DOWNLOAD_TOKEN = re.compile(r"(/arty-files/[^/\s\"?]+/)[^/\s\"?]+(?=/)")
 MAX_DIRECT_CHATS = 6
 TASK_LINK_TROUBLE = "Arty couldn't open that task just now: try again in a minute."
 GENERIC_ERROR = "Arty's brain hit an error; the details are in its log."
+MEMORY_DOWN = "Arty's memory store isn't answering; try again in a minute."
 CLIENT_DROPPED_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
 
@@ -132,7 +135,7 @@ def private_text_of_turn(messages: list, client_tools) -> private_text.HiddenTex
 
 
 def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
-             agent=False, on_thinking=None):
+             agent=False, on_thinking=None, on_model=None):
     """One chat turn. Returns (answer, tools_used, raw, client_calls); client_calls is set when the
     model wants the calling app to run one of its own tools, and answer is then whatever text came with it.
     on_text gets the answer's first sentences early (see drafts.py); the answer always starts with them.
@@ -144,22 +147,27 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     private = private_text_of_turn(messages, client_tools)
     stream = private_text.GuardedStream(on_text, private) if on_text else None
     answer, tools_used, raw, client_calls = arty_turn(messages, requested_model, client_tools, skip_groups, stream, client,
-                                                      any_installed, agent, on_thinking)
+                                                      any_installed, agent, on_thinking, on_model)
     kept = stream.kept(answer or "") if stream else 0
     return private_text.without_hidden_text(answer, private, kept), tools_used, raw, client_calls
 
 
 def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
-              agent=False, on_thinking=None):
+              agent=False, on_thinking=None, on_model=None):
     if agent:
         return agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking, client)
     config = connections.load_config()
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
     said = user_words(message_text(last_user), client) if last_user is not None else ""
-    turn_model = chat_model(config, requested_model, said, has_new_picture(messages))
+    if auto_choice.asked_for(requested_model):
+        auto_role, turn_model = auto_choice.choose(config, said, messages)
+    else:
+        auto_role, turn_model = "", chat_model(config, requested_model, said, has_new_picture(messages))
     use_requested_model(config, turn_model, any_installed)
-    log.info("this turn runs on %s", config["model"])
-    on_routed_model = turn_model != requested_model
+    log.info("this turn runs on %s%s", config["model"], f" (Arty Auto: {auto_role})" if auto_role else "")
+    if on_model:
+        on_model(auto_choice.picked(config, auto_role))
+    on_routed_model = turn_model != (MODEL_ID if auto_role else requested_model)
     if last_user is not None:
         desktop_look.user_active()
         if declined := safety.check(said, config.get("crisis_help")):
@@ -350,16 +358,24 @@ class ChatJobs:
         return job_id
 
     def _run(self, job_id, messages, model, client):
+        chosen = {}
         try:
-            answer, tools_used, _, _ = run_turn(messages, model, on_text=lambda text: self._add_partial(job_id, text),
-                                                client=client)
-            outcome = {"status": "done", "answer": answer, "tools_used": tools_used}
+            answer, tools_used, raw, _ = run_turn(messages, model, on_text=lambda text: self._add_partial(job_id, text),
+                                                  client=client, on_model=lambda pick: self._set_model(job_id, chosen, pick))
+            outcome = {"status": "done", "answer": answer, "tools_used": tools_used,
+                       "arty": auto_choice.turn_report(chosen, raw, tools_used)}
         except Exception:
             log.exception("chat job %s failed", job_id)
             outcome = {"status": "failed", "error": GENERIC_ERROR}
         with self.lock:
             if job_id in self.jobs:
                 self.jobs[job_id].update(outcome)
+
+    def _set_model(self, job_id, chosen, pick):
+        chosen.update(pick)
+        with self.lock:
+            if job_id in self.jobs:
+                self.jobs[job_id]["arty"] = dict(pick)
 
     def _add_partial(self, job_id, text):
         with self.lock:
@@ -559,7 +575,7 @@ class Handler(BaseHTTPRequestHandler):
                 listed += local_addon.listed_models() if local_addon else []
             except (urllib.error.URLError, TimeoutError) as error:
                 log.warning("could not list the engine's models: %s", error)
-            return self.send_json(200, {"object": "list", "data": listed})
+            return self.send_json(200, {"object": "list", "data": listed, "auto": auto_choice.listing(connections.load_config())})
         if segments == ["v1", "tools"]:
             connections.hub.refresh()
             config = connections.load_config()
@@ -733,6 +749,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"ok": True})
         if segments in (["v1", "chat", "completions"], ["chat", "completions"]):
             return self.limited_chat(request)
+        if len(segments) == 3 and segments[:2] == ["v1", "memory"] and segments[2] in memory_edits.EDITS:
+            return self.edit_memory(segments[2], request)
         if segments == ["v1", "warm"]:
             warming = bool(local_addon) and local_addon.warm(text_field(request, "model"))
             return self.send_json(202 if warming else 200, {"warming": warming})
@@ -776,6 +794,14 @@ class Handler(BaseHTTPRequestHandler):
         if len(segments) == 3 and segments[:2] == ["v1", "tools"]:
             return self.call_tool(segments[2], request)
         raise ApiError(404, "not found")
+
+    def edit_memory(self, action, request):
+        try:
+            done = memory_edits.EDITS[action](memory_hub, request)
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            log.warning("the memory store failed a %s from an app: %s", action, error)
+            raise ApiError(503, MEMORY_DOWN) from error
+        return self.send_json(201 if action == "add" else 200, done)
 
     def call_tool(self, name, request):
         arguments = request.get("arguments") or {}
@@ -922,9 +948,11 @@ class Handler(BaseHTTPRequestHandler):
         created = int(time.time())
         turn = (messages, requested_model, client_tools, skip_groups)
         client = client_name(request)
+        chosen = {}
         if not request.get("stream"):
             try:
-                answer, tools_used, raw, client_calls = run_turn(*turn, client=client, any_installed=any_installed, agent=agent)
+                answer, tools_used, raw, client_calls = run_turn(*turn, client=client, any_installed=any_installed, agent=agent,
+                                                                 on_model=chosen.update)
             except WindowOverflow as overflow:
                 return self.send_json(overflow.status, {"error": overflow.details()})
         else:
@@ -952,7 +980,7 @@ class Handler(BaseHTTPRequestHandler):
                 with stream:
                     answer, tools_used, raw, client_calls = run_turn(
                         *turn, on_text=send_early, client=client, any_installed=any_installed, agent=agent,
-                        on_thinking=send_reasoning if agent and asked_for_reasoning else None)
+                        on_thinking=send_reasoning if agent and asked_for_reasoning else None, on_model=chosen.update)
             except WindowOverflow as overflow:
                 if stream.open:
                     after_early_text = "\n\n" if sent else ""
@@ -971,8 +999,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
         usage = {"prompt_tokens": raw.get("prompt_eval_count", 0), "completion_tokens": raw.get("eval_count", 0)}
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        if raw.get("prompt_eval_cached_count") is not None:
+            usage["prompt_tokens_details"] = {"cached_tokens": int(raw["prompt_eval_cached_count"] or 0)}
         if agent:
             usage["rounds"] = turn_rounds(raw)
+        report = auto_choice.turn_report(chosen, raw, tools_used)
         openai_calls = [{"id": f"call_{uuid.uuid4().hex[:12]}", "type": "function",
                          "function": {"name": c["function"]["name"], "arguments": json.dumps(parse_arguments(c["function"].get("arguments")))}}
                         for c in client_calls or []]
@@ -988,14 +1019,14 @@ class Handler(BaseHTTPRequestHandler):
                 send_chunk({"content": rest} if sent else {"role": "assistant", "content": rest})
             if openai_calls:
                 send_chunk({"tool_calls": [{"index": i, **call} for i, call in enumerate(openai_calls)]})
-            send_chunk({}, finish=finish, usage=usage)
+            send_chunk({}, finish=finish, usage=usage, arty=report)
             stream.write(b"data: [DONE]\n\n")
             return
         self.send_json(200, {
             "id": completion_id, "object": "chat.completion", "created": created, "model": MODEL_ID,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": answer, **({"tool_calls": openai_calls} if openai_calls else {})},
                          "finish_reason": finish}],
-            "usage": usage, "tools_used": tools_used,
+            "usage": usage, "tools_used": tools_used, "arty": report,
         })
 
 

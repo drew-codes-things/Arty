@@ -142,7 +142,7 @@ def test_a_notice_is_offered_to_the_window_and_answered_by_arty(monkeypatch):
         yield "Welcome back."
 
     monkeypatch.setattr(arty_server.brain, "llm_stream", llm_stream)
-    monkeypatch.setattr(arty_server.brain, "save_turn", lambda said, reply, actions=(): saved.append((said, reply)))
+    monkeypatch.setattr(arty_server.brain, "save_turn", lambda said, reply, actions=(), numbers=None: saved.append((said, reply)))
     _, before = notifications.since(0, 0)
     notice_id = arty_server.offer_notice(Notice("back", 35))
     fresh, _ = notifications.since(before, 0)

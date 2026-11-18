@@ -60,6 +60,14 @@ def installed(refresh: bool = False) -> list[dict]:
         _refresh_lock.release()
 
 
+TRAINED_CONTEXT_SUFFIX = ".context_length"
+
+
+def trained_context(model_info: dict) -> int:
+    sizes = [value for key, value in model_info.items() if str(key).endswith(TRAINED_CONTEXT_SUFFIX) and is_token_count(value)]
+    return max(sizes, default=0)
+
+
 def _refresh_installed() -> list[dict]:
     models = []
     for entry in _engine("/api/tags").get("models", []):
@@ -76,6 +84,7 @@ def _refresh_installed() -> list[dict]:
             "vision": "vision" in capabilities,
             "embedding": "embedding" in capabilities,
             "thinking": "thinking" in capabilities,
+            "context_length": trained_context(shown.get("model_info") or {}),
         })
     with _cache_lock:
         _cache.update(at=time.time(), models=models)

@@ -104,6 +104,55 @@ class ArtyClientTest {
     }
 
     @Test
+    fun `memory facts are added, edited and deleted through the brain's memory routes`() {
+        routes["POST /v1/memory/add"] = 201 to """{"entity":"Rowan","fact":"Likes tea"}"""
+        routes["POST /v1/memory/edit"] = 200 to """{"entity":"Rowan","fact":"Likes coffee"}"""
+        routes["POST /v1/memory/delete"] = 200 to """{"entity":"Rowan","removed":"fact"}"""
+        client.addMemory("Rowan", "Likes tea")
+        client.editMemory("Rowan", "Likes tea", "Likes coffee")
+        client.deleteMemory("Rowan", "Likes coffee")
+        client.deleteMemory("Garden")
+        val sent = seen.filter { it.path.startsWith("/v1/memory") }.map { "${it.method} ${it.path}" to JSONObject(it.body).toMap() }
+        assertEquals(
+            listOf(
+                "POST /v1/memory/add" to mapOf("entity" to "Rowan", "fact" to "Likes tea"),
+                "POST /v1/memory/edit" to mapOf("entity" to "Rowan", "old" to "Likes tea", "new" to "Likes coffee"),
+                "POST /v1/memory/delete" to mapOf("entity" to "Rowan", "fact" to "Likes coffee"),
+                "POST /v1/memory/delete" to mapOf("entity" to "Garden"),
+            ),
+            sent,
+        )
+    }
+
+    @Test
+    fun `a refused memory change comes back as the brain's message`() {
+        routes["POST /v1/memory/add"] = 400 to """{"error":{"message":"Arty doesn't keep passwords, keys, codes or card details in its memory."}}"""
+        val error = assertFailsWith<ArtyException> { client.addMemory("Rowan", "my pin is 1234") }
+        assertEquals("Arty doesn't keep passwords, keys, codes or card details in its memory.", error.message)
+    }
+
+    @Test
+    fun `the brain's Arty Auto entry comes first in the models`() {
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty","model":"qwen3:14b"}],"auto":{"id":"auto","name":"Arty Auto","description":"Picks the model for each message"}}"""
+        val models = client.models()
+        assertEquals(ModelOption("auto", "Arty Auto", "", "Picks the model for each message"), models[0])
+        assertEquals("Arty", models[1].id)
+    }
+
+    @Test
+    fun `a job carries the model Arty Auto picked and the answer's numbers`() {
+        routes["GET /v1/chat/jobs/job2"] = 200 to """{"status":"done","answer":"Fixed.","tools_used":["run_code"],"arty":{"model":"coder:9b","role":"code","auto":true,"context_window":16384,"steps":1,"usage":{"prompt_tokens":900,"completion_tokens":40,"context_tokens":940,"cached_tokens":800,"tokens_per_second":31.5}}}"""
+        routes["GET /v1/chat/jobs/job3"] = 200 to """{"status":"running","arty":{"model":"looker:7b","role":"vision","auto":true,"context_window":24576}}"""
+        routes["GET /v1/chat/jobs/job4"] = 200 to """{"status":"done","answer":"Hi","tools_used":[]}"""
+        assertEquals(
+            TurnReport("coder:9b", "code", true, 16384, 1, TurnUsage(900, 40, 940, 800, 31.5)),
+            client.chatJob("job2").report,
+        )
+        assertEquals(TurnReport("looker:7b", "vision", true, 24576), client.chatJob("job3").report)
+        assertNull(client.chatJob("job4").report)
+    }
+
+    @Test
     fun `starts a chat job with the history and model, then reads the answer`() {
         routes["POST /v1/chat/jobs"] = 202 to """{"id":"job1","status":"running"}"""
         routes["GET /v1/chat/jobs/job1"] = 200 to """{"id":"job1","status":"done","answer":"Hi","tools_used":["research__web_search"]}"""

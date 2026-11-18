@@ -30,6 +30,8 @@ import app.arty.core.ChatWait
 import app.arty.core.MemoryEntity
 import app.arty.core.ModelOption
 import app.arty.core.Schedule
+import app.arty.core.TurnReport
+import app.arty.core.TurnStatus
 import app.arty.core.batteryNote
 import app.arty.core.recentWindow
 import app.arty.core.withDeviceNote
@@ -71,6 +73,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
         const val PREFS = "arty"
         const val PREF_AUTO_SPEAK = "autoSpeak"
         const val PREF_LAST_CHAT = "lastChat"
+        const val PREF_MODEL_CHOICE = "modelChoice"
         const val ANNOUNCEMENT_WAIT_SECONDS = 50
         const val CALENDAR_DAYS = 60
         const val ANNOUNCEMENT_RETRY_MS = 30_000L
@@ -90,6 +93,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
     var current by mutableStateOf(Conversation()); private set
     var models by mutableStateOf<List<ModelOption>>(emptyList()); private set
     var thinkingSince by mutableStateOf<Long?>(null); private set
+    var thinkingPick by mutableStateOf<TurnReport?>(null); private set
     /** The reply's first sentences, shown (and read out, when replies are spoken) while Arty writes the rest. */
     var partialReply by mutableStateOf<String?>(null); private set
     private var spokenEarly = ""
@@ -197,6 +201,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         conversations = store.list()
+        current = Conversation(model = newChatModel())
         val last = prefs.getString(PREF_LAST_CHAT, null)?.let(store::load) ?: conversations.firstOrNull()
         if (last != null) open(last)
         refreshModels()
@@ -392,11 +397,14 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 null // offline for a moment: keep waiting
             }
-            if (job != null && !job.finished) showPartial(conversationId, job.partial)
+            if (job != null && !job.finished) {
+                showPartial(conversationId, job.partial)
+                if (current.id == conversationId) thinkingPick = job.report
+            }
             if (job != null && job.finished) {
                 val reply = if (job.status == "done") {
                     val (text, action) = PhoneAction.split(job.answer.orEmpty())
-                    StoredMessage("assistant", text, System.currentTimeMillis(), job.toolsUsed, phoneAction = action?.toJson())
+                    StoredMessage("assistant", text, System.currentTimeMillis(), job.toolsUsed, phoneAction = action?.toJson(), report = job.report)
                 } else {
                     StoredMessage("assistant", "Arty hit an error: ${job.error}", System.currentTimeMillis(), failed = true)
                 }
@@ -419,6 +427,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
         if (current.id == conversationId) {
             update(updated)
             thinkingSince = null
+            thinkingPick = null
             val readOutEarly = spokenEarly
             clearPartial()
             if (speakNextReply && (!reply.failed || inCall)) {
@@ -452,11 +461,14 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
         conversations = store.list()
     }
 
+    private fun newChatModel(): String = TurnStatus.newChatModel(prefs.getString(PREF_MODEL_CHOICE, null))
+
     fun newChat() {
         waitJob?.cancel()
         thinkingSince = null
+        thinkingPick = null
         clearPartial()
-        current = Conversation(model = current.model)
+        current = Conversation(model = newChatModel())
         prefs.edit().remove(PREF_LAST_CHAT).apply()
     }
 
@@ -470,6 +482,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
     fun open(conversation: Conversation) {
         waitJob?.cancel()
         thinkingSince = null
+        thinkingPick = null
         clearPartial()
         current = conversation
         prefs.edit().putString(PREF_LAST_CHAT, conversation.id).apply()
@@ -486,6 +499,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun chooseModel(model: String) {
+        prefs.edit().putString(PREF_MODEL_CHOICE, model).apply()
         current = current.copy(model = model)
         if (current.messages.isNotEmpty()) store.save(current)
     }
@@ -716,6 +730,23 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshMemory() = load { memory = withContext(Dispatchers.IO) { client.memory() } }
+
+    private fun changeMemory(done: String, change: () -> Unit) = load {
+        try {
+            withContext(Dispatchers.IO) { change() }
+            notice = done
+        } finally {
+            memory = withContext(Dispatchers.IO) { client.memory() }
+        }
+    }
+
+    fun addMemory(entity: String, fact: String) = changeMemory("Remembered.") { client.addMemory(entity.trim(), fact.trim()) }
+
+    fun editMemory(entity: MemoryEntity, old: String, fact: String) =
+        changeMemory("Saved.") { client.editMemory(entity.name, old, fact.trim()) }
+
+    fun deleteMemory(entity: MemoryEntity, fact: String? = null) =
+        changeMemory(if (fact == null) "Forgot everything about ${entity.name}." else "Forgotten.") { client.deleteMemory(entity.name, fact) }
 
     override fun onCleared() {
         Announcements.onFresh = null

@@ -1,7 +1,8 @@
 package app.arty.data
 
 import app.arty.core.Attachment
-import app.arty.core.MainModel
+import app.arty.core.TurnReport
+import app.arty.core.TurnStatus
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -16,6 +17,7 @@ data class StoredMessage(
     val attachments: List<Attachment> = emptyList(),
     /** A call or text Arty set up for the phone to open (PhoneAction JSON), shown as a button under the reply. */
     val phoneAction: String? = null,
+    val report: TurnReport? = null,
 )
 
 /** One chat. [pendingJobId] is set while Arty is still answering, so the reply survives the app closing. */
@@ -28,7 +30,7 @@ data class Conversation(
     val pendingJobId: String? = null,
 ) {
     companion object {
-        const val DEFAULT_MODEL = MainModel.ID
+        const val DEFAULT_MODEL = TurnStatus.AUTO_ID
         const val TITLE_LENGTH = 40
     }
 }
@@ -71,6 +73,7 @@ class ConversationStore(root: File) {
                     .put("tools", JSONArray(message.tools))
                     .put("failed", message.failed)
                     .put("phoneAction", message.phoneAction ?: JSONObject.NULL)
+                    .put("arty", message.report?.toJson() ?: JSONObject.NULL)
                     .put("attachments", JSONArray().apply {
                         message.attachments.forEach {
                             put(JSONObject().put("id", it.fileId).put("name", it.name).put("mime", it.mime).put("kind", it.kind).put("size", it.size))
@@ -84,7 +87,7 @@ class ConversationStore(root: File) {
         return Conversation(
             id = json.getString("id"),
             title = json.optString("title", "Chat"),
-            model = MainModel.currentName(json.optString("model", Conversation.DEFAULT_MODEL)),
+            model = TurnStatus.savedModel(json.optString("model", Conversation.DEFAULT_MODEL)),
             updated = json.optLong("updated"),
             pendingJobId = if (json.isNull("pendingJobId")) null else json.optString("pendingJobId"),
             messages = (0 until messages.length()).map { index ->
@@ -98,6 +101,7 @@ class ConversationStore(root: File) {
                     tools = (0 until tools.length()).map { tools.getString(it) },
                     failed = message.optBoolean("failed"),
                     phoneAction = if (message.isNull("phoneAction")) null else message.optString("phoneAction"),
+                    report = TurnReport.fromJson(message.optJSONObject("arty")),
                     attachments = (0 until attachments.length()).map { at ->
                         val file = attachments.getJSONObject(at)
                         Attachment(file.getString("id"), file.optString("name"), file.optString("mime"), file.optString("kind", "other"), file.optLong("size"))
