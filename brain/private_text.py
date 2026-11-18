@@ -28,6 +28,7 @@ ROT13 = str.maketrans("abcdefghijklmnopqrstuvwxyz", "nopqrstuvwxyzabcdefghijklm"
 ENCODED_RUN = re.compile(rf"[A-Za-z0-9+/_-]{{{ENCODED_MIN_CHARS},}}={{0,2}}(?:[ \t]*\n[ \t]*[A-Za-z0-9+/_-]{{4,}}={{0,2}})*")
 SPACED_HEX = re.compile(r"\b(?:[0-9A-Fa-f]{2}[ \t:,]+){15,}[0-9A-Fa-f]{2}\b")
 HEX_ONLY = re.compile(r"(?:[0-9A-Fa-f]{2})+")
+HEX_PREFIX = "0x"
 SENTENCE_CLOSERS = "*_\"')\\]”’"
 SENTENCE_BREAK = re.compile(rf"(?:(?<=[.!?])|(?<=[.!?][{SENTENCE_CLOSERS}])|(?<=[.!?][{SENTENCE_CLOSERS}]{{2}}))\s+|\n")
 FENCED_BLOCK = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
@@ -38,6 +39,8 @@ TEXT_SEPARATOR = " | "
 LINE_NUMBER = re.compile(r"(?m)^[ \t]*\d+[\t|:] ?")
 EMPTY_LIST_ITEM = re.compile(r"(?<![^\n])[ \t]*(?:[-*+]|\d+[.)])[ \t]*\Z")
 TABLE_ROW = re.compile(r"[ \t]*\|")
+NUMBERED_ITEM = re.compile(r"[ \t]*\d+[.)][ \t]+")
+CELL_PADDING = " \t"
 QUOTE_OPENERS = (":", "\"", "“")
 
 
@@ -188,6 +191,7 @@ class Watch:
     flagged_blocks: set = field(default_factory=set)
     found: list = field(default_factory=list)
     blob_verdicts: dict = field(default_factory=dict)
+    blob_watches: dict = field(default_factory=dict)
 
     def read(self, text: str) -> "Watch":
         if not text.startswith(self.text):
@@ -201,7 +205,7 @@ class Watch:
 
     def restart(self):
         self.text, self.reading, self.words, self.words_checked, self.letters_checked = "", Normalised(), [], 0, 0
-        self.block_hits, self.flagged_blocks, self.found, self.blob_verdicts = {}, set(), [], {}
+        self.block_hits, self.flagged_blocks, self.found, self.blob_verdicts, self.blob_watches = {}, set(), [], {}, {}
 
     def finish(self) -> "Watch":
         if self.hidden:
@@ -258,20 +262,62 @@ class Watch:
                 continue
             key = (blob.start(), blob.end())
             if key not in self.blob_verdicts:
-                self.blob_verdicts[key] = bool(blob_leak(blob.group(), self.hidden))
+                self.blob_verdicts[key] = self.blob_repeats(blob)
             if self.blob_verdicts[key]:
                 return True
         return False
 
+    def blob_repeats(self, blob: re.Match) -> bool:
+        for number, reading in enumerate(blob_readings(blob.group())):
+            if not (plain := decoded(reading)):
+                continue
+            watch = self.blob_watches.setdefault((blob.re.pattern, blob.start(), number), Watch(self.hidden))
+            if watch.read(plain).finds_when_finished():
+                return True
+        return False
+
+    def finds_when_finished(self) -> bool:
+        if self.found:
+            return True
+        if not (self.hidden and self.reading.in_word):
+            return False
+        last = len(self.reading.word_starts) - 1
+        words = (*self.words[max(0, last + 1 - RUN_WORDS):last], self.reading.word(last))
+        if len(words) == RUN_WORDS and run_label(words, self.hidden):
+            return True
+        return len(words) >= SHINGLE_WORDS and self.shingle_would_flag(words[-SHINGLE_WORDS:])
+
+    def shingle_would_flag(self, shingle: tuple) -> bool:
+        for number, table in enumerate(self.hidden.tables):
+            for block in table.shingle_blocks.get(shingle, ()):
+                key, hits = (number, block), self.block_hits.get((number, block), {})
+                if key in self.flagged_blocks:
+                    if not self.hidden.known.has_words(shingle):
+                        return True
+                elif len(hits) + (shingle not in hits) >= SHARED_PART_OF_A_BLOCK * table.block_sizes[block]:
+                    if any(not self.hidden.known.has_words(seen) for seen in (*hits, shingle)):
+                        return True
+        return False
+
+
+def blob_readings(blob: str) -> list[str]:
+    lines = [line for line in blob.splitlines() if line.strip()]
+    return [blob, *(["\n".join(lines[1:]), "\n".join(lines[:-1])] if len(lines) > 1 else [])]
+
+
+def decoded_readings(blob: str) -> list[str]:
+    return [text for reading in blob_readings(blob) if (text := decoded(reading))]
+
 
 def decoded(blob: str) -> str:
     compact = re.sub(r"[\s:,]", "", blob)
+    hex_start = len(HEX_PREFIX) if compact[:len(HEX_PREFIX)].lower() == HEX_PREFIX else 0
     attempts = []
-    if (hex_part := HEX_ONLY.match(compact)) and hex_part.end() >= ENCODED_MIN_CHARS:
+    if (hex_part := HEX_ONLY.match(compact, hex_start)) and hex_part.end() - hex_start >= ENCODED_MIN_CHARS:
         attempts.append(lambda: binascii.unhexlify(hex_part.group()))
-    before_padding = compact.split("=", 1)[0]
-    attempts.append(lambda: base64.b64decode(before_padding + "=" * (-len(before_padding) % 4), altchars=b"-_"
-                                             if ("-" in before_padding or "_" in before_padding) else None))
+    if len(pieces := [piece for piece in compact.split("=") if piece]) > 1:
+        attempts.append(lambda: b"".join(base64_bytes(piece) for piece in pieces))
+    attempts.append(lambda: base64_bytes(compact.split("=", 1)[0]))
     for attempt in attempts:
         try:
             text = attempt().decode("utf-8", "ignore")
@@ -280,6 +326,12 @@ def decoded(blob: str) -> str:
         if text and sum(char.isprintable() or char.isspace() for char in text) >= DECODED_PRINTABLE_SHARE * len(text):
             return text
     return ""
+
+
+def base64_bytes(encoded: str) -> bytes:
+    usable = encoded[:-1] if len(encoded) % 4 == 1 else encoded
+    url_safe = "-" in usable or "_" in usable
+    return base64.b64decode(usable + "=" * (-len(usable) % 4), altchars=b"-_" if url_safe else None)
 
 
 def encoded_blobs(text: str) -> list[re.Match]:
@@ -295,8 +347,9 @@ def ends_in_an_encoded_blob(text: str) -> bool:
 
 
 def blob_leak(blob: str, hidden: HiddenText) -> str | None:
-    if (plain := decoded(blob)) and (inside := Watch(hidden).read(plain).finish().found):
-        return inside[0][2]
+    for plain in decoded_readings(blob):
+        if inside := Watch(hidden).read(plain).finish().found:
+            return inside[0][2]
     return None
 
 
@@ -352,8 +405,42 @@ class Layout:
         index = bisect.bisect_left(self.break_ends, start)
         return start == 0 or (index < len(self.break_ends) and self.break_ends[index] == start)
 
+    def line_start(self, position: int) -> int:
+        return self.text.rfind("\n", 0, position) + 1
+
     def is_in_a_table_row(self, start: int) -> bool:
-        return bool(TABLE_ROW.match(self.text, self.text.rfind("\n", 0, start) + 1))
+        return bool(TABLE_ROW.match(self.text, self.line_start(start)))
+
+    def is_a_numbered_item(self, start: int) -> bool:
+        return bool(NUMBERED_ITEM.match(self.text, self.line_start(start)))
+
+    def line_end(self, position: int) -> int:
+        end = self.text.find("\n", position)
+        return len(self.text) if end < 0 else end
+
+    def within_its_line_frame(self, found: tuple[int, int], wide: tuple[int, int]) -> tuple[int, int]:
+        start, end = wide
+        line_start, line_end = self.line_start(found[0]), self.line_end(found[1])
+        if start < line_start or end > line_end:
+            return wide
+        if self.is_in_a_table_row(found[0]):
+            return self.within_cells(found, start, end, line_start, line_end)
+        if (marker := NUMBERED_ITEM.match(self.text, line_start)) and marker.end() <= found[0]:
+            start = max(start, marker.end())
+        return start, end
+
+    def within_cells(self, found: tuple[int, int], start: int, end: int, line_start: int, line_end: int) -> tuple[int, int]:
+        bar_before = self.text.rfind("|", line_start, found[0])
+        bar_after = self.text.find("|", found[1], line_end)
+        if bar_before >= 0:
+            start = max(start, bar_before + 1)
+            while start < found[0] and self.text[start] in CELL_PADDING:
+                start += 1
+        if bar_after >= 0:
+            end = min(end, bar_after)
+            while end > found[1] and self.text[end - 1] in CELL_PADDING:
+                end -= 1
+        return start, end
 
     def is_one_sentence(self, start: int, end: int) -> bool:
         first_break = bisect.bisect_left(self.break_starts, start)
@@ -391,14 +478,15 @@ def introduces_a_quote(text: str, start: int, first_found: int) -> bool:
     return text[:start].rstrip().endswith(":") or any(mark in lead_in for mark in QUOTE_OPENERS)
 
 
-def quietly_cut(text: str, start: int, end: int) -> str:
+def quietly_cut(text: str, start: int, end: int, keep: int = 0) -> str:
     before, after = text[:start], text[end:].lstrip(" \t")
     if not after or after.startswith("\n"):
         before = EMPTY_LIST_ITEM.sub("", before).rstrip(" \t")
     if before.endswith("\n") and after.startswith("\n"):
         newlines = max(len(before) - len(before.rstrip("\n")), len(after) - len(after.lstrip("\n")))
         before, after = before.rstrip("\n") + "\n" * newlines, after.lstrip("\n")
-    return before + after
+    tidied = before + after
+    return tidied if tidied.startswith(text[:keep]) else text[:start] + text[end:]
 
 
 def without_hidden_text(text: str, hidden: HiddenText, keep: int = 0) -> str:
@@ -418,7 +506,7 @@ def with_hidden_parts_left_out(text: str, hidden: HiddenText, keep: int, may_cut
         return text, False
     layout = Layout.of(text)
     spans = [layout.without_short_edges(start, end) for start, end, _ in plain] + [(start, end) for start, end, _ in blobs]
-    widened_spans = [layout.widened(start, end) for start, end in overlapping_joined(spans)]
+    widened_spans = [layout.within_its_line_frame(span, layout.widened(*span)) for span in overlapping_joined(spans)]
     parts = merged([(max(start, keep), max(end, keep)) for start, end in widened_spans], text)
     found_starts = sorted(max(start, keep) for start, _ in spans)
     quiet = may_cut_quietly and not blobs and words_outside(text, parts) >= WORDS_LEFT_FOR_A_QUIET_CUT
@@ -427,7 +515,7 @@ def with_hidden_parts_left_out(text: str, hidden: HiddenText, keep: int, may_cut
     cut_quietly = False
     for start, end in reversed(parts):
         if quiet and can_cut_quietly(layout, start, end, found_starts):
-            text, cut_quietly = quietly_cut(text, start, end), True
+            text, cut_quietly = quietly_cut(text, start, end, keep), True
         else:
             text = text[:start] + DECLINE + text[end:]
     return text, cut_quietly
@@ -435,8 +523,8 @@ def with_hidden_parts_left_out(text: str, hidden: HiddenText, keep: int, may_cut
 
 def can_cut_quietly(layout: Layout, start: int, end: int, found_starts: list[int]) -> bool:
     first_found = next((found for found in found_starts if start <= found < end), start)
-    return layout.starts_a_sentence(start) and layout.is_one_sentence(start, end) \
-        and not layout.is_in_a_table_row(start) and not introduces_a_quote(layout.text, start, first_found)
+    return layout.starts_a_sentence(start) and layout.is_one_sentence(start, end) and not layout.is_in_a_table_row(start) \
+        and not layout.is_a_numbered_item(start) and not introduces_a_quote(layout.text, start, first_found)
 
 
 class GuardedStream:

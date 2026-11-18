@@ -8,7 +8,7 @@ import models
 
 from archive import message_text
 from settings import ARTY_ENGINE_URL
-from reply_rules import TOOL_FAILED, NOT_ACTIONS, LOOK_ONLY_TOOLS
+from reply_rules import TOOL_FAILED, NOT_ACTIONS, LOOK_ONLY_TOOLS, HELD_CALL_RESULTS
 from steering import LOOKUP_TOOLS
 from memory_facts import prefix_for
 
@@ -64,14 +64,30 @@ def tools_record(tools_used: list[str], failed: list[tuple[str, str]]) -> str:
     return "\n".join(lines) or "- none"
 
 
-def client_tool_runs(conversation: list[dict], by_last_result: bool = False,
-                     whole_conversation: bool = False) -> tuple[list[str], list[tuple[str, str]]]:
+def was_held_back(result: str) -> bool:
+    return result.lstrip().startswith(HELD_CALL_RESULTS)
+
+
+def did_not_work(result: str) -> bool:
+    return bool(TOOL_FAILED.search(result)) or was_held_back(result)
+
+
+def tool_results(conversation: list[dict], whole_conversation: bool = False) -> list[dict]:
     last_request = max((index for index, message in enumerate(conversation) if message.get("role") == "user"), default=-1)
     counted_from = 0 if whole_conversation else last_request + 1
-    results = [message for message in conversation[counted_from:] if message.get("role") == "tool" and message.get("tool_name")]
+    return [message for message in conversation[counted_from:] if message.get("role") == "tool" and message.get("tool_name")]
+
+
+def refused_a_step(conversation: list[dict]) -> bool:
+    return any(was_held_back(message_text(message)) for message in tool_results(conversation))
+
+
+def client_tool_runs(conversation: list[dict], by_last_result: bool = False,
+                     whole_conversation: bool = False) -> tuple[list[str], list[tuple[str, str]]]:
+    results = tool_results(conversation, whole_conversation)
     used = [message["tool_name"] for message in results]
     judged = {message["tool_name"]: message for message in results}.values() if by_last_result else results
-    failed = [(message["tool_name"], message_text(message)[:300]) for message in judged if TOOL_FAILED.search(message_text(message))]
+    failed = [(message["tool_name"], message_text(message)[:300]) for message in judged if did_not_work(message_text(message))]
     return used, failed
 
 
@@ -82,7 +98,7 @@ LOST_TRACK_AFTER_STEPS = (LOST_TRACK_START + ", after {steps} on your computer. 
 
 
 def empty_reply(conversation: list[dict]) -> str:
-    steps, _failed = client_tool_runs(conversation)
+    steps = [message for message in tool_results(conversation) if not was_held_back(message_text(message))]
     if not steps:
         return LOST_TRAIN_OF_THOUGHT
     return LOST_TRACK_AFTER_STEPS.format(steps="1 step" if len(steps) == 1 else f"{len(steps)} steps")

@@ -13,7 +13,7 @@ from replies import as_written, never_an_offer
 from model_choice import AGENT_QUIET_SECONDS, use_requested_model, agent_model
 from attachments import expand_attachments, to_engine_messages
 from agent_loop import ROUNDS_KEY, AgentRun, run_agent
-from honesty import client_tool_runs, some_tool_worked, be_honest
+from honesty import client_tool_runs, some_tool_worked, refused_a_step, be_honest
 
 log = logging.getLogger("brain")
 
@@ -55,7 +55,7 @@ def agent_reply(config, messages, client_tools, on_text, on_thinking, client="")
         outcome = {"answer": outcome["waiting"]["message"], "tools_used": outcome["tools_used"], "raw": outcome["raw"]}
     answer = outcome.get("answer") or ""
     client_used, client_failed = client_tool_runs(conversation, by_last_result=True, whole_conversation=True)
-    if not some_tool_worked(client_used, client_failed):
+    if refused_a_step(conversation) or not some_tool_worked(client_used, client_failed):
         answer = be_honest(answer, client_used + outcome["tools_used"], client_failed, draft.everything() if draft else "",
                            said, config["model"], config.get("keep_alive"), None, outcome.get("sandbox_line", ""))
     if draft:
