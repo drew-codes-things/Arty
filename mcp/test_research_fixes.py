@@ -123,7 +123,7 @@ def library(tmp_path, monkeypatch):
 
 def refuse_bad(texts):
     if any("bad text" in text for text in texts):
-        raise research.EmbedRefused("Ollama said 500: input too long")
+        raise research.EmbedRefused("the engine said 500: input too long")
     return [[1.0, 0.0] for _ in texts]
 
 
@@ -137,11 +137,11 @@ def test_a_file_that_cannot_be_embedded_is_recorded_not_retried(library, monkeyp
     assert calls == []
 
 
-def test_ollama_down_does_not_mark_files_as_failed(library, monkeypatch):
+def test_engine_down_does_not_mark_files_as_failed(library, monkeypatch):
     def down(texts):
-        raise research.OllamaUnreachable("could not reach Ollama: refused")
+        raise research.EngineUnreachable("could not reach Arty's engine: refused")
     monkeypatch.setattr(research, "_embed", down)
-    with pytest.raises(research.OllamaUnreachable):
+    with pytest.raises(research.EngineUnreachable):
         research._index_library(force=True)
     connection = research._db()
     try:
@@ -166,17 +166,17 @@ def test_embed_errors_are_sorted(monkeypatch):
     def down(*args, **kwargs):
         raise urllib.error.URLError("refused")
     monkeypatch.setattr(research.urllib.request, "urlopen", down)
-    with pytest.raises(research.OllamaUnreachable):
+    with pytest.raises(research.EngineUnreachable):
         research._embed(["x"])
 
 
 def test_reindex_reports_errors_instead_of_raising(library, monkeypatch):
     def down(texts):
-        raise research.OllamaUnreachable("could not reach Ollama: refused")
+        raise research.EngineUnreachable("could not reach Arty's engine: refused")
     monkeypatch.setattr(research, "_embed", down)
     research.reindex_library()
     research.index_thread_done(timeout=5)
-    assert "could not reach Ollama" in research.reindex_library()
+    assert "could not reach Arty's engine" in research.reindex_library()
     research.index_thread_done(timeout=5)
 
 

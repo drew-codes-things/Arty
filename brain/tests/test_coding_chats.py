@@ -18,6 +18,7 @@ import connections  # noqa: E402
 import model_choice  # noqa: E402
 import coding  # noqa: E402
 import models  # noqa: E402
+import run_requests  # noqa: E402
 
 CONFIG = {"model": "qwen3:14b", "coding_model": "coder:9b", "persona": "You are Arty.", "system_prompt": "Use your tools.",
           "options": {}, "tool_groups": {}, "approval": {}}
@@ -150,8 +151,8 @@ class ChatModel(unittest.TestCase):
         with unittest.mock.patch.object(models, "is_loaded", return_value=False):
             self.assertEqual(brain.chat_model(CONFIG, "Arty", long_paste), CODER)
 
-    def test_everyday_chat_never_asks_ollama_what_is_loaded(self):
-        with unittest.mock.patch.object(models, "is_loaded", side_effect=AssertionError("asked Ollama")):
+    def test_everyday_chat_never_asks_the_engine_what_is_loaded(self):
+        with unittest.mock.patch.object(models, "is_loaded", side_effect=AssertionError("asked the engine")):
             self.assertEqual(brain.chat_model(CONFIG, "Arty", "what's the dress code for a wedding?"), "Arty")
 
     def test_everyday_chat_stays_on_the_main_model(self):
@@ -176,13 +177,13 @@ class ChatModel(unittest.TestCase):
         self.assertEqual(len(logged.output), 1)
         self.assertIn("coder:9b", logged.output[0])
 
-    def test_an_unreachable_ollama_falls_back_to_the_main_model(self):
+    def test_an_unreachable_engine_falls_back_to_the_main_model(self):
         with unittest.mock.patch.object(models, "installed", side_effect=urllib.error.URLError("refused")), \
                 self.assertLogs("brain", level="WARNING"):
             self.assertEqual(brain.chat_model(CONFIG, "Arty", "write a python function that reverses a string"), "Arty")
 
 
-class FakeOllama:
+class FakeEngine:
     def __init__(self):
         self.bodies = []
 
@@ -201,13 +202,15 @@ def run_turns_offline(case):
     folder = tempfile.TemporaryDirectory()
     case.addCleanup(folder.cleanup)
     case.config = {**CONFIG, "conversations_dir": folder.name}
-    case.ollama = FakeOllama()
+    case.engine = FakeEngine()
     case.make_room = unittest.mock.Mock(return_value=[])
     case.reload = unittest.mock.Mock()
     case.loaded = unittest.mock.Mock(return_value=True)
+    case.run_judge = unittest.mock.Mock(return_value=False)
     patches = [
+        unittest.mock.patch.object(run_requests, "judge_says_run", case.run_judge),
         unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(case.config)),
-        unittest.mock.patch.object(connections, "http_json", side_effect=case.ollama),
+        unittest.mock.patch.object(connections, "http_json", side_effect=case.engine),
         unittest.mock.patch.object(connections.hub, "refresh"),
         unittest.mock.patch.object(connections.hub, "tools", []),
         unittest.mock.patch.object(connections.hub, "routes", {}),
@@ -238,40 +241,45 @@ class RoutedTurns(unittest.TestCase):
 
     def test_a_coding_question_is_answered_by_the_coding_model(self):
         self.chat("write a python function that reverses a string")
-        self.assertEqual(self.ollama.bodies[0]["model"], "coder:9b")
+        self.assertEqual(self.engine.bodies[0]["model"], "coder:9b")
         self.make_room.assert_called_once()
         self.assertEqual(self.make_room.call_args.args[0], "coder:9b")
         self.reload.assert_called_once()
 
+    def test_the_run_request_check_asks_the_model_that_answers_the_turn(self):
+        self.chat("write a python function that reverses a string")
+        self.run_judge.assert_called_once()
+        self.assertEqual("coder:9b", self.run_judge.call_args.kwargs.get("model"))
+
     def test_a_short_coding_question_with_the_coding_model_unloaded_is_answered_without_a_swap(self):
         self.loaded.return_value = False
         self.chat("write a python function that reverses a string")
-        self.assertEqual(self.ollama.bodies[0]["model"], "qwen3:14b")
+        self.assertEqual(self.engine.bodies[0]["model"], "qwen3:14b")
         self.make_room.assert_not_called()
         self.reload.assert_not_called()
 
     def test_everyday_chat_is_answered_by_the_main_model(self):
         self.chat("tell me a fun fact about otters")
-        self.assertEqual(self.ollama.bodies[0]["model"], "qwen3:14b")
+        self.assertEqual(self.engine.bodies[0]["model"], "qwen3:14b")
         self.make_room.assert_not_called()
 
     def test_a_coding_request_that_reads_like_an_email_draft_still_reaches_the_coding_model(self):
         self.chat("write a python script that sends an email")
-        self.assertEqual(self.ollama.bodies[0]["model"], "coder:9b")
+        self.assertEqual(self.engine.bodies[0]["model"], "coder:9b")
 
     def test_a_coding_request_that_reads_like_a_quick_web_question_still_reaches_the_coding_model(self):
         self.chat("what is the best way to write a regex for emails in Python?")
-        self.assertEqual(self.ollama.bodies[0]["model"], "coder:9b")
+        self.assertEqual(self.engine.bodies[0]["model"], "coder:9b")
 
     def test_an_explicit_model_pick_answers_coding_questions_itself(self):
         self.chat("write a python function that reverses a string", requested="arty/qwen3:14b")
-        self.assertEqual(self.ollama.bodies[0]["model"], "qwen3:14b")
+        self.assertEqual(self.engine.bodies[0]["model"], "qwen3:14b")
         self.make_room.assert_not_called()
 
     def test_with_routing_switched_off_coding_questions_stay_on_the_main_model(self):
         self.config["route_coding_chats"] = False
         self.chat("write a python function that reverses a string")
-        self.assertEqual(self.ollama.bodies[0]["model"], "qwen3:14b")
+        self.assertEqual(self.engine.bodies[0]["model"], "qwen3:14b")
 
     def test_a_turn_the_private_add_on_takes_is_never_routed(self):
         addon = unittest.mock.Mock()
@@ -280,7 +288,7 @@ class RoutedTurns(unittest.TestCase):
                 unittest.mock.patch.object(brain, "chat_model", side_effect=AssertionError("routed an add-on turn")):
             answer = self.chat("write a python function that reverses a string", requested="Arty")
         self.assertEqual(answer[0], "In character.")
-        self.assertEqual(self.ollama.bodies, [])
+        self.assertEqual(self.engine.bodies, [])
         self.make_room.assert_not_called()
 
     def test_a_turn_the_private_add_on_passes_on_is_routed_after_it(self):
@@ -289,7 +297,7 @@ class RoutedTurns(unittest.TestCase):
         with unittest.mock.patch.object(brain, "local_addon", addon):
             self.chat("write a python function that reverses a string")
         addon.turn.assert_called_once()
-        self.assertEqual(self.ollama.bodies[0]["model"], "coder:9b")
+        self.assertEqual(self.engine.bodies[0]["model"], "coder:9b")
 
 
 class RoutedReplyName(Server):
@@ -302,7 +310,7 @@ class RoutedReplyName(Server):
                                     body={"model": "Arty", "messages": [{"role": "user", "content": "write a python function that reverses a string"}]})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["model"], "Arty")
-        self.assertEqual(self.ollama.bodies[0]["model"], "coder:9b")
+        self.assertEqual(self.engine.bodies[0]["model"], "coder:9b")
 
 
 if __name__ == "__main__":

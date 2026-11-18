@@ -22,7 +22,7 @@ CACHED = {**WARM, "prompt_eval_cached_count": 8500}
 QWEN = {"name": "qwen3:14b", "billions": 14.8, "tools": True, "vision": False, "embedding": False, "thinking": True}
 
 
-class TimedOllama:
+class TimedEngine:
     def __init__(self, *replies):
         self.replies = list(replies)
         self.bodies = []
@@ -35,7 +35,7 @@ class TimedOllama:
         return {"message": message, "done_reason": "stop", **timings}
 
     def streamed(self, body, on_text, timeout=600, on_thinking=None):
-        reply = self(f"{brain.OLLAMA_URL}/api/chat", body)
+        reply = self(f"{brain.ARTY_ENGINE_URL}/api/chat", body)
         if reply["message"]["content"]:
             on_text(reply["message"]["content"])
         return reply
@@ -75,12 +75,12 @@ class RoundTimings(unittest.TestCase):
         offline_turns(self)
 
     def rounds(self, *replies, agent=True):
-        ollama = TimedOllama(*replies)
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = TimedEngine(*replies)
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             _, _, raw, _ = brain.run_turn(asked("what does main.py do?"), "Arty", client_tools=[READ_FILE], agent=agent)
         return brain.turn_rounds(raw)
 
-    def test_each_model_round_of_an_agent_turn_reports_its_ollama_timings(self):
+    def test_each_model_round_of_an_agent_turn_reports_its_engine_timings(self):
         rounds = self.rounds(answer("It prints hello."))
         self.assertEqual(rounds, [{"model": "qwen3:14b", "load_duration": 4_000_000, "prompt_eval_count": 9000,
                                    "prompt_eval_duration": 3_000_000_000, "eval_count": 120,
@@ -101,9 +101,9 @@ class RoundTimings(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         thinking_config = {**CONFIG, "think": "auto", "conversations_dir": folder.name}
         for texts in shapes:
-            ollama = TimedOllama(answer("Found it."))
+            engine = TimedEngine(answer("Found it."))
             messages = [{"role": "system", "content": CLIENT_SYSTEM}] + [{"role": "user", "content": text} for text in texts]
-            with unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+            with unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
                     unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(thinking_config)):
                 _, _, raw, _ = brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=True)
             decisions.append(brain.turn_rounds(raw)[0]["think"])
@@ -116,7 +116,7 @@ class RoundTimings(unittest.TestCase):
         rounds = self.rounds(answer("", COLD), answer("It prints hello."))
         self.assertEqual([entry["loaded_fresh"] for entry in rounds], [True, False])
 
-    def test_the_cached_part_of_the_prompt_is_passed_on_when_ollama_reports_it(self):
+    def test_the_cached_part_of_the_prompt_is_passed_on_when_the_engine_reports_it(self):
         self.assertEqual(self.rounds(answer("It prints hello.", CACHED))[0]["prompt_eval_cached_count"], 8500)
 
     def test_missing_timings_count_as_zero(self):
@@ -133,10 +133,10 @@ class RoundTimingsOverHttp(Server):
         offline_turns(self)
 
     def usage(self, headers, stream=False):
-        ollama = TimedOllama(answer("", COLD), answer("It prints hello."))
+        engine = TimedEngine(answer("", COLD), answer("It prints hello."))
         body = {"model": "Arty", "stream": stream, "messages": asked("what does main.py do?"), "tools": [READ_FILE]}
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
-                unittest.mock.patch.object(connections, "stream_chat", side_effect=ollama.streamed):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
+                unittest.mock.patch.object(connections, "stream_chat", side_effect=engine.streamed):
             status, raw = self.request("POST", "/v1/chat/completions", headers=headers, body=body)
         self.assertEqual(status, 200)
         if not stream:

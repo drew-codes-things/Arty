@@ -41,8 +41,8 @@ class RewriteNotesAskForAFreshAnswer(unittest.TestCase):
 
 class RewriteTalkIsTakenOut(unittest.TestCase):
     def test_a_corrected_code_opening_becomes_a_plain_one(self):
-        outcome, ollama, _ = run_coding_turn([said(BROKEN), said(LEAKED)], [FAILED, PASSED])
-        self.assertIn("as if it were your first reply", last_user_note(ollama.chat_bodies[1]))
+        outcome, engine, _ = run_coding_turn([said(BROKEN), said(LEAKED)], [FAILED, PASSED])
+        self.assertIn("as if it were your first reply", last_user_note(engine.chat_bodies[1]))
         self.assertTrue(outcome["answer"].startswith(f"{FRESH_LEAD}:\n\n{CODE}\n\nIt ignores case and spaces."), outcome["answer"])
         assert_reads_fresh(self, outcome["answer"])
 

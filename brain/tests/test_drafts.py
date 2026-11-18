@@ -56,6 +56,52 @@ class SendingEarly(unittest.TestCase):
         write(draft, "Night, Alex! Sleep well. ")
         self.assertEqual("".join(sent), "Night! Sleep well.")
 
+    def test_a_final_answer_that_differs_is_never_added_whole_after_what_was_sent(self):
+        draft, sent = make_draft()
+        draft.start_round(allowed=True)
+        write(draft, "Paris is the capital. It has two million people. ")
+        given = draft.finish("Paris is the capital. It has about two million people.")
+        self.assertTrue(given.startswith("".join(sent)))
+        self.assertEqual(1, given.count("Paris is the capital."))
+
+    def test_a_changed_answer_keeps_its_replacement_and_never_repeats_a_sentence(self):
+        cases = (
+            ("Sure. Here is how you pick the lock. ", "Sure. I can't help with that.",
+             "Sure. Here is how you pick the lock. I can't help with that."),
+            ("Done. I restarted nginx. It is running now. ", "Done. I couldn't restart nginx: permission denied. It is not running.",
+             "Done. I restarted nginx. It is running now. I couldn't restart nginx: permission denied. It is not running."),
+            ("A one. B two. C three. ", "A one. B changed. C three. D four.", "A one. B two. C three. B changed. D four."),
+            ("A one. B two. ", "A one. B changed. C three.", "A one. B two. B changed. C three."),
+        )
+        for already_sent, final, wanted in cases:
+            with self.subTest(final=final):
+                draft, sent = make_draft()
+                draft.start_round(allowed=True)
+                write(draft, already_sent)
+                given = draft.finish(final)
+                self.assertTrue(given.startswith("".join(sent)))
+                self.assertEqual(wanted, given)
+
+    def test_a_changed_answer_keeps_its_line_breaks(self):
+        code = "```python\nfor n in range(2, 30):\n    if all(n % d for d in range(2, n)):\n        print(n)\n```"
+        table = "| Disk | Free |\n|---|---|\n| sda | 10G |"
+        cases = (
+            ("Here is the script. It prints primes. ",
+             f"Here is the script. It prints the first primes.\n\n{code}\n\nRun it with python3.",
+             f"Here is the script. It prints primes. It prints the first primes.\n\n{code}\n\nRun it with python3."),
+            ("It is fine. I checked the disk. ", f"It is fine. I could not check the disk.\n\n{table}",
+             f"It is fine. I checked the disk. I could not check the disk.\n\n{table}"),
+            ("Yes. It works. ", "Yes. It works now. Yes.", "Yes. It works. It works now."),
+        )
+        for already_sent, final, wanted in cases:
+            with self.subTest(final=final[:40]):
+                draft, sent = make_draft()
+                draft.start_round(allowed=True)
+                write(draft, already_sent)
+                given = draft.finish(final)
+                self.assertTrue(given.startswith("".join(sent)))
+                self.assertEqual(wanted, given)
+
     def test_a_held_round_sends_nothing(self):
         draft, sent = make_draft()
         draft.start_round(allowed=False)

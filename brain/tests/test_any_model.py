@@ -125,7 +125,7 @@ class ListingEverything(Server):
         self.assertFalse(models.is_for_coding("qwen3:14b", "mimo-v2.6:9b"))
         self.assertFalse(models.is_for_coding("qwen3:14b", ""))
 
-    def test_ollama_being_down_is_a_clear_503(self):
+    def test_the_engine_being_down_is_a_clear_503(self):
         with unittest.mock.patch.object(models, "installed", side_effect=urllib.error.URLError("refused")):
             status, body = self.request("GET", "/v1/models?all=1")
             self.assertEqual(status, 503)

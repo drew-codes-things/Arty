@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_agent_mode import AGENT_HEADERS, READ_FILE, FakeOllama  # noqa: E402
+from test_agent_mode import AGENT_HEADERS, READ_FILE, FakeEngine  # noqa: E402
 from test_review_brain import Server  # noqa: E402
 from test_round_timings import asked, offline_turns  # noqa: E402
 
@@ -19,14 +19,14 @@ import keepalive  # noqa: E402
 import models  # noqa: E402
 
 WINDOW = 24576
-LLAMA_SERVER_OVERFLOW = "request (30120 tokens) exceeds the available context size (24576 tokens), try increasing it"
-OLLAMA_OVERFLOW = ("the prompt is longer than the context length currently available to the model; shorten the prompt, "
+ENGINE_CONTEXT_OVERFLOW = "request (30120 tokens) exceeds the available context size (24576 tokens), try increasing it"
+ENGINE_OVERFLOW = ("the prompt is longer than the context length currently available to the model; shorten the prompt, "
                    "adjust the context length in settings, or use a model with a longer context length")
 
 
-def ollama_refusal(message, status=400):
+def engine_refusal(message, status=400):
     body = io.BytesIO(json.dumps({"error": message}).encode())
-    return urllib.error.HTTPError("http://127.0.0.1:11434/api/chat", status, "Bad Request", {}, body)
+    return urllib.error.HTTPError("http://127.0.0.1:11438/api/chat", status, "Bad Request", {}, body)
 
 
 def with_window(case):
@@ -40,22 +40,22 @@ class RequestFields(unittest.TestCase):
         with_window(self)
 
     def first_body(self, agent):
-        ollama = FakeOllama()
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = FakeEngine()
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             brain.run_turn(asked("what does main.py do?"), "Arty", client_tools=[READ_FILE], agent=agent)
-        return ollama.bodies[0]
+        return engine.bodies[0]
 
-    def test_an_agent_turn_asks_ollama_not_to_drop_old_messages_or_shift_the_window(self):
+    def test_an_agent_turn_asks_the_engine_not_to_drop_old_messages_or_shift_the_window(self):
         body = self.first_body(agent=True)
         self.assertIs(body["truncate"], False)
         self.assertIs(body["shift"], False)
 
-    def test_a_chat_turn_keeps_ollamas_message_trimming_but_never_shifts(self):
+    def test_a_chat_turn_keeps_the_engines_message_trimming_but_never_shifts(self):
         body = self.first_body(agent=False)
         self.assertNotIn("truncate", body)
         self.assertIs(body["shift"], False)
 
-    def test_every_load_asks_for_the_same_shift_setting_so_ollama_never_reloads_for_it(self):
+    def test_every_load_asks_for_the_same_shift_setting_so_the_engine_never_reloads_for_it(self):
         self.assertIs(models.for_runner({"options": {"num_ctx": WINDOW}}, {"model": "qwen3:14b"})["shift"], False)
         sent = []
         with unittest.mock.patch.object(connections, "http_json", side_effect=lambda url, body=None, **_: sent.append(body) or {}), \
@@ -84,19 +84,19 @@ class OverflowOverHttp(Server):
             return self.request("POST", "/v1/chat/completions", headers=headers, body=body)
 
     def test_an_agent_conversation_longer_than_the_window_is_a_413_naming_the_window(self):
-        status, raw = self.post(ollama_refusal(LLAMA_SERVER_OVERFLOW))
+        status, raw = self.post(engine_refusal(ENGINE_CONTEXT_OVERFLOW))
         error = json.loads(raw)["error"]
         self.assertEqual(status, 413)
         self.assertEqual(error["type"], "context_length_exceeded")
         self.assertEqual((error["code"], error["context_tokens"], error["model"]), (413, WINDOW, "qwen3:14b"))
         self.assertIn(str(WINDOW), error["message"])
 
-    def test_ollamas_own_wording_counts_too(self):
-        status, raw = self.post(ollama_refusal(OLLAMA_OVERFLOW))
+    def test_the_engines_own_wording_counts_too(self):
+        status, raw = self.post(engine_refusal(ENGINE_OVERFLOW))
         self.assertEqual((status, json.loads(raw)["error"]["type"]), (413, "context_length_exceeded"))
 
     def test_a_streamed_agent_turn_says_so_in_the_stream_and_ends_it_properly(self):
-        status, raw = self.post(ollama_refusal(LLAMA_SERVER_OVERFLOW), stream=True)
+        status, raw = self.post(engine_refusal(ENGINE_CONTEXT_OVERFLOW), stream=True)
         self.assertEqual(status, 200)
         chunks = [json.loads(line[6:]) for line in raw.decode().split("\n\n") if line.startswith("data: {")]
         said = "".join(chunk["choices"][0]["delta"].get("content", "") for chunk in chunks)
@@ -108,8 +108,8 @@ class OverflowOverHttp(Server):
         self.assertTrue(raw.startswith(keepalive.WORKING_NOTE))
         self.assertTrue(raw.endswith(b"data: [DONE]\n\n"))
 
-    def test_other_ollama_refusals_stay_ordinary_errors(self):
-        status, raw = self.post(ollama_refusal("model 'nope' not found", status=404))
+    def test_other_engine_refusals_stay_ordinary_errors(self):
+        status, raw = self.post(engine_refusal("model 'nope' not found", status=404))
         self.assertEqual(status, 500)
         self.assertNotIn("context_length_exceeded", raw.decode())
 

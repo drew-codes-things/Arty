@@ -41,7 +41,7 @@ class CodingRunsOnTheMainModel(unittest.TestCase):
     def test_a_coding_chat_while_the_vision_model_is_loaded_stays_on_the_main_model_and_says_so(self):
         with self.assertLogs("brain", "INFO") as logged:
             brain.run_turn([{"role": "user", "content": "write a python function that reverses a string"}], "Arty")
-        self.assertEqual(MAIN, self.ollama.bodies[0]["model"])
+        self.assertEqual(MAIN, self.engine.bodies[0]["model"])
         self.make_room.assert_not_called()
         self.assertTrue(any(f"this turn runs on {MAIN}" in line for line in logged.output), logged.output)
 

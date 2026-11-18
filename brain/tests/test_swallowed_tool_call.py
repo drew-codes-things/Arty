@@ -31,7 +31,7 @@ def said(text):
     return {"message": {"role": "assistant", "content": text}, "done": True, "eval_count": 9}
 
 
-class FakeOllama:
+class FakeEngine:
     def __init__(self, chats, written=None, render_error=None):
         self.chats = iter(chats)
         self.written = list(written or [])
@@ -72,11 +72,11 @@ QUESTION = "tell me about lofi hip hop"
 OPEN_YOUTUBE = calls("chrome_open", {"url": "https://www.youtube.com/results?search_query=lofi+hip+hop"})
 
 
-def run_turn(ollama, hub=None, client_tools=(CHROME_OPEN,), request=PLAY_REQUEST, steps_taken=()):
+def run_turn(engine, hub=None, client_tools=(CHROME_OPEN,), request=PLAY_REQUEST, steps_taken=()):
     hub = hub or FakeHub()
     state = {"messages": [{"role": "user", "content": request}, *steps_taken], "context": {}}
     with unittest.mock.patch.object(connections, "hub", hub), \
-            unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
             unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
             unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
@@ -91,22 +91,22 @@ def last_user_note(body):
 
 class ACallToAToolItWasNotOffered(unittest.TestCase):
     def test_the_model_is_told_which_tool_was_missing_and_what_it_has(self):
-        ollama = FakeOllama([SWALLOWED, OPEN_YOUTUBE], written=[YOUTUBE_INFO_CALL])
-        outcome, _ = run_turn(ollama)
+        engine = FakeEngine([SWALLOWED, OPEN_YOUTUBE], written=[YOUTUBE_INFO_CALL])
+        outcome, _ = run_turn(engine)
         self.assertEqual(outcome["status"], "client_tools")
         self.assertEqual(outcome["calls"][0]["function"]["name"], "chrome_open")
-        note = last_user_note(ollama.chat_bodies[1])
+        note = last_user_note(engine.chat_bodies[1])
         self.assertIn("youtube_info", note)
         self.assertIn("chrome_open", note)
         self.assertNotIn("Your reply was empty", note)
 
     def test_the_replay_asks_for_the_same_prompt_written_out_raw(self):
-        ollama = FakeOllama([SWALLOWED, OPEN_YOUTUBE], written=[YOUTUBE_INFO_CALL])
-        run_turn(ollama)
-        sent = ollama.chat_bodies[0]
-        self.assertEqual(ollama.render_bodies[0]["messages"], sent["messages"])
-        self.assertEqual(ollama.render_bodies[0]["tools"], sent["tools"])
-        replay = ollama.generate_bodies[0]
+        engine = FakeEngine([SWALLOWED, OPEN_YOUTUBE], written=[YOUTUBE_INFO_CALL])
+        run_turn(engine)
+        sent = engine.chat_bodies[0]
+        self.assertEqual(engine.render_bodies[0]["messages"], sent["messages"])
+        self.assertEqual(engine.render_bodies[0]["tools"], sent["tools"])
+        replay = engine.generate_bodies[0]
         self.assertTrue(replay["raw"])
         self.assertEqual(replay["prompt"], "<|im_start|>assistant\n")
         self.assertEqual(replay["options"], sent["options"])
@@ -114,54 +114,54 @@ class ACallToAToolItWasNotOffered(unittest.TestCase):
         self.assertEqual(replay.get("shift"), sent.get("shift"))
 
     def test_the_call_as_it_was_written_stays_in_the_conversation_for_the_next_round(self):
-        ollama = FakeOllama([SWALLOWED, OPEN_YOUTUBE], written=[YOUTUBE_INFO_CALL])
-        run_turn(ollama)
-        messages = ollama.chat_bodies[1]["messages"]
+        engine = FakeEngine([SWALLOWED, OPEN_YOUTUBE], written=[YOUTUBE_INFO_CALL])
+        run_turn(engine)
+        messages = engine.chat_bodies[1]["messages"]
         self.assertEqual(messages[-2], {"role": "assistant", "content": YOUTUBE_INFO_CALL})
 
     def test_it_stops_explaining_after_two_tries_and_falls_back_to_the_usual_nudge(self):
-        ollama = FakeOllama([SWALLOWED, SWALLOWED, SWALLOWED, said("Here you go.")], written=[YOUTUBE_INFO_CALL, YOUTUBE_INFO_CALL])
-        outcome, _ = run_turn(ollama, request=QUESTION)
-        self.assertEqual(len(ollama.generate_bodies), 2)
-        self.assertIn("Your reply was empty", last_user_note(ollama.chat_bodies[3]))
+        engine = FakeEngine([SWALLOWED, SWALLOWED, SWALLOWED, said("Here you go.")], written=[YOUTUBE_INFO_CALL, YOUTUBE_INFO_CALL])
+        outcome, _ = run_turn(engine, request=QUESTION)
+        self.assertEqual(len(engine.generate_bodies), 2)
+        self.assertIn("Your reply was empty", last_user_note(engine.chat_bodies[3]))
         self.assertEqual(outcome["answer"], "Here you go.")
 
 
-class ACallToAnOfferedToolThatOllamaDropped(unittest.TestCase):
+class ACallToAnOfferedToolThatTheEngineDropped(unittest.TestCase):
     def test_a_client_tool_call_goes_back_to_the_app(self):
         written = '<tool_call>\n{"name": "chrome_open", "arguments": {"url": "https://www.youtube.com"}}\n</tool_call>'
-        ollama = FakeOllama([SWALLOWED], written=[written])
-        outcome, _ = run_turn(ollama)
+        engine = FakeEngine([SWALLOWED], written=[written])
+        outcome, _ = run_turn(engine)
         self.assertEqual(outcome["status"], "client_tools")
         self.assertEqual(outcome["calls"][0]["function"], {"name": "chrome_open", "arguments": {"url": "https://www.youtube.com"}})
 
     def test_a_short_name_for_a_hub_tool_runs_the_hub_tool(self):
         written = '<tool_call>\n{"name": "web_search", "arguments": {"query": "lofi hip hop"}}\n</tool_call>'
-        ollama = FakeOllama([SWALLOWED, said("It's a long-running live stream.")], written=[written])
-        outcome, hub = run_turn(ollama, hub=FakeHub([WEB_SEARCH]), client_tools=(), request="what is lofi hip hop radio?")
+        engine = FakeEngine([SWALLOWED, said("It's a long-running live stream.")], written=[written])
+        outcome, hub = run_turn(engine, hub=FakeHub([WEB_SEARCH]), client_tools=(), request="what is lofi hip hop radio?")
         self.assertEqual(hub.calls, [("research__web_search", {"query": "lofi hip hop"})])
         self.assertEqual(outcome["answer"], "It's a long-running live stream.")
 
 
 class OtherEmptyReplies(unittest.TestCase):
     def test_text_that_was_only_held_back_comes_through(self):
-        ollama = FakeOllama([SWALLOWED], written=["<think>\n\n</think>\n\nLofi hip hop is calm, slow music."])
-        outcome, _ = run_turn(ollama, request=QUESTION)
+        engine = FakeEngine([SWALLOWED], written=["<think>\n\n</think>\n\nLofi hip hop is calm, slow music."])
+        outcome, _ = run_turn(engine, request=QUESTION)
         self.assertEqual(outcome["answer"], "Lofi hip hop is calm, slow music.")
 
     def test_a_reply_with_nothing_written_is_not_replayed(self):
-        ollama = FakeOllama([{**SWALLOWED, "eval_count": 1}, said("Here you go.")])
-        outcome, _ = run_turn(ollama, request=QUESTION)
-        self.assertEqual(ollama.render_bodies, [])
-        self.assertIn("Your reply was empty", last_user_note(ollama.chat_bodies[1]))
+        engine = FakeEngine([{**SWALLOWED, "eval_count": 1}, said("Here you go.")])
+        outcome, _ = run_turn(engine, request=QUESTION)
+        self.assertEqual(engine.render_bodies, [])
+        self.assertIn("Your reply was empty", last_user_note(engine.chat_bodies[1]))
         self.assertEqual(outcome["answer"], "Here you go.")
 
     def test_when_the_replay_fails_the_usual_nudge_still_runs(self):
-        ollama = FakeOllama([SWALLOWED, said("Here you go.")], render_error=urllib.error.URLError("gate down"))
+        engine = FakeEngine([SWALLOWED, said("Here you go.")], render_error=urllib.error.URLError("gate down"))
         with self.assertLogs(brain.log, "WARNING") as logged:
-            outcome, _ = run_turn(ollama, request=QUESTION)
+            outcome, _ = run_turn(engine, request=QUESTION)
         self.assertIn("gate down", "\n".join(logged.output))
-        self.assertIn("Your reply was empty", last_user_note(ollama.chat_bodies[1]))
+        self.assertIn("Your reply was empty", last_user_note(engine.chat_bodies[1]))
         self.assertEqual(outcome["answer"], "Here you go.")
 
 
@@ -173,15 +173,15 @@ def browser_step(name, result):
 class AnAnswerAfterStepsOnTheirComputer(unittest.TestCase):
     def test_it_is_kept_rather_than_sent_back_as_if_no_tools_ran(self):
         steps = [*browser_step("chrome_open", "Opened it in tab 1."), *browser_step("chrome_click", "Video: not playing, an ad is showing.")]
-        ollama = FakeOllama([said("I clicked the first video, but an ad is showing and the video hasn't started yet.")])
-        outcome, _ = run_turn(ollama, steps_taken=steps)
-        self.assertEqual(len(ollama.chat_bodies), 1)
+        engine = FakeEngine([said("I clicked the first video, but an ad is showing and the video hasn't started yet.")])
+        outcome, _ = run_turn(engine, steps_taken=steps)
+        self.assertEqual(len(engine.chat_bodies), 1)
         self.assertEqual(outcome["answer"], "I clicked the first video, but an ad is showing and the video hasn't started yet.")
 
     def test_with_no_steps_yet_an_unbacked_answer_is_still_sent_back(self):
-        ollama = FakeOllama([said("I've opened YouTube and it's playing."), OPEN_YOUTUBE])
-        outcome, _ = run_turn(ollama)
-        self.assertIn("You haven't used any tools", last_user_note(ollama.chat_bodies[1]))
+        engine = FakeEngine([said("I've opened YouTube and it's playing."), OPEN_YOUTUBE])
+        outcome, _ = run_turn(engine)
+        self.assertIn("You haven't used any tools", last_user_note(engine.chat_bodies[1]))
         self.assertEqual(outcome["status"], "client_tools")
 
 

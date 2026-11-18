@@ -30,12 +30,20 @@ MULTI_STEP_REQUEST = re.compile(r"\b(and then|after that|once (that'?s|it'?s) do
 THINKING_MIN_TOKENS = 6144
 WRITE_ONLY_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please |can you |could you |would you )?(?:write|give me|show me|"
                                 r"what'?s|what is|how do i)\b.*\b(?:one-?liner|command|script|function|code|regex|snippet|query|alias)\b", re.I)
-RUN_TOOLS = {"workspace__run_command", "workspace__read_terminal", "workspace__list_files", "workspace__read_file",
+RUN_TOOLS = {"workspace__run_command", "workspace__open_app", "workspace__read_terminal", "workspace__list_files", "workspace__read_file",
              "workspace__write_file", "workspace__edit_file"}
 DESKTOP_RUN_TOOLS = {"computer_run_command", "computer_read_file", "computer_write_file", "computer_edit_file",
                      "computer_list_files", "computer_search", "computer_find_files"}
 WRITE_ONLY_NOTE = "\n\n(Reply with the code itself. Don't run anything or look around your computer for this.)"
 WRITE_AND_RUN_NOTE = "\n\n(Write it, then run it on your computer with run_command and show what it printed.)"
+RUN_THE_CODE_NOTE = ("\n\n(If this asks for the code from your last answer to be run, run its latest version on your computer "
+                     "with run_command and show what it printed.)")
+DONT_RUN_NOTE = "\n\n(They didn't ask you to run it: you may write or save files on your computer, but don't run the code.)"
+COULD_NOT_RUN = "If they asked for it to be run, tell them you couldn't run it this time."
+WRITE_ONLY_UNCHECKED_NOTE = f"\n\n(Reply with the code itself. Don't run anything or look around your computer for this. {COULD_NOT_RUN})"
+DONT_RUN_UNCHECKED_NOTE = f"\n\n(Don't run the code in this reply. {COULD_NOT_RUN})"
+RUN_COMMAND_TOOLS = {"workspace__run_command", "workspace__open_app"}
+DESKTOP_RUN_COMMAND_TOOLS = {"computer_run_command"}
 HOW_TO_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:(?:please |can you |could you |would you )?(?:tell me |show me |explain )?"
                             r"how (?:do|can|could|would|should) (?:i|we|one)|(?:(?:please |can you |could you |would you )?"
                             r"(?:tell me |show me |explain )?)how to|what'?s the (?:best )?(?:command|way) to)\b", re.I)
@@ -47,40 +55,55 @@ GIVEN_LINK = re.compile(r"https?://\S+", re.I)
 READ_LINK_REQUEST = re.compile(r"\b(read|summari[sz]e|summary|tl;?dr|what (?:is|does|'s)|tell me|explain|about|says?|key points)\b",
                                re.I)
 READ_LINK_NOTE = "\n\n(The user gave a link: read it with {tool} before answering.)"
-NEGATED_ASK = re.compile(r"\b(?:don'?t|do not|never|no need to|without|shouldn'?t)\b[^.!?\n,;]*?"
-                         r"(?=[.!?\n,;]|\b(?:but|just|instead|then)\b|$)", re.I)
-RUN_ASKED = re.compile(r"\b(?:run|execute|try|test)\s+(?:it|this|that|them|the (?:code|script|program|function|query|command)s?)\b|"
-                       r"\b(?:and|then)\s+(?:run|execute|test)\b|\bon your (?:computer|desktop|pc|vm|machine)\b|"
-                       r"\bcheck (?:it|that) works\b|\bshow (?:me )?what it (?:prints|outputs|returns)\b|\brun (?:it )?(?:on|in) your\b",
-                       re.I)
+NEGATION = (r"(?:don'?t|do not|never|no need (?:for \w+ )?to|shouldn'?t|needn'?t|need not|mustn'?t|must not|can'?t(?! you\b)|cannot|"
+            r"won'?t(?! you\b)|wouldn'?t(?! you\b)|didn'?t|aren'?t|isn'?t|not(?: to)?|avoid|refrain from|forbidden|no point|"
+            r"under no circumstances)")
+CLAUSE_STOP = r"[.!?\n,;]|\b(?:but|just|instead|then|so)\b|$"
+NEGATED_ASK = re.compile(rf"\b{NEGATION}\s+\w+\s+and\b[^.!?\n,;]*?(?={CLAUSE_STOP})|"
+                         rf"\b(?:{NEGATION}|without)\b[^.!?\n,;]*?(?={CLAUSE_STOP}|\band\b)", re.I)
+INSTEAD_OF_RUNNING = re.compile(r"\b(?:instead of|rather than)\s+\w+(?:\s+(?:it|this|that|them))?", re.I)
+RUN_WORD = re.compile(r"\b(?:re-?)?(?:run|runs|ran|running|execut(?:e|es|ed|ing|ion)|test|tests|tested|testing|"
+                      r"try|tries|tried|trying|compil(?:e|es|ed|ing|ation)|launch(?:es|ed|ing)?|start(?:s|ed|ing)?)\b", re.I)
+BACKTICK_APOSTROPHE = re.compile(r"(?<=[A-Za-z])`(?=[A-Za-z])")
+APOSTROPHE_LOOKALIKES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201b": "'", "\u02bc": "'", "\u2032": "'",
+                                       "\uff07": "'", "\u00b4": "'"})
+INSTALL_ASKED = r"(?:^|[.!?]\s*|\b(?:and|then|please|you|first)\s+)install\b"
 COMPUTER_ASKED = re.compile(
     r"\b(?:save|store|put|write)\s+(?:it|this|that|them|the (?:code|script|program|function|file|results?|output))\s+"
-    r"(?:to|in|into|as|on)\b|\bsave (?:it|this|that|them)\b|(?:^|[.!?]\s*|\b(?:and|then|please|you|first)\s+)install\b|"
+    rf"(?:to|in|into|as|on)\b|\bsave (?:it|this|that|them)\b|{INSTALL_ASKED}|"
     r"\bin your (?:workspace|terminal|home folder)\b|(?:^|[\s'\"`(])(?:~|/home|/srv|/opt|/tmp)/\S", re.I)
+INSTALL_REQUEST = re.compile(INSTALL_ASKED, re.I)
+
+
+def with_plain_quotes(text: str | None) -> str:
+    return BACKTICK_APOSTROPHE.sub("'", (text or "").translate(APOSTROPHE_LOOKALIKES))
 
 
 def asks_how_to(text: str) -> bool:
+    text = with_plain_quotes(text)
     return bool(HOW_TO_REQUEST.search(text)) and not RUN_IT_FOR_ME.search(text)
 
 
 def without_negated_asks(text: str) -> str:
-    return NEGATED_ASK.sub(" ", text or "")
+    return NEGATED_ASK.sub(" ", INSTEAD_OF_RUNNING.sub(" ", with_plain_quotes(text)))
 
 
-def asks_to_run(text: str) -> bool:
-    return bool(RUN_ASKED.search(without_negated_asks(text)))
+def asks_for_the_computer(text: str) -> bool:
+    text = with_plain_quotes(text)
+    return bool(COMPUTER_ASKED.search(without_negated_asks(text))) or coding.is_long_or_wide_job(text) or coding.is_build_job(text)
 
 
-def wants_the_computer(text: str) -> bool:
-    asked = without_negated_asks(text)
-    return asks_to_run(text) or bool(COMPUTER_ASKED.search(asked)) or coding.is_big_job(text)
+def asks_to_install(text: str) -> bool:
+    return bool(INSTALL_REQUEST.search(without_negated_asks(text)))
 
 
 def asks_for_code(text: str) -> bool:
-    return bool(WRITE_ONLY_REQUEST.search(text or "")) or coding.is_request(text)
+    text = with_plain_quotes(text)
+    return bool(WRITE_ONLY_REQUEST.search(text)) or coding.is_request(text)
 
 
 def asks_to_read_a_link(text: str) -> bool:
+    text = with_plain_quotes(text)
     return bool(GIVEN_LINK.search(text)) and bool(READ_LINK_REQUEST.search(GIVEN_LINK.sub(" ", text)))
 
 
@@ -91,7 +114,7 @@ def thinking_for(config, request_text="", writing_job=False) -> bool:
     model = models.find(config["model"])
     if not model or not model.get("thinking"):
         return False
-    request_text = request_text or ""
+    request_text = with_plain_quotes(request_text)
     return writing_job or bool(HARD_REQUEST.search(request_text) or MULTI_STEP_REQUEST.search(request_text))
 
 
@@ -152,10 +175,6 @@ def matches_lookup(config, said: str) -> bool:
 
 
 def with_context(history: list[dict], context: str):
-    """Puts the per-message context at the start of the latest user message. Not as a system message:
-    Ollama merges every system message into the one block above the tool list, so a changing one there
-    makes the model re-read the whole prompt (some 4,000 tokens, about 9 seconds) on every message.
-    The message is replaced, not edited: it's shared with the conversation that gets saved."""
     note = f"<notes>\nYour notes for this message (not written by the user):\n{context}\n</notes>\n\n"
     last_user = max((i for i, m in enumerate(history) if m.get("role") == "user"), default=None)
     if last_user is None:
@@ -191,6 +210,16 @@ LOGIN_WORDS = re.compile(r"sign in|log ?in|captcha|bot check|verif|human", re.IG
 # Tools that work on the desktop (browser, Gmail window, screen, terminal): only after one of them can a website have
 # asked for a sign-in or a CAPTCHA.
 DESKTOP_TOOLS = ("workspace__",)
+SEARCH_RESULTS_NOTE = ("(Web search results for my message:\n{results}\n\n"
+                       "Now answer my message from these results, in your own words, briefly. Say which source if it helps.)")
+NOTHING_DONE_NOTE = ("(You haven't used any tools, so none of that has actually happened. {nudge} Only then answer, and only "
+                     "with what the tools gave you. If none of your tools can do it, say so plainly in a sentence instead: "
+                     "never pretend it's done.)")
+PRETEND_TOOLS_NOTE = ("(Don't write out tool calls, function names or made-up tool results. "
+                      "Answer my message in plain words, from your notes if they cover it.)")
+HALF_WRITTEN_CALL_NOTE = ("(Your reply stopped at the start of a code block instead of using a tool. "
+                          "If you need a tool, call it properly now; otherwise answer my message.)")
+EMPTY_REPLY_NOTE = "(Your reply was empty. Answer my last message, using your tools if needed.)"
 NOTHING_TO_SIGN_IN = ("Nothing on the desktop was used, so there's nothing for the user to sign in to or pass. "
                       "Don't use ask_user; reply to the user directly.")
 

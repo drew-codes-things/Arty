@@ -1,9 +1,8 @@
 #!/bin/sh
-# ai-toolless on|off: let models without tool support run Arty (persona and memory, no tools).
 set -eu
-BACKEND_ENV=/etc/default/arty-backend
-if [ -r "$BACKEND_ENV" ]; then set -a; . "$BACKEND_ENV"; set +a; fi
-CONFIG=/srv/ai/brain/brain.json
+. "$(dirname "$0")/ai-engine-lib"
+CONFIG=${BRAIN_CONFIG:-/srv/ai/brain/brain.json}
+
 current=$(jq -r '.allow_toolless_models // false' "$CONFIG")
 case "${1:-}" in
   on) value=true ;;
@@ -16,10 +15,14 @@ install -m 644 "$updated" "$CONFIG"
 rm -f "$updated"
 if [ "$value" = true ]; then
   echo "On: models without tools can run Arty (persona and memory only). They show as 'Arty (model, no tools)' in the dashboard."
-else
-  echo "Off: only tool-capable models can run Arty."
-  main=$(jq -r .model "$CONFIG")
-  if ! ollama show "$main" | sed -n '/Capabilities/,/^[[:space:]]*$/p' | grep -qw tools; then
-    echo "Warning: Arty's main model ($main) has no tools; switch with: ai-use qwen3:14b"
-  fi
+  exit 0
+fi
+echo "Off: only tool-capable models can run Arty."
+main=$(jq -r .model "$CONFIG")
+if ! engine_call POST /api/show 60 "$(jq -cn --arg model "$main" '{model: $model}')" || [ "$status" != 200 ]; then
+  echo "Couldn't check whether Arty's main model ($main) has tools."
+  exit 0
+fi
+if ! printf '%s' "$reply" | jq -e '(.capabilities // []) | index("tools") != null' >/dev/null; then
+  echo "Warning: Arty's main model ($main) has no tools; switch with: ai-use qwen3:14b"
 fi

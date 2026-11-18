@@ -90,7 +90,15 @@ WIDE_JOB = re.compile(
     r"\bcode ?base\b|\bend[- ]to[- ]end\b", re.IGNORECASE)
 
 
-def is_big_job(text: str | None) -> bool:
+def is_long_or_wide_job(text: str | None) -> bool:
     text = text or ""
     is_long = len(text) >= BIG_MESSAGE_CHARS or len(text.splitlines()) >= BIG_PASTE_LINES
-    return is_long or bool(BUILD_JOB.search(text)) or bool(WIDE_JOB.search(text))
+    return is_long or bool(WIDE_JOB.search(text))
+
+
+def is_build_job(text: str | None) -> bool:
+    return bool(BUILD_JOB.search(text or ""))
+
+
+def is_big_job(text: str | None) -> bool:
+    return is_long_or_wide_job(text) or is_build_job(text)

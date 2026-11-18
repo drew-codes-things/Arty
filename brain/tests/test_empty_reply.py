@@ -19,7 +19,7 @@ import brain  # noqa: E402
 import connections  # noqa: E402
 import honesty  # noqa: E402
 from test_agent_mode import READ_FILE  # noqa: E402
-from test_round_timings import WARM, TimedOllama, answer, asked, offline_turns  # noqa: E402
+from test_round_timings import WARM, TimedEngine, answer, asked, offline_turns  # noqa: E402
 
 
 def step(name, result):
@@ -52,7 +52,7 @@ class EmptyReplyTest(unittest.TestCase):
         self.assertIn("ask that again", brain.empty_reply(conversation))
 
     def test_the_claim_check_leaves_the_brains_own_words_alone(self):
-        with unittest.mock.patch.object(connections, "http_json", side_effect=TimedOllama(nothing_written(), nothing_written())), \
+        with unittest.mock.patch.object(connections, "http_json", side_effect=TimedEngine(nothing_written(), nothing_written())), \
                 unittest.mock.patch.object(brain, "be_honest", side_effect=lambda text, *_: text) as checked:
             reply = brain.run_turn(asked("play the first lofi video on youtube"), "Arty", client_tools=[READ_FILE])[0]
         self.assertEqual(reply, honesty.LOST_TRAIN_OF_THOUGHT)
@@ -60,7 +60,7 @@ class EmptyReplyTest(unittest.TestCase):
 
     def test_a_model_reply_in_the_fallbacks_words_is_still_checked(self):
         written = "Sorry, I lost track before I could answer, but I have sent the email to your landlord."
-        with unittest.mock.patch.object(connections, "http_json", side_effect=TimedOllama(answer(written))), \
+        with unittest.mock.patch.object(connections, "http_json", side_effect=TimedEngine(answer(written))), \
                 unittest.mock.patch.object(brain, "be_honest", side_effect=lambda text, *_: text) as checked:
             brain.run_turn(asked("email my landlord"), "Arty", client_tools=[READ_FILE])
         checked.assert_called_once()

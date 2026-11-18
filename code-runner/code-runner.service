@@ -1,11 +1,13 @@
 [Unit]
 Description=Arty code runner (runs model-written code in a per-run sandbox)
-After=network-online.target
+After=network-online.target nftables.service
 Wants=network-online.target
+Requires=nftables.service
 RequiresMountsFor=/srv/runs
 
 [Service]
 Environment=RUNNER_LISTEN=0.0.0.0:8790
+EnvironmentFile=/etc/code-runner/runner.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/usr/bin/python3 -E -s /opt/code-runner/runner.py
 Restart=on-failure

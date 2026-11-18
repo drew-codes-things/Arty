@@ -32,6 +32,10 @@ class BadRequest(ValueError):
     pass
 
 
+class NoSuchSection(Exception):
+    pass
+
+
 def is_allowed_client(address: str, networks: tuple = ()) -> bool:
     try:
         client = ipaddress.ip_address(address)
@@ -50,13 +54,23 @@ def bridge_interface(name: str) -> ipaddress.IPv4Interface:
     raise RuntimeError(f"{name} has no IPv4 address yet")
 
 
-def number_from(query: dict, name: str, default: int, highest: int) -> int:
+def whole_number(query: dict, name: str, default: int) -> int:
     raw = (query.get(name) or [str(default)])[0]
     try:
-        value = int(raw)
+        return int(raw)
     except ValueError as error:
         raise BadRequest(f"{name} must be a whole number") from error
-    return max(1, min(value, highest))
+
+
+def number_from(query: dict, name: str, default: int, highest: int) -> int:
+    return max(1, min(whole_number(query, name, default), highest))
+
+
+def section_id_from(query: dict) -> int:
+    section_id = whole_number(query, "id", 0)
+    if section_id < 1:
+        raise BadRequest("id must be a section number, 1 or more")
+    return section_id
 
 
 def search_answer(database: Path, query: dict) -> dict:
@@ -76,11 +90,11 @@ def search_answer(database: Path, query: dict) -> dict:
 
 
 def read_answer(database: Path, query: dict) -> dict:
-    section_id = number_from(query, "id", 0, sys.maxsize)
+    section_id = section_id_from(query)
     chars = number_from(query, "chars", DEFAULT_READ_CHARS, MAX_READ_CHARS)
     section = read(database, section_id)
     if section is None:
-        raise LookupError(f"no section {section_id}")
+        raise NoSuchSection(f"no section {section_id}")
     body = section.pop("body")
     return {**section, "text": body[:chars], "truncated": len(body) > chars}
 
@@ -120,7 +134,7 @@ def make_handler(database: Path, networks: tuple = ()):
                 self.send_json(200, route(parse_qs(parsed.query)))
             except BadRequest as error:
                 self.send_json(400, {"error": str(error)})
-            except LookupError as error:
+            except NoSuchSection as error:
                 self.send_json(404, {"error": str(error)})
             except sqlite3.Error as error:
                 log.error("library database error on %s: %s", parsed.path, error)

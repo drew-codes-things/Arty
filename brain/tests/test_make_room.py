@@ -19,7 +19,7 @@ MB = 1024 ** 2
 REPO = Path(__file__).resolve().parents[2]
 
 
-class FakeOllama:
+class FakeEngine:
     def __init__(self, loaded, vanish_after_polls=0):
         self.loaded = [dict(m) for m in loaded]
         self.unloaded = []
@@ -39,39 +39,39 @@ class FakeOllama:
 
 class MakeRoom(unittest.TestCase):
     def make_room(self, fake, name):
-        with unittest.mock.patch.object(models, "_ollama", fake), \
+        with unittest.mock.patch.object(models, "_engine", fake), \
                 unittest.mock.patch.object(models, "installed", return_value=INSTALLED), \
                 unittest.mock.patch.object(models, "UNLOAD_POLL_SECONDS", 0):
             return models.make_room(name, BUDGET)
 
     def test_a_model_that_does_not_fit_beside_the_main_one_gets_it_unloaded_first(self):
-        fake = FakeOllama([MAIN], vanish_after_polls=2)
+        fake = FakeEngine([MAIN], vanish_after_polls=2)
         self.assertEqual(self.make_room(fake, "qwen2.5vl:7b"), ["qwen3:14b"])
         self.assertEqual(fake.unloaded, ["qwen3:14b"])
         self.assertEqual(fake.loaded, [])
 
     def test_a_model_that_fits_beside_what_is_loaded_unloads_nothing(self):
-        fake = FakeOllama([SMALL])
+        fake = FakeEngine([SMALL])
         self.assertEqual(self.make_room(fake, "qwen2.5vl:7b"), [])
         self.assertEqual(fake.unloaded, [])
 
     def test_a_model_already_loaded_needs_no_room(self):
-        fake = FakeOllama([MAIN])
+        fake = FakeEngine([MAIN])
         self.assertEqual(self.make_room(fake, "qwen3:14b"), [])
         self.assertEqual(fake.unloaded, [])
 
     def test_an_unknown_model_size_still_makes_room(self):
-        fake = FakeOllama([MAIN])
+        fake = FakeEngine([MAIN])
         self.assertEqual(self.make_room(fake, "brand-new:9b"), ["qwen3:14b"])
 
-    def test_an_unreachable_ollama_never_blocks_the_request(self):
+    def test_an_unreachable_engine_never_blocks_the_request(self):
         def down(*_, **__):
             raise urllib.error.URLError("refused")
         with self.assertLogs("brain.models", level="WARNING"):
             self.assertEqual(self.make_room(down, "qwen2.5vl:7b"), [])
 
     def test_a_model_that_never_goes_is_reported_not_waited_on_forever(self):
-        fake = FakeOllama([MAIN], vanish_after_polls=10 ** 6)
+        fake = FakeEngine([MAIN], vanish_after_polls=10 ** 6)
         with unittest.mock.patch.object(models, "UNLOAD_WAIT_SECONDS", 0.01), self.assertLogs("brain.models", level="WARNING"):
             self.assertEqual(self.make_room(fake, "qwen2.5vl:7b"), ["qwen3:14b"])
 

@@ -31,17 +31,23 @@ class HonestCodeAnswers(unittest.TestCase):
         config.start()
         self.addCleanup(config.stop)
 
-    def checked(self, answer, claims):
-        def judge(url, body):
+    def checked(self, answer, claims, sandbox_line=SANDBOX_LINE):
+        def judge(url, body, **_):
             prompt = body["messages"][0]["content"]
             verdict = {"kind": "A"} if prompt.startswith("The person said") else {"false_claims": claims}
             return {"message": {"content": json.dumps(verdict)}}
         with unittest.mock.patch.object(connections, "http_json", side_effect=judge):
-            return brain.be_honest(answer, ["code_sandbox"], [], request=REQUEST)
+            return brain.be_honest(answer, ["code_sandbox"], [], request=REQUEST, sandbox_line=sandbox_line)
 
     def test_the_sandbox_line_is_never_taken_for_a_false_claim(self):
         claim = {"text": SANDBOX_LINE, "correction": "The code was not actually run in a sandbox."}
         self.assertEqual(ANSWER, self.checked(ANSWER, [claim]))
+
+    def test_a_sandbox_line_the_brain_did_not_add_is_checked_like_any_claim(self):
+        claim = {"text": SANDBOX_LINE, "correction": "I didn't run it."}
+        reply = self.checked(ANSWER, [claim], sandbox_line="")
+        self.assertNotIn(SANDBOX_LINE, reply)
+        self.assertIn("I didn't run it.", reply)
 
     def test_code_keeps_its_indentation_when_a_claim_is_corrected(self):
         answer = ANSWER.replace("It turns", "I saved it to ~/parse.py.  It turns")

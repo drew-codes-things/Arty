@@ -1,0 +1,99 @@
+ARTY_ENGINE_URL=${ARTY_ENGINE_URL:-http://127.0.0.1:11438}
+PULL_MAX_SECONDS=${AI_PULL_MAX_SECONDS:-21600}
+PULL_STALL_SECONDS=${AI_PULL_STALL_SECONDS:-300}
+PULL_PROGRESS_STEP=10
+TAB=$(printf '\t')
+
+engine_call() {
+  method=$1 path=$2 seconds=$3 body=${4:-}
+  set -- -sS -X "$method" -w '\n%{http_code}'
+  [ -n "$seconds" ] && set -- "$@" --max-time "$seconds"
+  [ -n "$body" ] && set -- "$@" -H 'Content-Type: application/json' -d "$body"
+  if ! reply=$(curl "$@" "$ARTY_ENGINE_URL$path"); then
+    echo "Arty's engine isn't answering at $ARTY_ENGINE_URL (curl's reason is above)." >&2
+    return 1
+  fi
+  status=$(printf '%s\n' "$reply" | tail -n 1)
+  reply=$(printf '%s\n' "$reply" | sed '$d')
+}
+
+engine_error() {
+  printf '%s' "$reply" | jq -r '.error // empty' 2>/dev/null || printf '%s' "$reply"
+}
+
+pull_lines_as_steps() {
+  jq -Rr --unbuffered '. as $raw | (try fromjson catch null) as $line
+    | if ($line | type) != "object" then "unreadable\t-\t\($raw)"
+      elif $line.error then "error\t-\t\($line.error | tostring)"
+      elif $line.status == "success" then "success\t-\t-"
+      elif (($line.total // 0) > 0 and $line.completed != null) then
+        "progress\t\(($line.completed * 100 / $line.total) | floor)\t\($line.status // "downloading")"
+      else "status\t-\t\($line.status // "")" end
+    | gsub("[\r\n]"; " ")'
+}
+
+show_pull_steps() {
+  model=$1 outcome=unfinished shown_status= shown_step=
+  while IFS="$TAB" read -r kind percent detail; do
+    case $kind in
+      progress)
+        step=$((percent / PULL_PROGRESS_STEP))
+        if [ "$detail" != "$shown_status" ] || [ "$step" != "$shown_step" ]; then
+          printf '  %s %s%%\n' "$detail" "$percent"
+          shown_status=$detail shown_step=$step
+        fi ;;
+      status) [ -n "$detail" ] && printf '  %s\n' "$detail" ;;
+      success) [ "$outcome" = failed ] || outcome=success ;;
+      error | unreadable) outcome=failed; printf "Couldn't download %s: %s\n" "$model" "$detail" ;;
+    esac
+  done
+  case $outcome in
+    success) return 0 ;;
+    unfinished) echo "The download of $model stopped before it finished: the engine stopped answering, the link dropped or the time limit (${PULL_MAX_SECONDS} s, AI_PULL_MAX_SECONDS) passed. Pull again to resume." ;;
+  esac
+  return 1
+}
+
+stop_children_without_pkill() {
+  for status_file in /proc/[0-9]*/status; do
+    parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$status_file" 2>/dev/null)
+    [ "$parent" = "$$" ] || continue
+    child=${status_file#/proc/}
+    kill "${child%/status}" 2>/dev/null
+  done
+}
+
+stop_children() {
+  pkill -P $$ 2>/dev/null
+  [ $? -le 1 ] || stop_children_without_pkill
+}
+
+stop_pull() {
+  [ -n "$download_pid$steps_pid" ] && kill $download_pid $steps_pid 2>/dev/null
+  stop_children
+  [ -n "$pull_folder" ] && rm -rf "$pull_folder"
+  printf '\n%s\n' "Stopped. The engine stops the download too; pull again to resume."
+  exit "$1"
+}
+
+pull_model() {
+  download_pid='' steps_pid='' pull_folder=''
+  trap 'stop_pull 130' INT
+  trap 'stop_pull 143' TERM
+  trap 'stop_pull 129' HUP
+  trap 'stop_pull 131' QUIT
+  pull_folder=$(mktemp -d) || { trap - INT TERM HUP QUIT; return 1; }
+  mkfifo "$pull_folder/lines"
+  curl -sSN -X POST --max-time "$PULL_MAX_SECONDS" --speed-limit 1 --speed-time "$PULL_STALL_SECONDS" \
+    -H 'Content-Type: application/json' -d "$(jq -cn --arg model "$1" --arg source "${2:-}" '{model: $model, stream: true} + if $source == "" then {} else {source: $source} end')" \
+    "$ARTY_ENGINE_URL/api/pull" > "$pull_folder/lines" &
+  download_pid=$!
+  pull_lines_as_steps < "$pull_folder/lines" | show_pull_steps "$1" &
+  steps_pid=$!
+  wait "$steps_pid"
+  pulled=$?
+  trap - INT TERM HUP QUIT
+  wait "$download_pid" 2>/dev/null
+  rm -rf "$pull_folder"
+  return "$pulled"
+}

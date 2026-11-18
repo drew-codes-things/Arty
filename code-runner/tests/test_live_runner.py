@@ -1,9 +1,11 @@
 import json
 import os
 import unittest
+import urllib.error
 import urllib.request
 
 RUNNER_URL = os.environ.get("RUNNER_URL", "")
+RUNNER_TOKEN = os.environ.get("RUNNER_TOKEN", "")
 TIMEOUT_SECONDS = 90
 
 PASSING = {
@@ -59,15 +61,22 @@ FAILING = {
 }
 
 
-def checked(language: str, code: str, version: str = "") -> dict:
+def checked(language: str, code: str, version: str = "", token: str | None = None) -> dict:
     body = json.dumps({"language": language, "code": code, "version": version}).encode()
-    request = urllib.request.Request(f"{RUNNER_URL}/check", data=body, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {RUNNER_TOKEN if token is None else token}"}
+    request = urllib.request.Request(f"{RUNNER_URL}/check", data=body, headers=headers)
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         return json.load(response)
 
 
 @unittest.skipUnless(RUNNER_URL, "set RUNNER_URL to the code runner to run these")
 class LiveRunnerTest(unittest.TestCase):
+    def test_a_check_without_the_token_is_refused(self):
+        for token in ("", "not-the-token"):
+            with self.subTest(token=token), self.assertRaises(urllib.error.HTTPError) as refused:
+                checked("python", "print(1)\n", token=token)
+            self.assertEqual(401, refused.exception.code)
+
     def test_every_language_passes_good_code(self):
         for language, code in PASSING.items():
             with self.subTest(language=language):
@@ -115,9 +124,9 @@ class LiveRunnerTest(unittest.TestCase):
         self.assertEqual("failed", verdict["status"], verdict)
         self.assertIn("AddressSanitizer", verdict["problem"])
 
-    def test_sandbox_has_no_network_and_cannot_see_the_runner(self):
+    def test_sandbox_has_no_network_and_cannot_read_the_runners_secrets(self):
         code = ("import os, socket\nassert os.getuid() != 0\nassert not os.path.exists('/srv/runs')\n"
-                "assert not os.path.exists('/opt/code-runner/runner.py') or not os.access('/etc/shadow', os.R_OK)\n"
+                "assert not os.access('/etc/code-runner/runner.env', os.R_OK)\nassert not os.access('/etc/shadow', os.R_OK)\n"
                 "try:\n    socket.create_connection(('1.1.1.1', 53), 2)\n    raise SystemExit('network reachable')\n"
                 "except OSError:\n    print('isolated')\n")
         verdict = checked("python", code)

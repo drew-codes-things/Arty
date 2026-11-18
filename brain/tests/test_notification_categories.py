@@ -117,7 +117,7 @@ class Lectures(unittest.TestCase):
 class ModelSwitches(unittest.TestCase):
     def pull(self, found, usable=True):
         sent = []
-        with mock.patch.object(models, "_ollama"), mock.patch.object(models, "find", return_value=found), \
+        with mock.patch.object(models, "_engine"), mock.patch.object(models, "find", return_value=found), \
                 mock.patch.object(models, "installed", return_value=[]), mock.patch.object(models, "usable", return_value=usable), \
                 mock.patch.object(models, "_write_main_model"), mock.patch.object(models, "describe", return_value="qwen3:8b"):
             models._pull_then_switch("qwen3:8b", "qwen3:14b", lambda title, message, **options: sent.append(options.get("category")))

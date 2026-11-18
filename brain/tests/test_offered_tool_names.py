@@ -57,7 +57,7 @@ class FakeHub:
         return "results"
 
 
-class FakeOllama:
+class FakeEngine:
     def __init__(self, replies):
         self.replies = iter(replies)
         self.bodies = []
@@ -68,18 +68,18 @@ class FakeOllama:
 
 
 def run_turn(replies, request, hub_names=(), client_names=(), client_system="", agent=False):
-    ollama = FakeOllama(replies)
+    engine = FakeEngine(replies)
     state = {"messages": [{"role": "user", "content": request}], "context": {}}
     config = {"model": "m", "persona": "", "system_prompt": SHIPPED_PROMPT}
     with unittest.mock.patch.object(connections, "hub", FakeHub(hub_names)), \
-            unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
             unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
             unittest.mock.patch.object(agent_loop, "NATIVE_TOOLS", {}), \
             unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
         outcome = brain.run_agent(config, state, run=brain.AgentRun(client_tools=[tool(name) for name in client_names],
                                                                     client_system=client_system, agent=agent))
-    return outcome, ollama.bodies
+    return outcome, engine.bodies
 
 
 def system_text(body):

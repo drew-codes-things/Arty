@@ -44,7 +44,6 @@ scp -q bin/homelab-facts "$PROXMOX:/usr/local/sbin/homelab-facts"
 scp -q bin/homelab-security "$PROXMOX:/usr/local/sbin/homelab-security"
 scp -q bin/arty-gpu-select "$PROXMOX:/usr/local/sbin/arty-gpu-select"
 scp -q services/arty-gpu-select.service "$PROXMOX:/etc/systemd/system/arty-gpu-select.service"
-scp -q bin/ollama-gpu-env services/ollama-gpu.conf "$PROXMOX:/tmp/"
 ssh "$PROXMOX" bash -s -- "$CT" "$DESKTOP_VMID" "$AI_ADDRESS" "$DESKTOP_ADDRESS" "$HOST_ADDRESS" "$NETWORK" \
   "$HEAL_GUESTS" "$NEXTCLOUD_CT" "$TIMEZONE" "$SET_BACKUP_JOBS" "$HOST_FACTS_FILE" "$BACKUP_JOB" <<'REMOTE'
 set -euo pipefail
@@ -115,6 +114,11 @@ pct exec $CT -- bash -s <<'INNER'
 set -euo pipefail
 mkdir -p /srv/ai/searxng
 if [ ! -f /srv/ai/searxng/settings.yml ]; then
+  bridge=$(ip -4 -o addr show dev docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n 1) || bridge=
+  if [ -z "$bridge" ]; then
+    echo "docker0 has no IPv4 address yet, so the local docs search can't be pointed at it: start Docker on this container and run provision.sh again" >&2
+    exit 1
+  fi
   umask 077
   cat > /srv/ai/searxng/settings.yml <<EOF
 use_default_settings: true
@@ -140,7 +144,7 @@ engines:
     categories: [general, it]
     paging: false
     enable_http: true
-    search_url: http://$(ip -4 -o addr show dev docker0 | awk '{print $4}' | cut -d/ -f1):8889/search?q={query}&gate=coding&limit=5
+    search_url: http://$bridge:8889/search?q={query}&gate=coding&limit=5
     results_query: results
     url_query: url
     title_query: title
@@ -154,8 +158,40 @@ if ! docker inspect searxng >/dev/null 2>&1; then
   docker run -d --name searxng --restart unless-stopped -p 127.0.0.1:8888:8080 \
     -v /srv/ai/searxng:/etc/searxng -e SEARXNG_BASE_URL=http://127.0.0.1:8888/ searxng/searxng:latest >/dev/null
 fi
-ollama pull nomic-embed-text >/dev/null
-echo "   searxng and the embedding model are up"
+echo "   searxng is up"
+INNER
+
+echo "== CT $CT: the embedding model for the document library (through ArtyEngine)"
+pct exec $CT -- env EMBEDDING_PULL_SECONDS="${EMBEDDING_PULL_SECONDS:-1800}" bash -s <<'INNER' || echo "   WARNING: the embedding model step failed; the rest goes on. Later, on CT $CT: ai-pull nomic-embed-text"
+set -uo pipefail
+engine=${ARTY_ENGINE_URL:-http://127.0.0.1:11438}
+model=nomic-embed-text
+pull_seconds=${EMBEDDING_PULL_SECONDS:-1800}
+later="once that is sorted, run on this container: ai-pull $model"
+if ! curl -fsS --max-time 5 "$engine/api/version" >/dev/null; then
+  echo "   skipped: ArtyEngine isn't answering at $engine (install it first, README step 1); $later"
+  exit 0
+fi
+if ! listed=$(curl -fsS --max-time 30 "$engine/api/tags"); then
+  echo "   skipped: the engine couldn't list its models; $later"
+  exit 0
+fi
+if printf '%s' "$listed" | jq -e --arg model "$model" '.models[]? | select(.name == $model or .name == ($model + ":latest"))' >/dev/null; then
+  echo "   $model is already installed"
+  exit 0
+fi
+if ! reply=$(curl -sS --max-time "$pull_seconds" -w '\n%{http_code}' -H 'Content-Type: application/json' \
+    -d "$(jq -cn --arg model "$model" '{model: $model, stream: false}')" "$engine/api/pull"); then
+  echo "   skipped: the download didn't finish within $pull_seconds s or the engine stopped answering; the engine may still be downloading it, so wait for it to finish (ai-models lists it), or if it never appears, $later"
+  exit 0
+fi
+status=$(printf '%s\n' "$reply" | tail -n 1)
+if [ "$status" != 200 ]; then
+  reason=$(printf '%s\n' "$reply" | sed '$d' | jq -r '.error // empty' 2>/dev/null)
+  echo "   skipped: the engine couldn't download $model (HTTP $status: ${reason:-no reason given}); $later"
+  exit 0
+fi
+echo "   $model is installed"
 INNER
 
 echo "== CT $CT: HTTPS for starfire.ai (browsers only allow the microphone on https)"
@@ -260,21 +296,44 @@ EOF
 systemctl daemon-reload
 systemctl enable --now homelab-security.timer >/dev/null
 
-echo "== CT $CT: one context size for every Ollama caller"
-# A model loaded with one context size is reloaded (and its prompt cache lost) when a caller asks
-# for another, so callers that don't say (Open WebUI's titles) get the brain's size too.
-pct exec $CT -- bash -c 'mkdir -p /etc/systemd/system/ollama.service.d && printf "[Service]\nEnvironment=\"OLLAMA_CONTEXT_LENGTH=24576\"\nEnvironment=\"OLLAMA_MAX_LOADED_MODELS=2\"\nEnvironment=\"OLLAMA_KV_CACHE_TYPE=q8_0\"\n" > /etc/systemd/system/ollama.service.d/context.conf && systemctl daemon-reload && systemctl restart ollama'
-
-echo "== GPU: CT $CT gets whichever card is fitted (NVIDIA: CUDA, AMD: Vulkan), checked at every boot"
+echo "== GPU: CT $CT gets the NVIDIA or AMD card that is fitted (AMD is untested), checked at every boot"
+ROCM_LIBRARIES_VERSION=10.0.0
+ROCM_BUILD_TARGETS="gfx908 gfx90a gfx942 gfx950 gfx1010 gfx1011 gfx1012 gfx1030 gfx1031 gfx1032 gfx1033 gfx1034 gfx1035 gfx1036 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1200 gfx1201"
 chmod 755 /usr/local/sbin/arty-gpu-select  # copied over before this block
 systemctl daemon-reload
 systemctl enable arty-gpu-select.service >/dev/null 2>&1
-pct exec $CT -- bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mesa-vulkan-drivers >/dev/null'
-pct push $CT /tmp/ollama-gpu-env /usr/local/bin/ollama-gpu-env --perms 755
-pct push $CT /tmp/ollama-gpu.conf /etc/systemd/system/ollama.service.d/gpu.conf
-rm -f /tmp/ollama-gpu-env /tmp/ollama-gpu.conf
-pct exec $CT -- bash -c 'systemctl daemon-reload && systemctl restart ollama'
 /usr/local/sbin/arty-gpu-select --dry-run
+gpu_kind=$(/usr/local/sbin/arty-gpu-select --kind)
+case "$gpu_kind" in
+  amd-rocm | amd-vulkan)
+    echo "   AMD card: the Vulkan loader and Mesa's Vulkan driver in CT $CT for ArtyEngine's Vulkan runtime build (the fallback for ROCm)"
+    pct exec $CT -- bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libvulkan1 mesa-vulkan-drivers >/dev/null' \
+      || echo "   WARNING: the Vulkan packages did not install; the rest goes on"
+    ;;
+esac
+if [ "$gpu_kind" = amd-rocm ]; then
+  gfx_target=$(/usr/local/sbin/arty-gpu-select --gfx-target)
+  if [ -z "$gfx_target" ]; then
+    echo "   WARNING: the card's gfx target can't be read from /sys/class/kfd, so no ROCm kernel package is guessed; ArtyEngine's README, AMD GPUs (untested), covers the install by hand"
+  elif ! echo " $ROCM_BUILD_TARGETS " | grep -q " $gfx_target "; then
+    echo "   AMD card target $gfx_target: ArtyEngine's ROCm build carries no code for it and AMD has no ROCm $ROCM_LIBRARIES_VERSION kernel package for it, so nothing ROCm is installed: Vulkan only (ArtyEngine's Vulkan build)"
+  else
+    echo "   AMD card with /dev/kfd ($gfx_target): ROCm $ROCM_LIBRARIES_VERSION libraries and the $gfx_target kernels in CT $CT for ArtyEngine's ROCm runtime build"
+    echo "   untested: the kernel package is checked by a folder named rocm_sdk_device_$gfx_target, a name no real AMD package has been seen to use yet; if the check fails after pip installed it, list the folder's site-packages and set the name from what is there"
+    pct exec $CT -- bash -s -- "$ROCM_LIBRARIES_VERSION" "$gfx_target" <<'INNER' || echo "   WARNING: the ROCm libraries step failed; the rest goes on. ArtyEngine's README, AMD GPUs (untested), covers it by hand"
+set -euo pipefail
+folder=/srv/ai/arty-engine/rocm-$(echo "$1" | cut -d. -f1,2)
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
+[ -x "$folder/bin/pip" ] || python3 -m venv "$folder"
+"$folder/bin/pip" install -q --no-cache-dir --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,device-$2]==$1"
+[ -n "$(find "$folder" -maxdepth 5 -type d \( -name "rocm_sdk_device_$2" -o -name "rocm_sdk_device_$2[-.]*" \) | head -1)" ] || { echo "   no ROCm kernel package for $2 was installed in $folder; pip only warns when AMD does not offer one. The folder name this looks for (rocm_sdk_device_$2) is untested on a real card, so list $folder's site-packages before taking this as final" >&2; exit 1; }
+folders=$(find "$folder" \( -name 'libamdhip64.so.7*' -o -name 'libhipblas.so.3*' -o -name 'librocblas.so.5*' \) -exec dirname {} \; | sort -u)
+[ "$(echo "$folders" | grep -c .)" -ge 2 ] || { echo "   the ROCm libraries are not all in $folder after the install" >&2; exit 1; }
+echo "   ROCm libraries in these folders; list both in runtimes.rocm.library_path of ArtyEngine's engine.json:"
+echo "$folders" | sed 's/^/     /'
+INNER
+  fi
+fi
 
 echo "== CT $CT: media tools (ffmpeg, ImageMagick, faster-whisper speech-to-text)"
 pct exec $CT -- bash -s <<'INNER'

@@ -20,7 +20,7 @@ import brain  # noqa: E402
 import agent_loop  # noqa: E402
 import connections  # noqa: E402
 import honesty  # noqa: E402
-from test_review_tonight import FakeHub, FakeOllama, run_agent, said  # noqa: E402
+from test_review_tonight import FakeHub, FakeEngine, run_agent, said  # noqa: E402
 
 SYSTEM = {"role": "system", "content": "You are Arty. Use your tools."}
 TOOLS = [{"type": "function", "function": {"name": "weather", "description": "w", "parameters": {"type": "object", "properties": {}}}}]
@@ -31,11 +31,11 @@ class ExtractionKeepsTheChatCached(unittest.TestCase):
     def test_extraction_sends_the_chats_system_prompt_and_tools_first(self):
         bodies = []
 
-        def ollama(url, body=None, **kwargs):
+        def engine(url, body=None, **kwargs):
             bodies.append(body)
             return {"message": {"content": json.dumps({"facts": [{"about": "Sam", "fact": "has a sister called Ella"}]})}}
         saved = []
-        with mock.patch.object(connections, "http_json", side_effect=ollama):
+        with mock.patch.object(connections, "http_json", side_effect=engine):
             brain.extract_memories(CONFIG, "my sister is called Ella", "Nice.", save=saved.extend,
                                    prefix={"messages": [SYSTEM], "tools": TOOLS})
         self.assertEqual(bodies[0]["messages"][0], SYSTEM)
@@ -54,17 +54,17 @@ class ExtractionKeepsTheChatCached(unittest.TestCase):
         self.assertNotIn("tools", bodies[0])
 
     def test_the_tool_loop_keeps_the_last_prompts_system_message_and_tools(self):
-        ollama = FakeOllama([said("Hello!")])
+        engine = FakeEngine([said("Hello!")])
         state = {"messages": [{"role": "user", "content": "hi"}], "context": {}}
         with mock.patch.object(connections, "hub", FakeHub(("weather_tool",))), \
-                mock.patch.object(connections, "http_json", side_effect=ollama), \
+                mock.patch.object(connections, "http_json", side_effect=engine), \
                 mock.patch.object(brain.models, "budget_for", return_value=0), \
                 mock.patch.object(brain.models, "find", return_value=None), \
                 mock.patch.object(agent_loop, "system_prompt", return_value="You are Arty."), \
                 mock.patch.object(agent_loop, "current_context", return_value=""), \
                 mock.patch.object(brain.policy, "select_tools", side_effect=lambda tools, *args, **kwargs: tools):
             brain.run_agent({"model": "m", "approval": {}}, state)
-        sent = ollama.chat_bodies[-1]
+        sent = engine.chat_bodies[-1]
         self.assertEqual(state["prefix"]["messages"], sent["messages"][:1])
         self.assertEqual(state["prefix"]["messages"][0]["role"], "system")
         self.assertEqual(state["prefix"]["tools"], sent.get("tools") or [])

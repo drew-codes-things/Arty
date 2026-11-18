@@ -21,8 +21,8 @@ import honesty  # noqa: E402
 import written_calls  # noqa: E402
 from test_agent_mode import READ_FILE  # noqa: E402
 import test_review_tonight  # noqa: E402
-from test_review_tonight import FakeOllama, last_user_note, run_agent, said, tool  # noqa: E402
-from test_round_timings import TimedOllama, answer, asked, offline_turns  # noqa: E402
+from test_review_tonight import FakeEngine, last_user_note, run_agent, said, tool  # noqa: E402
+from test_round_timings import TimedEngine, answer, asked, offline_turns  # noqa: E402
 
 MARKUP = test_review_tonight.RawMarkupIsNeverTheReply.MARKUP
 CALL_MARKUP_ONLY = ("mistral style call", "broken call fragment", "xml style call")
@@ -42,30 +42,30 @@ def calls_with_text(text):
 class NormalRepliesNeverSpeakCallMarkup(unittest.TestCase):
     def test_a_reply_of_only_markup_gets_the_empty_reply_nudge_and_then_no_answer(self):
         for name, text in MARKUP.items():
-            ollama = FakeOllama([said(text), said(text)])
-            outcome, _ = run_agent(ollama, [{"role": "user", "content": "tell me about lofi"}],
+            engine = FakeEngine([said(text), said(text)])
+            outcome, _ = run_agent(engine, [{"role": "user", "content": "tell me about lofi"}],
                                    client_tools=[tool("chrome_open")])
-            self.assertIn(EMPTY_NUDGE, last_user_note(ollama.chat_bodies[1]), name)
+            self.assertIn(EMPTY_NUDGE, last_user_note(engine.chat_bodies[1]), name)
             self.assertEqual(outcome["answer"], "", name)
 
     def test_after_the_nudge_a_clean_answer_is_given(self):
-        ollama = FakeOllama([said(MARKUP["mistral style call"]), said("Lofi is calm music.")])
-        outcome, _ = run_agent(ollama, [{"role": "user", "content": "tell me about lofi"}],
+        engine = FakeEngine([said(MARKUP["mistral style call"]), said("Lofi is calm music.")])
+        outcome, _ = run_agent(engine, [{"role": "user", "content": "tell me about lofi"}],
                                client_tools=[tool("chrome_open")])
         self.assertEqual(outcome["answer"], "Lofi is calm music.")
 
     def test_words_after_a_stray_closing_think_tag_are_kept(self):
-        ollama = FakeOllama([said("The user wants a summary.\n</think>\n\nLofi is calm music.")])
-        outcome, _ = run_agent(ollama, [{"role": "user", "content": "tell me about lofi"}])
+        engine = FakeEngine([said("The user wants a summary.\n</think>\n\nLofi is calm music.")])
+        outcome, _ = run_agent(engine, [{"role": "user", "content": "tell me about lofi"}])
         self.assertEqual(outcome["answer"], "Lofi is calm music.")
 
     def test_markup_shown_in_code_is_part_of_the_answer(self):
         for text in (SHOWN_IN_CODE, SHOWN_INLINE):
-            outcome, _ = run_agent(FakeOllama([said(text)]), [{"role": "user", "content": "how do models write tool calls?"}])
+            outcome, _ = run_agent(FakeEngine([said(text)]), [{"role": "user", "content": "how do models write tool calls?"}])
             self.assertEqual(outcome["answer"], text)
 
     def test_words_sent_with_client_steps_carry_no_markup(self):
-        outcome, _ = run_agent(FakeOllama([calls_with_text("[TOOL_CALLS]")]), [{"role": "user", "content": "what tabs are open?"}],
+        outcome, _ = run_agent(FakeEngine([calls_with_text("[TOOL_CALLS]")]), [{"role": "user", "content": "what tabs are open?"}],
                                client_tools=[tool("chrome_tabs")])
         self.assertEqual(outcome["status"], "client_tools")
         self.assertEqual(outcome["content"], "")
@@ -76,16 +76,16 @@ class TheTurnFallsBackWhenOnlyMarkupIsLeft(unittest.TestCase):
         offline_turns(self)
 
     def test_markup_twice_gives_the_brains_own_fallback(self):
-        ollama = TimedOllama(answer(MARKUP["mistral style call"]), answer(MARKUP["broken call fragment"]))
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = TimedEngine(answer(MARKUP["mistral style call"]), answer(MARKUP["broken call fragment"]))
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             reply = brain.run_turn(asked("tell me about lofi"), "Arty", client_tools=[READ_FILE])[0]
         self.assertEqual(reply, honesty.LOST_TRAIN_OF_THOUGHT)
 
     def test_streamed_pieces_never_carry_markup(self):
         sent = []
-        ollama = TimedOllama(answer(f"{CALL}\nMore words here.\n"), answer("Lofi is calm music."))
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
-                unittest.mock.patch.object(connections, "stream_chat", side_effect=ollama.streamed):
+        engine = TimedEngine(answer(f"{CALL}\nMore words here.\n"), answer("Lofi is calm music."))
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
+                unittest.mock.patch.object(connections, "stream_chat", side_effect=engine.streamed):
             reply = brain.run_turn(asked("tell me about lofi"), "Arty", client_tools=[READ_FILE], on_text=sent.append)[0]
         streamed = "".join(sent)
         self.assertIsNone(written_calls.CALL_MARKUP.search(streamed), streamed)

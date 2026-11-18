@@ -19,8 +19,8 @@ from remote import (DEFAULT_TIMEOUT, GUI_ENV, PRIVATE_EXIT, PRIVATE_REFUSAL, cli
                     quoted, refuse_private_target, resolve_outside_private_folders, ssh, touches_private_folders)
 from remote import text as remote_text
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-VISION_MODEL = os.environ.get("VISION_MODEL", "qwen2.5vl:7b")
+ARTY_ENGINE_URL = os.environ.get("ARTY_ENGINE_URL", "http://127.0.0.1:11438")
+VISION_MODEL = os.environ.get("VISION_MODEL", "mimo-v2.6:9b")
 BRAIN_CONFIG = os.environ.get("BRAIN_CONFIG", "/srv/ai/brain/brain.json")
 FALLBACK_CONTEXT_TOKENS = 24576
 SHIFTS_CONTEXT = False
@@ -357,7 +357,7 @@ def look_at_desktop(question: str = "") -> str:
     )
     body = json.dumps(for_runner({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(shot).decode()],
                                   "stream": False, "keep_alive": 0})).encode()
-    request = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(f"{ARTY_ENGINE_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
             return json.loads(response.read())["response"].strip()
@@ -367,7 +367,7 @@ def look_at_desktop(question: str = "") -> str:
             return f"No vision model available. Ask the user to run: ai-pull {VISION_MODEL}"
         return f"vision model error: {detail[:300]}"
     except (urllib.error.URLError, TimeoutError) as error:
-        return f"could not reach Ollama: {error}"
+        return f"could not reach Arty's engine: {error}"
 
 
 def _ocr_words() -> list[dict] | str:

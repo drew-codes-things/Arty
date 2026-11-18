@@ -274,7 +274,7 @@ class ModelCache(unittest.TestCase):
             time.sleep(1)
             return {"models": []}
 
-        with mock.patch.object(models, "_ollama", slow):
+        with mock.patch.object(models, "_engine", slow):
             refresher = threading.Thread(target=models.installed)
             refresher.start()
             started.wait(2)

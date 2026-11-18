@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
-from test_review_tonight import FakeHub, FakeOllama, last_user_note, run_agent, said  # noqa: E402
+from test_review_tonight import FakeHub, FakeEngine, last_user_note, run_agent, said  # noqa: E402
 
 DESKTOP = ("workspace__run_command", "workspace__read_terminal", "workspace__list_files", "workspace__read_file",
            "fetch__fetch", "research__web_search")
@@ -17,9 +17,9 @@ EXPLAIN = "explain how"
 
 class HowToQuestions(unittest.TestCase):
     def sent(self, text):
-        ollama = FakeOllama([said("Use pkill -f python.")] * 4)
-        run_agent(ollama, [{"role": "user", "content": text}], hub=FakeHub(DESKTOP))
-        body = ollama.chat_bodies[0]
+        engine = FakeEngine([said("Use pkill -f python.")] * 4)
+        run_agent(engine, [{"role": "user", "content": text}], hub=FakeHub(DESKTOP))
+        body = engine.chat_bodies[0]
         return last_user_note(body), {tool["function"]["name"] for tool in body.get("tools") or []}
 
     def test_a_how_to_question_is_explained_without_running_anything(self):

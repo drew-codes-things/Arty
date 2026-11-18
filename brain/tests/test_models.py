@@ -25,9 +25,9 @@ class AskOtherModel(unittest.TestCase):
         standalone = {"name": "side-model:12b", "embedding": False, "tools": True}
         with mock.patch.object(models, "find", return_value=standalone), \
                 mock.patch.object(models, "arty_models", return_value=["qwen3:14b"]), \
-                mock.patch.object(models, "_ollama") as ollama:
+                mock.patch.object(models, "_engine") as engine:
             reply = models.ask("side-model:12b", "write a poem", {"model": "qwen3:14b"})
-        ollama.assert_not_called()
+        engine.assert_not_called()
         self.assertIn("isn't one of my models", reply)
 
     def test_an_arty_model_is_asked(self):
@@ -35,9 +35,9 @@ class AskOtherModel(unittest.TestCase):
         with mock.patch.object(models, "find", return_value=allowed), \
                 mock.patch.object(models, "arty_models", return_value=["qwen3:14b"]), \
                 mock.patch.object(models, "make_room", return_value=[]), \
-                mock.patch.object(models, "_ollama", return_value={"message": {"content": "done"}}) as ollama:
+                mock.patch.object(models, "_engine", return_value={"message": {"content": "done"}}) as engine:
             reply = models.ask("qwen3:14b", "write a poem", {"model": "qwen3:14b"})
-        ollama.assert_called_once()
+        engine.assert_called_once()
         self.assertEqual(reply, "qwen3:14b says:\ndone")
 
 

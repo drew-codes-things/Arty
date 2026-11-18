@@ -1,12 +1,15 @@
 import builtins
-import importlib
-import inspect
 import io
+import json
 import logging
 import re
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 from fresh_answer import FRESH_ANSWER
+from module_catalogue import may_import
 
 log = logging.getLogger("brain.code_check")
 
@@ -25,7 +28,9 @@ BUILTIN_TYPES = (str, bytes, bytearray, list, dict, set, frozenset, tuple, int, 
                  memoryview, slice, BaseException, io.TextIOWrapper, io.BufferedReader, io.BufferedWriter, io.BytesIO,
                  io.StringIO)
 PLAIN_PYTHON = frozenset(dir(builtins)).union(*(dir(kind) for kind in BUILTIN_TYPES))
-NEVER_IMPORTED = frozenset({"antigravity", "this", "idlelib", "tkinter", "turtle", "turtledemo", "__hello__", "__phello__"})
+CATALOGUE_SCRIPT = Path(__file__).resolve().with_name("module_catalogue.py")
+CATALOGUE_SECONDS = 15
+STDERR_SHOWN_CHARS = 300
 
 REWRITE_NOTE = ("(I checked your code against the page you read, {url}: it calls {names}, which neither that page nor "
                 "the search results show, so {pronoun} may not exist. Rewrite your whole answer using only what the "
@@ -38,23 +43,27 @@ def python_code(answer: str) -> str:
     return COMMENT.sub("", STRING_LITERAL.sub('""', "\n".join(blocks)))
 
 
-def standard_module(name: str):
-    if name.split(".")[0] not in sys.stdlib_module_names or name.split(".")[0] in NEVER_IMPORTED:
-        return None
+class CatalogueUnavailable(RuntimeError):
+    pass
+
+
+def built_catalogue(names: set[str]) -> dict[str, dict]:
+    wanted = sorted(name for name in names if may_import(name))
+    if not wanted:
+        return {}
+    with tempfile.TemporaryDirectory(prefix="arty-module-catalogue-") as folder:
+        try:
+            listed = subprocess.run([sys.executable, "-I", str(CATALOGUE_SCRIPT)], input=json.dumps(wanted), capture_output=True,
+                                    text=True, timeout=CATALOGUE_SECONDS, cwd=folder, check=False)
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise CatalogueUnavailable(f"couldn't list the names in {', '.join(wanted)}: {error}") from error
+    if listed.returncode != 0:
+        raise CatalogueUnavailable(f"listing the names in {', '.join(wanted)} exited with {listed.returncode}: "
+                                   f"{listed.stderr[-STDERR_SHOWN_CHARS:].strip()}")
     try:
-        return importlib.import_module(name)
-    except ImportError as error:
-        log.debug("couldn't load %s to check code against it: %s", name, error)
-        return None
-
-
-def names_in_module(module) -> set[str]:
-    names = set(dir(module))
-    for name in dir(module):
-        member = getattr(module, name, None)
-        if inspect.isclass(member):
-            names.update(dir(member))
-    return names
+        return json.loads(listed.stdout)
+    except ValueError as error:
+        raise CatalogueUnavailable(f"listing the names in {', '.join(wanted)} gave no readable answer: {error}") from error
 
 
 def imported_names(code: str) -> tuple[set[str], dict[str, set[str]]]:
@@ -73,45 +82,44 @@ def imported_names(code: str) -> tuple[set[str], dict[str, set[str]]]:
     return bound, modules
 
 
-def imported_member(module, name: str):
-    if hasattr(module, name) or not hasattr(module, "__path__"):
-        return getattr(module, name, None)
-    return standard_module(f"{module.__name__}.{name}")
+def modules_to_list(modules: dict[str, set[str]], called: list[tuple[str, str]]) -> set[str]:
+    wanted = set(modules) | {owner for owner, _ in called if owner}
+    return wanted | {f"{module}.{member}" for module, members in modules.items() for member in members}
 
 
-def names_from_imports(modules: dict[str, set[str]]) -> set[str]:
+def names_from_imports(modules: dict[str, set[str]], catalogue: dict[str, dict]) -> set[str]:
     known = set()
     for name, members in modules.items():
-        if (module := standard_module(name)) is None:
+        if name not in catalogue:
             continue
-        known |= names_in_module(module)
-        for member in filter(inspect.ismodule, (imported_member(module, member) for member in members)):
-            known |= names_in_module(member)
+        known.update(catalogue[name]["all"])
+        for member in members:
+            known.update(catalogue.get(f"{name}.{member}", {}).get("all", ()))
     return known
 
 
-def known_names(code: str, evidence: str) -> set[str]:
-    bound, modules = imported_names(code)
+def known_names(code: str, evidence: str, modules: dict[str, set[str]], bound: set[str], catalogue: dict[str, dict]) -> set[str]:
     return (set(PLAIN_PYTHON) | bound | set(DEFINED.findall(code)) | set(WORD.findall(evidence.lower()))
-            | names_from_imports(modules))
+            | names_from_imports(modules, catalogue))
 
 
-def is_known(owner: str, name: str, known: set[str]) -> bool:
+def is_known(owner: str, name: str, known: set[str], catalogue: dict[str, dict]) -> bool:
     if name in known or name.lower() in known:
         return True
-    module = standard_module(owner) if owner else None
-    return module is not None and hasattr(module, name)
+    return name in catalogue.get(owner, {}).get("own", ())
 
 
 def unconfirmed_calls(answer: str, evidence: str) -> list[str]:
     code = python_code(answer)
     if not code.strip():
         return []
-    known = known_names(code, evidence)
     called = DOTTED_CALL.findall(code) + [("", name) for name in CHAINED_CALL.findall(code)]
+    bound, modules = imported_names(code)
+    catalogue = built_catalogue(modules_to_list(modules, called))
+    known = known_names(code, evidence, modules, bound, catalogue)
     unconfirmed = []
     for owner, name in called:
-        if name not in unconfirmed and not is_known(owner, name, known):
+        if name not in unconfirmed and not is_known(owner, name, known, catalogue):
             unconfirmed.append(name)
     return unconfirmed
 

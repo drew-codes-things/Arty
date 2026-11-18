@@ -10,9 +10,13 @@ import code_sandbox
 import coding
 import connections
 import docs_reading
+import example_checks
 import fresh_answer
+import hidden_notes
 import models
 import policy
+import private_text
+import run_requests
 import sharing
 import store
 import style
@@ -23,14 +27,16 @@ import written_calls
 from agent_sessions import AgentSessions
 from api_support import ApiError
 from archive import message_text
-from settings import OLLAMA_URL
+from settings import ARTY_ENGINE_URL
 from native_tools import NATIVE_TOOLS, BACKGROUND_ONLY_EXCLUDED
 from reply_rules import (PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING, SEARCH_REQUEST, PROMISE,
-    TOOL_TALK, DO_REQUEST, PRETEND_TOOLS, TOOL_FAILED, FAILED_NOTE, ANSWERED_ALREADY_CHARS, without_app_notes)
-from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ONLY_NOTE, asks_for_code, asks_to_run, wants_the_computer,
+    TOOL_TALK, DO_REQUEST, PRETEND_TOOLS, TOOL_FAILED, FAILED_NOTE, ANSWERED_ALREADY_CHARS, NOT_ACTIONS, without_app_notes)
+from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ONLY_NOTE, asks_for_code, asks_for_the_computer,
     WRITE_AND_RUN_NOTE, READ_LINK_NOTE, asks_to_read_a_link, thinking_for, HOW_TO_NOTE, asks_how_to,
     steer_last_request, steer_away_from_repeats, with_thinking, with_context, parse_arguments, DESKTOP_TOOLS,
-    NOTHING_TO_SIGN_IN, question_for_user)
+    NOTHING_TO_SIGN_IN, question_for_user, RUN_COMMAND_TOOLS, DESKTOP_RUN_COMMAND_TOOLS, RUN_THE_CODE_NOTE, DONT_RUN_NOTE,
+    asks_to_install, WRITE_ONLY_UNCHECKED_NOTE, DONT_RUN_UNCHECKED_NOTE, SEARCH_RESULTS_NOTE, NOTHING_DONE_NOTE,
+    PRETEND_TOOLS_NOTE, HALF_WRITTEN_CALL_NOTE, EMPTY_REPLY_NOTE)
 from connections import TOOL_RESULT_CHARS
 from prompting import system_prompt, with_tool_guide, current_context
 from native_calls import run_native_safely
@@ -80,7 +86,7 @@ def private_upload(name: str, arguments: dict) -> str | None:
     path = str(arguments.get("path") or "")
     if name != "workspace__browser_upload" or not sharing.is_private(path):
         return None
-    return f"Refused: {path} is private (keys, passwords or a browser profile), so it is never uploaded anywhere."
+    return f"{REFUSED_RESULT} {path} is private (keys, passwords or a browser profile), so it is never uploaded anywhere."
 
 
 def hold_for_approval(reason, call, calls, background, state, requested, add, tool_log, raw):
@@ -120,6 +126,14 @@ def turn_rounds(raw: dict | None) -> list[dict]:
     return list((raw or {}).get(ROUNDS_KEY) or [])
 
 
+ENGINE_FAULT_STATUS = 500
+MODEL_FAILED_ANSWER = "Sorry, the model failed while writing this answer. Please try again."
+AFTER_TOOLS_FAILED_ANSWER = ("Sorry, the model failed while writing this answer{reason}. These steps had already run, "
+                             "so I have not repeated them:\n{steps}")
+RAN_RESULT_CHARS = 200
+PLAIN_REASON = re.compile(r"[\w ,.:;'()/-]{1,120}")
+REFUSED_RESULT = "Refused:"
+ENGINE_FAILED_KEY = "engine_failed"
 WINDOW_OVERFLOW = re.compile(r"context (size|length|window)|exceeds the available context|longer than the context", re.IGNORECASE)
 OVERFLOW_STATUS = 413
 OVERFLOW_TYPE = "context_length_exceeded"
@@ -150,7 +164,7 @@ class WindowOverflow(ApiError):
                 "context_tokens": self.window}
 
 
-def ollama_error_text(error: Exception) -> str:
+def engine_error_text(error: Exception) -> str:
     if not isinstance(error, urllib.error.HTTPError):
         return str(error)
     try:
@@ -179,26 +193,81 @@ def cut_short_note(config: dict, raw: dict, agent: bool) -> str:
     return WINDOW_END_NOTE
 
 
-def model_reply(body: dict, config: dict, draft, risky, on_thinking, agent: bool) -> dict:
+def engine_reply(body: dict, draft, risky, on_thinking) -> dict:
+    if draft:
+        return connections.stream_chat(body, lambda piece: draft.feed(piece, risky), on_thinking=on_thinking)
+    return connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body)
+
+
+def acted(message: dict) -> bool:
+    if message.get("role") != "tool" or message.get("tool_name") in NOT_ACTIONS:
+        return False
+    result = message_text(message).strip()
+    return result not in (NOT_RUN_YET, HIDDEN_TOOL_RESULT) and not result.startswith(
+        (written_calls.NOTHING_HAPPENED, REFUSED_RESULT))
+
+
+def tools_that_ran(messages: list) -> list[tuple[str, str]]:
+    last_request = max((index for index, message in enumerate(messages) if message.get("role") == "user"), default=-1)
+    return [(message.get("tool_name") or "a tool", message_text(message)) for message in messages[last_request + 1:]
+            if acted(message)]
+
+
+def shown_reason(reason: str) -> str:
+    line = first_line(reason)
+    return f" ({line})" if PLAIN_REASON.fullmatch(line) else ""
+
+
+def is_an_engine_fault(error: Exception) -> bool:
+    return isinstance(error, urllib.error.HTTPError) and error.code >= ENGINE_FAULT_STATUS
+
+
+def failed_model_reply() -> dict:
+    return {"message": {"role": "assistant", "content": MODEL_FAILED_ANSWER, "tool_calls": []}, "done": True,
+            "done_reason": "stop"}
+
+
+def first_line(text: str) -> str:
+    lines = text.strip().splitlines()
+    return lines[0][:RAN_RESULT_CHARS] if lines else "no result"
+
+
+def failed_after_tools_reply(ran: list[tuple[str, str]], reason: str) -> dict:
+    steps = "\n".join(f"- {name}: {first_line(result)}" for name, result in ran)
+    answer = AFTER_TOOLS_FAILED_ANSWER.format(reason=shown_reason(reason), steps=steps)
+    return {"message": {"role": "assistant", "content": answer, "tool_calls": []}, "done": True, "done_reason": "stop",
+            ENGINE_FAILED_KEY: True}
+
+
+def model_reply(body: dict, config: dict, draft, risky, on_thinking, agent: bool, ran: list[tuple[str, str]]) -> dict:
     try:
-        if draft:
-            return connections.stream_chat(body, lambda piece: draft.feed(piece, risky), on_thinking=on_thinking)
-        return connections.http_json(f"{OLLAMA_URL}/api/chat", body=body)
+        return engine_reply(body, draft, risky, on_thinking)
     except (urllib.error.HTTPError, RuntimeError) as error:
-        reason = ollama_error_text(error)
-        if agent and WINDOW_OVERFLOW.search(reason):
+        reason = engine_error_text(error)
+        if WINDOW_OVERFLOW.search(reason) and agent:
             log.warning("an agent conversation did not fit %s's window: %s", config["model"], reason)
             raise WindowOverflow(config["model"], models.context_tokens(config, config["model"])) from None
-        raise
+        if WINDOW_OVERFLOW.search(reason) or not is_an_engine_fault(error) or draft and draft.raw:
+            raise
+        if ran:
+            log.warning("the engine failed a reply from %s (%s) after %d tool call(s) ran; not retrying",
+                        config["model"], reason, len(ran))
+            return failed_after_tools_reply(ran, reason)
+        log.warning("the engine failed a reply from %s (%s); trying once more", config["model"], reason)
+    try:
+        return engine_reply(body, draft, risky, on_thinking)
+    except (urllib.error.HTTPError, RuntimeError, OSError) as error:
+        log.warning("the engine failed the retry too (%s); answering that the model failed", engine_error_text(error))
+        return failed_model_reply()
 
 
 def written_reply(body: dict) -> str:
     try:
-        shown = connections.http_json(f"{OLLAMA_URL}/api/chat", body={**body, "stream": False, "_debug_render_only": True})
+        shown = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body={**body, "stream": False, "_debug_render_only": True})
         replay = {"model": body["model"], "prompt": shown["_debug_info"]["rendered_template"], "raw": True, "stream": False,
                   "options": body.get("options") or {}}
         replay.update({key: body[key] for key in ("keep_alive", "shift") if key in body})
-        return connections.http_json(f"{OLLAMA_URL}/api/generate", body=replay).get("response") or ""
+        return connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=replay).get("response") or ""
     except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError) as error:
         log.warning("couldn't replay an empty model reply to see what it wrote: %s", error)
         return ""
@@ -224,6 +293,7 @@ class AgentRun:
     looked_up: tuple | None = None
     agent: bool = False
     on_thinking: object = None
+    client_texts: private_text.KnownText = private_text.NOTHING_KNOWN
 
 
 @dataclass
@@ -260,6 +330,10 @@ class AgentTurn:
     sandbox_report: object = None
     output_mismatches: list = field(default_factory=list)
     output_rewritten: bool = False
+    example_checks: str = ""
+    examples_written: bool = False
+    example_outcome: object = None
+    private: object = private_text.NOTHING_HIDDEN
 
     @property
     def is_chat(self) -> bool:
@@ -282,19 +356,76 @@ class AgentTurn:
 BACKGROUND_TOOL_ROUNDS = 30
 
 
+class TurnEnded(RuntimeError):
+    pass
+
+
 def run_agent(config, state, run: AgentRun = AgentRun()):
     """The tool loop. state = {"messages": [...], "context": {...}, "groups": [...]} and is updated in place.
     Returns {"status": "done", "answer": ...} or {"status": "waiting", "waiting": {...}}.
     With a draft (drafts.Draft), the answer's safe sentences go out while the model writes."""
+    try:
+        return run_rounds(config, state, run)
+    except (Exception, KeyboardInterrupt):
+        raise
+    except BaseException as error:
+        log.exception("the turn was ended by %r; answering with an error instead", error)
+        raise TurnEnded(f"the turn was ended by {error!r}") from error
+
+
+def run_rounds(config, state, run: AgentRun) -> dict:
     turn = start_turn(config, state, run)
     for round_number in range(turn.max_rounds):
         if is_cancelled(run.task):
             return turn.outcome("cancelled")
         outcome = agent_round(turn, round_number)
         if outcome is not None:
-            return outcome
+            return without_private_text(turn, outcome)
     turn.keep_groups()
     return turn.outcome("done", answer="I stopped after too many tool steps. Tell me how you'd like me to continue.")
+
+
+def without_private_text(turn: AgentTurn, outcome: dict) -> dict:
+    for key in ("answer", "content"):
+        if isinstance(outcome.get(key), str):
+            outcome[key] = private_text.without_hidden_text(outcome[key], turn.private)
+    waiting = outcome.get("waiting")
+    if isinstance(waiting, dict) and isinstance(waiting.get("message"), str):
+        waiting["message"] = private_text.without_hidden_text(waiting["message"], turn.private)
+    return outcome
+
+
+def without_private_arguments(value, hidden: private_text.HiddenText):
+    if isinstance(value, str):
+        return private_text.without_hidden_text(value, hidden)
+    if isinstance(value, list):
+        return [without_private_arguments(item, hidden) for item in value]
+    if isinstance(value, dict):
+        return {without_private_arguments(key, hidden): without_private_arguments(item, hidden) for key, item in value.items()}
+    return value
+
+
+def holds_private_text(value, hidden: private_text.HiddenText) -> bool:
+    if isinstance(value, str):
+        return private_text.repeats_hidden_text(value, hidden)
+    if isinstance(value, list):
+        return any(holds_private_text(item, hidden) for item in value)
+    if isinstance(value, dict):
+        return any(holds_private_text(key, hidden) or holds_private_text(item, hidden) for key, item in value.items())
+    return False
+
+
+def call_holds_private_text(call: dict, hidden: private_text.HiddenText) -> bool:
+    raw = (call.get("function") or {}).get("arguments")
+    parsed = parse_arguments(raw)
+    return holds_private_text(raw if isinstance(raw, str) and not parsed else parsed, hidden)
+
+
+def with_private_arguments_left_out(call: dict, hidden: private_text.HiddenText) -> dict:
+    function = call.get("function") or {}
+    arguments = parse_arguments(function.get("arguments"))
+    checked = without_private_arguments(arguments, hidden)
+    return call if checked == arguments else {**call, "function": {**function, "arguments": checked}}
 
 
 def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
@@ -318,6 +449,8 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     context["failed"] = []  # tools that didn't work this turn (see be_honest)
     last_request = newest_request(messages)
     user_texts = [without_app_notes(message_text(m)) for m in messages if m.get("role") == "user"]
+    private = hidden_notes.private_text_for(with_tool_guide(instructions, all_tools), all_tools, run.client_texts)
+    shows_thinking = bool(run.agent and run.client_system and run.on_thinking)
     turn = AgentTurn(
         config=config, state=state, run=run, messages=messages, context=context, requested=requested, toolless=toolless,
         instructions=instructions, history=history, all_tools=all_tools, hidden=config.get("hidden_tools") or [],
@@ -325,7 +458,8 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
         tool_log=list(looked_up[0]), steps_this_turn=steps_this_turn,
         client_names={tool["function"]["name"] for tool in run.client_tools or []}, last_request=last_request,
         think=thinking_for(config, agent_sessions.deciding_request(user_texts) if run.agent else last_request),
-        shown_thinking=run.on_thinking if run.agent and run.client_system else None, chat_approved=run.chat_approved)
+        shown_thinking=private_text.GuardedStream(run.on_thinking, private) if shows_thinking else None,
+        chat_approved=run.chat_approved, private=private)
     steer_the_request(turn)
     # A plain question whose answer was looked up first: the model answers from that, with no tools to
     # wander off with (small models otherwise pick unrelated ones). Asked to do something, it keeps them.
@@ -374,14 +508,51 @@ def steer_the_request(turn: AgentTurn):
         withhold_run_tools(turn)
         steer_last_request(turn.history, HOW_TO_NOTE)
     elif turn.is_chat and asks_for_code(last_request):
-        if asks_to_run(last_request):
-            steer_last_request(turn.history, WRITE_AND_RUN_NOTE)
-        elif not wants_the_computer(last_request):
-            withhold_run_tools(turn)
-            steer_last_request(turn.history, WRITE_ONLY_NOTE)
+        steer_a_code_request(turn, last_request)
+    elif turn.is_chat and run_requests.follows_code(turn.messages):
+        steer_a_follow_up_to_code(turn, last_request)
     link_reader = written_calls.offered_name("fetch", [tool["function"]["name"] for tool in turn.all_tools])
     if turn.is_chat and link_reader and asks_to_read_a_link(last_request):
         steer_last_request(turn.history, READ_LINK_NOTE.format(tool=link_reader))
+
+
+def judged_run_request(turn: AgentTurn, request: str, after_code: bool) -> bool | None:
+    return run_requests.judge_says_run(request, after_code=after_code, model=turn.config["model"],
+                                       keep_alive=turn.config.get("keep_alive"))
+
+
+def steer_a_code_request(turn: AgentTurn, request: str):
+    deferred = run_requests.defers_running(request)
+    verdict = False if deferred else judged_run_request(turn, request, after_code=False)
+    unchecked = verdict is None
+    if verdict:
+        steer_last_request(turn.history, WRITE_AND_RUN_NOTE)
+    elif not asks_for_the_computer(request):
+        withhold_run_tools(turn)
+        steer_last_request(turn.history, WRITE_ONLY_UNCHECKED_NOTE if unchecked else WRITE_ONLY_NOTE)
+    elif not asks_to_install(request):
+        withhold_run_command(turn)
+        steer_last_request(turn.history, DONT_RUN_UNCHECKED_NOTE if unchecked else DONT_RUN_NOTE)
+    elif deferred or unchecked:
+        steer_last_request(turn.history, DONT_RUN_UNCHECKED_NOTE if unchecked else DONT_RUN_NOTE)
+
+
+def steer_a_follow_up_to_code(turn: AgentTurn, request: str):
+    if run_requests.defers_running(request):
+        withhold_run_command(turn)
+        steer_last_request(turn.history, DONT_RUN_NOTE)
+        return
+    verdict = judged_run_request(turn, request, after_code=True)
+    if verdict:
+        steer_last_request(turn.history, RUN_THE_CODE_NOTE)
+    elif run_requests.mentions_running(request):
+        withhold_run_command(turn)
+        steer_last_request(turn.history, DONT_RUN_UNCHECKED_NOTE if verdict is None else DONT_RUN_NOTE)
+
+
+def withhold_run_command(turn: AgentTurn):
+    turn.all_tools = [tool for tool in turn.all_tools if tool["function"]["name"] not in RUN_COMMAND_TOOLS]
+    turn.client_names = turn.client_names - DESKTOP_RUN_COMMAND_TOOLS
 
 
 def withhold_run_tools(turn: AgentTurn):
@@ -403,11 +574,15 @@ def agent_round(turn: AgentTurn, round_number: int) -> dict | None:
     turn.state["prefix"] = {"model": body["model"], "messages": [m for m in body["messages"][:1] if m.get("role") == "system"],
                             "tools": body.get("tools") or []}
     risky = start_draft_round(turn, tools)
-    turn.raw = model_reply(body, turn.config, turn.run.draft, risky, turn.shown_thinking, turn.run.agent)
+    turn.raw = model_reply(body, turn.config, turn.run.draft, risky, turn.shown_thinking, turn.run.agent,
+                           tools_that_ran(turn.messages))
     log_model_timings(turn.raw)
     if turn.run.agent:
         turn.state.setdefault("rounds", []).append(round_timings(turn.config["model"], turn.raw, body.get("think")))
     message = turn.raw["message"]
+    if turn.raw.get(ENGINE_FAILED_KEY):
+        turn.keep_groups()
+        return turn.outcome("done", answer=message["content"])
     calls = message.get("tool_calls") or []
     if written_calls.looks_swallowed(turn.raw, tools) and turn.replays < written_calls.REPLAY_LIMIT:
         recovered = recover_swallowed_calls(turn, body, tools, message, calls)
@@ -442,7 +617,7 @@ def request_body(turn: AgentTurn, tools: list) -> dict:
     body = models.for_runner(config, with_thinking({"model": config["model"], "messages": turn.history, "stream": False,
                                                     "options": options, "keep_alive": config.get("keep_alive", "10m")}, turn.think,
                                                    raises_reply_size=not agent))
-    if tools:  # Ollama rejects a tools list for models without tool support
+    if tools:
         body["tools"] = tools
     if agent:
         body["truncate"] = False
@@ -461,9 +636,13 @@ def start_draft_round(turn: AgentTurn, tools: list):
         and "research__web_search" in connections.hub.routes
     draft.start_round(allowed=not (may_nudge and ACTION_REQUEST.search(turn.last_request))
                       and not (may_search and SEARCH_REQUEST.search(turn.last_request))
-                      and not page_to_check_code_against(turn) and not sandbox_may_check(turn))
+                      and not page_to_check_code_against(turn) and not sandbox_may_check(turn),
+                      holds_line=code_sandbox.may_become_a_summary_line)
+    watch = private_text.Watch(turn.private)
 
     def risky(text, may_nudge=may_nudge, may_search=may_search):
+        if watch.repeats(text) or code_sandbox.has_lookalike_summary(text):
+            return True
         if agent:
             return bool(PROMPT_LEAK.search(text)) or written_calls.has_call_markup(text)
         if PROMPT_LEAK.search(text) or TOOL_TALK.search(text) or written_calls.has_call_markup(text):
@@ -489,7 +668,7 @@ def recover_swallowed_calls(turn: AgentTurn, body: dict, tools: list, message: d
     renamed = [written_calls.offered_name(call["function"]["name"], offered) for call in found]
     if found and all(renamed):
         calls = [{"function": {**call["function"], "name": name}} for call, name in zip(found, renamed)]
-        log.info("Ollama dropped the model's call to %s; using the call it wrote", ", ".join(renamed))
+        log.info("the engine dropped the model's call to %s; using the call it wrote", ", ".join(renamed))
         return {**message, "tool_calls": calls}, calls
     if found:
         missing = [call["function"]["name"] for call, name in zip(found, renamed) if not name]
@@ -527,10 +706,14 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
         return None
     if rewrite_failing_code(turn, answer):
         return None
+    if rewrite_failing_examples(turn, answer):
+        return None
     if turn.raw.get("done_reason") == "length":
         answer += cut_short_note(turn.config, turn.raw, turn.run.agent)
     turn.keep_groups()
-    return turn.outcome("done", answer=with_sandbox_summary(turn, reads_fresh(turn, answer)))
+    answer = reads_fresh(turn, code_sandbox.without_lookalike_summaries(with_real_output(turn, answer)))
+    sandbox_line = sandbox_summary(turn)
+    return turn.outcome("done", answer=f"{answer.rstrip()}\n\n{sandbox_line}" if sandbox_line else answer, sandbox_line=sandbox_line)
 
 
 def page_to_check_code_against(turn: AgentTurn) -> str:
@@ -580,6 +763,7 @@ def rewrite_failing_code(turn: AgentTurn, answer: str) -> bool:
     if turn.code_rewrites >= code_sandbox.MAX_REWRITES:
         return False
     turn.code_rewrites += 1
+    turn.think = thinking_for(turn.config, turn.last_request, writing_job=True)
     log.info("the sandbox found errors in %s; sent back to fix them (rewrite %d of %d)",
              ", ".join(unit.label for unit, _ in failures), turn.code_rewrites, code_sandbox.MAX_REWRITES)
     send_back(turn, answer, code_sandbox.rewrite_note(failures))
@@ -596,22 +780,61 @@ def rewrite_wrong_output(turn: AgentTurn, answer: str) -> bool:
     return True
 
 
+def examples_may_be_checked(turn: AgentTurn) -> bool:
+    return bool(turn.config.get("example_checks")) and sandbox_may_check(turn) and not turn.output_mismatches \
+        and turn.raw.get("done_reason") != "length"
+
+
+def rewrite_failing_examples(turn: AgentTurn, answer: str) -> bool:
+    turn.example_outcome = None
+    if not examples_may_be_checked(turn):
+        return False
+    unit = example_checks.checkable_unit(turn.sandbox_report)
+    if unit is None or unit.language not in example_checks.checked_languages(turn.config) \
+            or not example_checks.is_worth_checking(turn.last_request, unit):
+        return False
+    started = time.monotonic()
+    try:
+        if not turn.examples_written and turn.code_rewrites < code_sandbox.MAX_REWRITES:
+            turn.examples_written = True
+            turn.example_checks = example_checks.written_checks(turn.config, turn.last_request, unit)
+        if turn.example_checks:
+            turn.example_outcome = example_checks.run_checks(
+                unit, turn.example_checks, turn.last_request, code_sandbox.TURN_SECONDS - turn.sandbox_seconds - (time.monotonic() - started))
+    finally:
+        turn.sandbox_seconds += time.monotonic() - started
+    outcome = turn.example_outcome
+    if outcome is None or not outcome.is_failing or turn.code_rewrites >= code_sandbox.MAX_REWRITES:
+        return False
+    turn.code_rewrites += 1
+    turn.think = thinking_for(turn.config, turn.last_request, writing_job=True)
+    log.info("the code failed checks from the question's examples; sent back to fix it (rewrite %d of %d)",
+             turn.code_rewrites, code_sandbox.MAX_REWRITES)
+    send_back(turn, answer, example_checks.rewrite_note(unit, turn.example_checks, outcome))
+    return True
+
+
 def reads_fresh(turn: AgentTurn, answer: str) -> str:
     if not fresh_answer.hides_rewrites(turn.code_rewrites, turn.last_request):
         return answer
     return fresh_answer.without_rewrite_talk(answer, code_sandbox.code_spans(answer))
 
 
-def with_sandbox_summary(turn: AgentTurn, answer: str) -> str:
+def with_real_output(turn: AgentTurn, answer: str) -> str:
+    if not turn.output_mismatches:
+        return answer
+    log.info("replaced output the answer claimed with what the code really printed")
+    return code_sandbox.with_real_output(answer, turn.output_mismatches)
+
+
+def sandbox_summary(turn: AgentTurn) -> str:
     report = turn.sandbox_report
     if report is None:
-        return answer
+        return ""
     if report.ran_anything():
         turn.tool_log.append(code_sandbox.TOOL_NAME)
-    if turn.output_mismatches:
-        log.info("replaced output the answer claimed with what the code really printed")
-        answer = code_sandbox.with_real_output(answer, turn.output_mismatches)
-    return f"{answer.rstrip()}\n\n{code_sandbox.summary(report, corrected_output=bool(turn.output_mismatches))}"
+    examples = example_checks.summary_part(turn.example_outcome, turn.last_request)
+    return code_sandbox.summary(report, bool(turn.output_mismatches), examples)
 
 
 def wait_for_sign_in(turn: AgentTurn) -> dict:
@@ -634,8 +857,7 @@ def search_for_the_model(turn: AgentTurn, answer: str):
     results = connections.hub.call("research__web_search", {"query": turn.last_request[:200]})
     turn.tool_log.append("research__web_search")
     log.info("searched for the model: %s", turn.last_request[:80])
-    send_back(turn, answer, f"(Web search results for my message:\n{results[:TOOL_RESULT_CHARS]}\n\n"
-              "Now answer my message from these results, in your own words, briefly. Say which source if it helps.)")
+    send_back(turn, answer, SEARCH_RESULTS_NOTE.format(results=results[:TOOL_RESULT_CHARS]))
 
 
 def claims_without_tools(turn: AgentTurn, tools: list, answer: str) -> bool:
@@ -648,47 +870,44 @@ def nudge_to_use_tools(turn: AgentTurn, tools: list, answer: str):
     # Small models describe doing things ("I've set a reminder", "here are my findings") without
     # calling a tool; send them back once to actually do it.
     turn.nudged = True
-    send_back(turn, answer, "(You haven't used any tools, so none of that has actually happened. "
-              f"{tool_guide.nudge_tools(tool_guide.offered_names(tools))} Only then answer, and only with what "
-              "the tools gave you. If none of your tools can do it, say so plainly in a sentence instead: never "
-              "pretend it's done.)")
+    send_back(turn, answer, NOTHING_DONE_NOTE.format(nudge=tool_guide.nudge_tools(tool_guide.offered_names(tools))))
 
 
 def nudge_away_from_pretend_tools(turn: AgentTurn, answer: str):
     turn.nudged = True
     log.info("reply played at using tools; sent back once")
-    send_back(turn, answer, "(Don't write out tool calls, function names or made-up tool results. "
-              "Answer my message in plain words, from your notes if they cover it.)")
+    send_back(turn, answer, PRETEND_TOOLS_NOTE)
 
 
 def nudge_to_finish_the_call(turn: AgentTurn, answer: str):
     # It started writing a tool call as text and stopped: have it make the call properly.
     turn.nudged = True
     log.info("reply ended in a half-written tool call; sent back once")
-    send_back(turn, answer, "(Your reply stopped at the start of a code block instead of using a tool. "
-              "If you need a tool, call it properly now; otherwise answer my message.)")
+    send_back(turn, answer, HALF_WRITTEN_CALL_NOTE)
 
 
 def nudge_after_an_empty_reply(turn: AgentTurn):
     # Small models occasionally return nothing at all; one nudge almost always gets a real answer.
     turn.nudged = True
-    turn.history.append({"role": "user", "content": "(Your reply was empty. Answer my last message, using your tools if needed.)"})
+    turn.history.append({"role": "user", "content": EMPTY_REPLY_NOTE})
 
 
 def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
+    if any(call_holds_private_text(call, turn.private) for call in calls):
+        return refuse_calls_holding_private_text(turn, message, calls)
     written = written_calls.without_call_markup(message.get("content") or "").strip()
     if answered_before_unlocking(turn, calls, written):
         # It answered a plain question, then asked for tools it doesn't need (the next round would only
         # chat about the unlocked tools): keep the answer. Not when it's about to actually do something.
         turn.keep_groups()
-        return turn.outcome("done", answer=written)
+        return turn.outcome("done", answer=code_sandbox.without_lookalike_summaries(written))
     if turn.run.draft:
         turn.run.draft.before_tools()
     client_calls = calls if turn.run.agent else [call for call in calls if call.get("function", {}).get("name") in turn.client_names]
     if client_calls:
         turn.keep_groups()
         return {"status": "client_tools", "calls": client_calls,
-                "content": written_calls.without_call_markup(message.get("content") or ""),
+                "content": code_sandbox.without_lookalike_summaries(written_calls.without_call_markup(message.get("content") or "")),
                 "tools_used": turn.tool_log + [c["function"]["name"] for c in client_calls], "raw": turn.raw}
     turn.add({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
     for call in calls:
@@ -696,6 +915,19 @@ def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
         if outcome is not None:
             return outcome
     return None
+
+
+def refuse_calls_holding_private_text(turn: AgentTurn, message: dict, calls: list) -> None:
+    held = [call_holds_private_text(call, turn.private) for call in calls]
+    log.info("not running %d tool call(s): %d held private text", len(calls), sum(held))
+    if turn.run.draft:
+        turn.run.draft.before_tools()
+    checked = [with_private_arguments_left_out(call, turn.private) for call in calls]
+    turn.add({"role": "assistant", "content": message.get("content") or "", "tool_calls": checked})
+    for call, holds in zip(checked, held):
+        function = call.get("function") or {}
+        record_tool_result(turn, function.get("name") or "", parse_arguments(function.get("arguments")),
+                           PRIVATE_CALL_NOT_RUN if holds else SIBLING_CALL_NOT_RUN)
 
 
 def answered_before_unlocking(turn: AgentTurn, calls: list, written: str) -> bool:
@@ -708,6 +940,10 @@ def run_tool_call(turn: AgentTurn, call: dict, calls: list) -> dict | None:
     function = call.get("function", {})
     name = function.get("name") or ""
     arguments = repair_arguments(name, parse_arguments(function.get("arguments")))
+    if not was_offered(turn, name):
+        log.warning("the model called %s, which it wasn't offered this turn; not run", name)
+        record_tool_result(turn, name, arguments, written_calls.missing_tool_note([name], offered_names(turn)))
+        return None
     turn.tool_log.append(name)
     if name == "use_tools":
         result = unlock_groups(turn, arguments)
@@ -728,6 +964,14 @@ def run_tool_call(turn: AgentTurn, call: dict, calls: list) -> dict | None:
             return outcome
     record_tool_result(turn, name, arguments, result)
     return None
+
+
+def offered_names(turn: AgentTurn) -> list[str]:
+    return [tool["function"]["name"] for tool in turn.all_tools]
+
+
+def was_offered(turn: AgentTurn, name: str) -> bool:
+    return name == "use_tools" or policy.matches(name, turn.hidden) or name in offered_names(turn)
 
 
 def unlock_groups(turn: AgentTurn, arguments: dict) -> str:
@@ -793,6 +1037,10 @@ def record_tool_result(turn: AgentTurn, name: str, arguments: dict, result: str)
 
 
 HIDDEN_TOOL_RESULT = "That tool isn't available here."
+PRIVATE_CALL_NOT_RUN = ("Not run: this call held part of Arty's own private instructions, and they are never written, sent "
+                        "or run. Nothing was done. Make the call again without that text.")
+SIBLING_CALL_NOT_RUN = ("Not run: another call in the same step held part of Arty's own private instructions, so nothing in "
+                        "that step was done. Make this call again if it is still needed.")
 
 
 agent_sessions = AgentSessions()

@@ -8,13 +8,14 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from doclib.build import build  # noqa: E402
+from doclib.build import SourcesNotIndexed, build  # noqa: E402
 from doclib.fetch import fetch_all  # noqa: E402
 from doclib.sources import by_key  # noqa: E402
 
 DEFAULT_ROOT = Path("/srv/ai/docs-library")
 DATABASE_NAME = "docs.db"
 RAW_FOLDER = "raw"
+REBUILD_MARKER = "index-needs-rebuild"
 DISK_RESERVE_BYTES = 8 * 1024 ** 3
 
 
@@ -43,10 +44,19 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         outcome = fetch_all(by_key(options.only), raw)
     database = root / DATABASE_NAME
-    if database.exists() and outcome and all(result == "unchanged" for result in outcome.values()):
+    rebuild_marker = root / REBUILD_MARKER
+    nothing_new = bool(outcome) and all(result == "unchanged" for result in outcome.values())
+    if database.exists() and nothing_new and not rebuild_marker.exists():
         print(json.dumps({"fetched": outcome, "sections": "unchanged; index kept"}, indent=1))
         return 0
-    counts = build(by_key(None), raw, database)
+    rebuild_marker.touch()
+    try:
+        counts = build(by_key(None), raw, database)
+    except SourcesNotIndexed as error:
+        logging.error("%s", error)
+        print(json.dumps({"fetched": outcome, "sections": str(error)}, indent=1))
+        return 1
+    rebuild_marker.unlink()
     print(json.dumps({"fetched": outcome, "sections": counts}, indent=1))
     failed = [key for key, result in outcome.items() if result.startswith("failed")]
     return 1 if failed else 0

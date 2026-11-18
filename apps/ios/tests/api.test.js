@@ -93,9 +93,9 @@ test("a forgotten job and a failed job are reported, not retried forever", async
   const gone = fakeFetch(reply(404, { error: { message: "no such chat job" } }));
   assert.deepEqual(await new ArtyApi(KEYS, { fetchImpl: gone.fetchImpl }).waitForAnswer("x", { sleep: async () => {} }),
     { failed: true, text: RESTARTED_MESSAGE });
-  const broken = fakeFetch(reply(200, { status: "failed", error: "Ollama is down" }));
+  const broken = fakeFetch(reply(200, { status: "failed", error: "the engine is down" }));
   assert.deepEqual(await new ArtyApi(KEYS, { fetchImpl: broken.fetchImpl }).waitForAnswer("x", { sleep: async () => {} }),
-    { failed: true, text: "Arty hit an error: Ollama is down" });
+    { failed: true, text: "Arty hit an error: the engine is down" });
 });
 
 test("waiting gives up after twenty minutes", async () => {

@@ -12,6 +12,11 @@ PROXMOX_GUIDE = "https://pve.proxmox.com/pve-docs/pve-admin-guide.html"
 PSF_LICENCE = "PSF License (Python Software Foundation)"
 PEPS_LICENCE = "Public domain or CC0-1.0-Universal, as stated in each PEP"
 PROXMOX_LICENCE = "GNU Free Documentation License 1.3 (Proxmox Server Solutions GmbH)"
+DOTNET_REPOSITORY = "https://github.com/dotnet/docs.git"
+DOTNET_PAGE = "https://learn.microsoft.com/en-us/dotnet/csharp/{path}"
+DOTNET_PATHS = ("/docs/csharp/", "/samples/snippets/csharp/", "/includes/", "/LICENSE", "/LICENSE-CODE")
+DOTNET_LICENCE = ("Creative Commons Attribution 4.0 International for the text (LICENSE) and MIT for the code samples "
+                  "(LICENSE-CODE), dotnet/docs, (c) Microsoft Corporation and contributors")
 DEVDOCS_MISSING_LICENCES = {
     "http": "(c) 2005-2025 MDN contributors. Licensed under the Creative Commons Attribution-ShareAlike License v2.5 or later.",
     "man": "Each page keeps its own licence from the Linux man-pages project or the package it documents (see man7.org).",
@@ -56,6 +61,7 @@ SOURCES = (
     Source("man", "linux", "", "devdocs", "man", "Linux man pages"),
     Source("proxmox", "proxmox", "", "page", PROXMOX_GUIDE, "Proxmox VE admin guide"),
     Source("debian", "debian", "", "deb", "debian-reference-en", "Debian Reference"),
+    Source("csharp", "csharp", "", "dotnet", DOTNET_REPOSITORY, "C# (.NET docs)"),
 )
 
 

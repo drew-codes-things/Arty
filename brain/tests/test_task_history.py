@@ -21,7 +21,7 @@ import agent_loop  # noqa: E402
 import background_tasks  # noqa: E402
 import connections  # noqa: E402
 import store  # noqa: E402
-from test_review_tonight import RULES, FakeHub, FakeOllama, calls, said  # noqa: E402
+from test_review_tonight import RULES, FakeHub, FakeEngine, calls, said  # noqa: E402
 
 PERSONA_MARKER = "You are Arty, and the user's sister is called Ella."
 RESTART = ("homelab__restart_guest", {"vmid": 103})
@@ -33,9 +33,9 @@ class TaskHistoryLeavesOutWhatTheRunRebuilds(unittest.TestCase):
         store.init()
         self.hub = FakeHub(("homelab__restart_guest",))
 
-    def process(self, task, ollama):
+    def process(self, task, engine):
         with mock.patch.object(connections, "hub", self.hub), \
-                mock.patch.object(connections, "http_json", side_effect=ollama), \
+                mock.patch.object(connections, "http_json", side_effect=engine), \
                 mock.patch.object(connections, "load_config", return_value=CONFIG), \
                 mock.patch.object(brain.models, "budget_for", return_value=0), \
                 mock.patch.object(brain.models, "find", return_value=None), \
@@ -48,7 +48,7 @@ class TaskHistoryLeavesOutWhatTheRunRebuilds(unittest.TestCase):
 
     def test_a_task_waiting_for_approval_saves_no_prompt_or_tool_list(self):
         task = store.create_task("Fix Plex", "Restart the Plex guest", "api")
-        waiting = self.process(task, FakeOllama([calls(RESTART)]))
+        waiting = self.process(task, FakeEngine([calls(RESTART)]))
         self.assertEqual(waiting["status"], "waiting")
         self.assertNotIn("prefix", waiting["history"])
         shown = json.dumps(background_tasks.public_task(waiting, with_history=True))
@@ -57,9 +57,9 @@ class TaskHistoryLeavesOutWhatTheRunRebuilds(unittest.TestCase):
 
     def test_an_approved_task_carries_on_with_the_prompt_rebuilt(self):
         task = store.create_task("Fix Plex", "Restart the Plex guest", "api")
-        waiting = self.process(task, FakeOllama([calls(RESTART)]))
+        waiting = self.process(task, FakeEngine([calls(RESTART)]))
         store.update_task(task["id"], status="running", waiting={**waiting["waiting"], "decision": "approve", "note": ""})
-        resumed = FakeOllama([said("Restarted Plex, and it is answering again.")])
+        resumed = FakeEngine([said("Restarted Plex, and it is answering again.")])
         done = self.process(task, resumed)
         self.assertEqual(done["status"], "done")
         self.assertIn("Restarted Plex", done["result"])

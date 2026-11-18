@@ -7,7 +7,7 @@
 **A self-hosted AI assistant that lives on your own homelab - talk to it from your PC, your phone, Telegram or Discord, and let it work on a computer of its own.**
 
 [![Python](https://img.shields.io/badge/python-3.13-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Ollama](https://img.shields.io/badge/ollama-local%20models-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com/)
+[![ArtyEngine](https://img.shields.io/badge/ArtyEngine-local%20models-000000?style=flat-square)](https://github.com/drew-codes-things/ArtyEngine)
 [![Kotlin](https://img.shields.io/badge/kotlin-android-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Electron](https://img.shields.io/badge/electron-desktop-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Proxmox](https://img.shields.io/badge/proxmox-VE%209-E57000?style=flat-square&logo=proxmox&logoColor=white)](https://www.proxmox.com/)
@@ -24,7 +24,7 @@ tools all stay at home. It's calm, practical and a bit dry, and it actually does
 you could: it checks your servers, reads your email, keeps reminders and deadlines, sends a morning and evening
 briefing, searches the web privately, and has its own virtual machine to browse and work on.
 
-The brain runs `qwen3:14b` through Ollama on a 12 GB GPU, and everything else - the desktop app, the phone apps, the
+The brain runs `qwen3:14b` on ArtyEngine, Arty's own model server, on a 12 GB GPU, and everything else - the desktop app, the phone apps, the
 voice assistant, the chat bots - talks to it through one API. Every app asks for your own server's address on first
 start, so nothing is tied to anyone else's homelab.
 
@@ -37,8 +37,9 @@ covering how to install it, how to use it, and what it's been run and tested on.
 
 - **A Proxmox VE 9 host.** `provision.sh` and `deploy.sh` drive it over SSH with `pct` and `qm`.
 - **A Debian 13 LXC container for the brain** with nesting on (SearXNG runs in Docker inside it), about 6 GB of RAM
-  and a GPU passed through. Built and tested on an NVIDIA RTX 3060 (12 GB); `qwen3:14b` fills it. A smaller card runs a
-  smaller model with fewer tools per request. A bigger card can run a bigger model: any Ollama model that supports tool
+  and a GPU passed through. Built and tested on an NVIDIA RTX 3060 (12 GB); `qwen3:14b` fills it. An AMD card is
+  handed over too, but that path is untested (see Provision). A smaller card runs a
+  smaller model with fewer tools per request. A bigger card can run a bigger model: any model that supports tool
   calling works as the main model, and models over 16B are shown every tool at once (`tool_budget_by_size` in
   `brain/brain.json`). A 27B to 32B model at 4-bit, such as `qwen3:32b`, needs roughly 20 GB of VRAM, so a 24 GB card;
   only `qwen3:14b` has been tested. Set `vram_budget_mb` in `brain/brain.json` to a little under your card's memory
@@ -56,7 +57,7 @@ covering how to install it, how to use it, and what it's been run and tested on.
 
 ```
  Arty Desktop (your PC) ───────LAN─────────┐
- Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ Ollama or ArtyEngine (models, GPU)
+ Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ ArtyEngine (models, GPU)
  Arty for iPhone ────LAN or Cloudflare─────┤                       │
  Arty for Quest (beta) ─▶ voice server ────┼─▶ Brain (:8081) ──────┼─▶ Tool hub: memory, web search, homelab, ...
  Voice assistant ("Hey Arty") ─────────────┤                       │
@@ -68,10 +69,9 @@ use the brain's LAN address; away from home the phone apps go through a Cloudfla
 ([docs/cloudflare.md](docs/cloudflare.md)). Notifications - reminders, briefings, task results, approvals, homelab
 alerts - only ever go to **Updates** in the phone and desktop apps.
 
-The brain and its tool servers send their model requests to Ollama's API at `OLLAMA_URL` (`http://127.0.0.1:11434`
-unless set). That can be Ollama itself or [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine),
-Arty's own Ollama-compatible server built on llama.cpp's `llama-server`. ArtyEngine reads the models already in Ollama's
-store, so switching downloads nothing again, and its README covers installing it and moving Arty over and back.
+The brain and its tool servers send their model requests to the API of [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine)
+at `ARTY_ENGINE_URL` (`http://127.0.0.1:11438` unless set). ArtyEngine is Arty's own model engine: it downloads models by name or
+from Hugging Face, and its README covers installing it. It runs on an NVIDIA card; its AMD support is untested.
 ArtyEngine is a separate repository with a different licence: [PolyForm Strict 1.0.0](https://github.com/drew-codes-things/ArtyEngine/blob/main/LICENSE)
 (noncommercial use, no sharing or changed versions), not Arty's Apache 2.0.
 
@@ -93,7 +93,7 @@ ArtyEngine is a separate repository with a different licence: [PolyForm Strict 1
 | [`extensions/gmail/`](extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
 | [`extensions/browser/`](extensions/browser/) | Browser extension (Chrome, Edge, Brave, Chromium, Firefox) that lets Arty Desktop use your own browser |
 | [`chat-bots/telegram/`](chat-bots/telegram/), [`chat-bots/discord/`](chat-bots/discord/) | Arty on Telegram and Discord, owner-only |
-| `doclib/` | The docs library: official documentation (Python, MDN, Node.js, Rust, Go, Java, PostgreSQL, Docker, Git, Linux man pages, Proxmox, Debian and more) downloaded into a local search index that coding answers read first |
+| `doclib/` | The docs library: official documentation (Python, MDN, Node.js, Rust, Go, Java, C# from Microsoft's .NET docs, PostgreSQL, Docker, Git, Linux man pages, Proxmox, Debian and more) downloaded into a local search index that coding answers read first |
 | `code-runner/` | The code runner: a small container that runs the code in Arty's coding answers in a fresh sandbox (no network, capped time and memory) so Arty can fix real errors before it answers |
 | [`docs/`](docs/) | [The Arty API](docs/API.md), [linking everything through Cloudflare](docs/cloudflare.md), [connecting a phone](docs/connecting-a-phone.md) and [connecting a Quest headset](docs/connecting-a-headset.md) |
 
@@ -104,7 +104,7 @@ Arty CLI's Windows installer has been run on Windows 10 (PowerShell 5.1).
 
 ## Features
 
-- **Local models** - runs on Ollama on your own GPU; switch models with one command or by asking.
+- **Local models** - runs on ArtyEngine on your own GPU; switch models with one command or by asking.
 - **Real actions, checked in code** - email, calendar, reminders, deadlines, dates, sums, units, currency and server
   status are handled by code before the model sees them, so the model can't make results up.
 - **Honesty check** - a reply that claims it did something when no tool ran (or every tool failed) is replaced with
@@ -117,10 +117,14 @@ Arty CLI's Windows installer has been run on Windows 10 (PowerShell 5.1).
   for your Approve / Deny.
 - **Checked coding answers** - code questions read the matching section of the local docs library (or the web) first,
   the code comes back in the reply, and with the optional code runner it is run in a sandbox and fixed before you see it.
+  For C, Arty also writes small checks from the examples in your question, runs them against the code (with the memory
+  checker on), and fixes the code when it crashes or a result the question states comes out wrong. Other languages can
+  be listed in `example_checks` in brain.json; they are off by default because the checks slowed answers without
+  making more of them right.
 - **Safe browsing** - logins, CAPTCHAs and bot checks are reported back to you, never got around.
 - **Everywhere** - desktop app, Android, iPhone and Quest (beta: your own virtual reality AI), voice, Telegram and Discord, all sharing one memory.
 - **Works with [starfire.ai](https://github.com/drew-codes-things/starfire.ai)** - add Arty to starfire as an
-  OpenAI-compatible provider and chat with it in the browser, next to your plain Ollama models.
+  OpenAI-compatible provider and chat with it in the browser, next to the plain models on your engine.
   starfire.ai is getting its own update too: a cleaner look with every control styled in both themes, and
   the layout and features of the big chat apps (chat history in a sidebar, a Stop button, copy, edit and
   regenerate on messages, code blocks with a Copy button, renaming and searching chats, tabbed settings and
@@ -188,25 +192,16 @@ run from the machine you cloned this repository to.
 ```bash
 apt update
 apt install -y python3 python3-venv python3-requests pipx nodejs npm jq curl openssl docker.io
-curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-Point Ollama at its own folder and keep models loaded, in `/etc/systemd/system/ollama.service.d/arty.conf`:
-
-```ini
-[Service]
-Environment="OLLAMA_HOST=127.0.0.1:11434"
-Environment="OLLAMA_MODELS=/srv/ai/ollama"
-Environment="OLLAMA_KEEP_ALIVE=-1"
-Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
-```
+Install [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine) as its README says, with its models in
+`/srv/ai/arty-engine/models`, listening on `127.0.0.1:11438`. Then download the models through it (once `deploy.sh` has
+run, `ai-pull <model>` does the same):
 
 ```bash
-mkdir -p /srv/ai/ollama && chown ollama:ollama /srv/ai/ollama
-systemctl daemon-reload && systemctl restart ollama
-ollama pull qwen3:14b
-ollama pull mimo-v2.6:9b
-ollama pull nomic-embed-text
+for model in qwen3:14b mimo-v2.6:9b nomic-embed-text; do
+  curl -fsS http://127.0.0.1:11438/api/pull -d "{\"model\": \"$model\", \"stream\": false}"
+done
 ```
 
 The tool hub and its MCP servers:
@@ -268,6 +263,23 @@ It's safe to re-run. It installs the tools on Arty's PC, makes a Proxmox user th
 snapshot only Arty's PC, starts SearXNG and the HTTPS proxy, sets up the host's daily facts and security watch, picks
 the GPU at every boot, installs the speech-to-text tools and makes the Arty API key.
 
+**AMD cards: untested.** No real AMD card has run this path; it is written and tested against a fake host only.
+At every boot `arty-gpu-select` gives the container an NVIDIA card when one is fitted, exactly as before. With no
+NVIDIA card but an AMD one (a render node of the amdgpu driver), it passes that card's render node and card node, and
+`/dev/kfd` when the host has it, with the container's `render` and `video` group ids (992 and 44 unless
+`CT_RENDER_GID` and `CT_VIDEO_GID` say otherwise; `pct exec <ct> -- getent group render video` shows them). Set them
+in `/etc/default/arty-gpu-select` on the host (lines such as `CT_RENDER_GID=993`), which the boot run, a run by hand
+and provisioning's dry run all read; a value in the environment wins over the file, and a value that is not a number
+stops the script. `arty-gpu-select --kind` prints `nvidia`, `amd-rocm`, `amd-vulkan` or `none`, and `--gfx-target`
+prints the card's gfx target (such as `gfx1100`) from `/sys/class/kfd`. When the card is AMD, provisioning installs,
+in the container, the Vulkan loader and Mesa's Vulkan driver (the fallback when ROCm can't use the card), and with
+`/dev/kfd` also AMD's ROCm 10.0 libraries with the card's own kernel package (`rocm[libraries,device-<gfx target>]`,
+never a default one; with no readable target it skips this and says so) into `/srv/ai/arty-engine/rocm-10.0`,
+without keeping pip's cache, then prints the two library folders to list in ArtyEngine's
+`runtimes.rocm.library_path`; a failure there is a warning and the rest goes on. ArtyEngine itself still needs its ROCm or Vulkan runtime build and its config
+set by hand: its README, AMD GPUs (untested), covers both, and its `tools/amd-check.sh` checks a machine with an AMD
+card.
+
 | Setting | What it does | Leave unset to |
 |---|---|---|
 | `CT`, `DESKTOP_VMID` | The brain's container and Arty's PC | use 104 and 105 |
@@ -303,7 +315,7 @@ SearXNG as the `local docs` engine; it leaves an existing `/srv/ai/searxng/setti
 Check it's up:
 
 ```bash
-pct exec 104 -- systemctl is-active ollama tool-hub brain docs-library
+pct exec 104 -- systemctl is-active arty-engine tool-hub brain docs-library
 pct exec 104 -- cat /srv/ai/secrets/arty-api.txt
 ```
 
@@ -332,12 +344,22 @@ from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
 
 - [Voice](voice/README.md): the room mic and speakers hub, "Hey Arty", and the Quest headset socket.
 - The [Telegram](chat-bots/telegram/README.md) and [Discord](chat-bots/discord/README.md) bots.
-- Code checking: make a small Debian container, put its id in `hosts.env` as `RUNNER_CT`, run
-  `code-runner/deploy.sh setup` while it still has internet, then `code-runner/deploy.sh firewall` (only `AI_ADDRESS`
-  can reach it afterwards; take its gateway away too). Set `CODE_RUNNER_URL=http://<runner address>:8790` in
-  `/srv/ai/secrets/brain.env` and run `systemctl restart brain`. Coding answers then end with a "Sandbox check:" line.
+- Code checking: make a small Debian container, put its id in `hosts.env` as `RUNNER_CT` (and the brain's as
+  `BRAIN_CT` if it isn't 104), and run `code-runner/deploy.sh setup` while it still has internet. Setup ends by putting
+  up the firewall (only `AI_ADDRESS` can reach it afterwards; take its gateway away too), and every deploy refuses to
+  start the runner without that firewall. Each deploy also makes sure the brain has a `CODE_RUNNER_TOKEN` in
+  `/srv/ai/secrets/brain.env` (it creates one the first time, and restarts a running brain whenever the brain runs
+  without the saved token) and copies it to the runner's `/etc/code-runner/runner.env`; the runner refuses any check
+  without it, and the brain logs a warning at start when `CODE_RUNNER_URL` is set without the token. Set
+  `CODE_RUNNER_URL=http://<runner address>:8790` in `/srv/ai/secrets/brain.env` and run `systemctl restart brain`.
+  Coding answers then end with a "Sandbox check:" line.
   When an answer shows what its code prints, Arty compares that with what the code really printed in the sandbox and
   fixes the answer if they differ (output that depends on time, randomness or input is left alone).
+  A script that reads input or command-line arguments is only fully tested when the question gives an example of that
+  input. Without one, the runner runs it with no input and then with a few made-up values, and a stop that only those
+  values cause is reported as "couldn't be tested without input" rather than as a pass or a failure. A bug that only
+  real input reaches can be missed that way, and now and then a correct script whose library rejects every made-up
+  value is failed. Put an example input in the question when you want the whole script checked.
 - Homelab tools: put the keys in `/srv/ai/secrets/homelab.env` (Uptime Kuma: `UPTIME_KUMA_API_KEY`, created under
   Settings > API Keys) and run `systemctl restart tool-hub brain`.
 
@@ -378,7 +400,12 @@ Restart with `systemctl restart tool-hub brain` after changing them.
 - **Models**: on the brain's container, `ai-pull <model>` downloads one (no arguments: suggestions), `ai-models`
   lists them and `ai-use <model>` switches Arty's main model. Or tell Arty "switch to <model>" in any app; only models
   in `arty_models` in `brain.json` are accepted. Only models that can use tools can run Arty, unless you run
-  `ai-toolless on`. Hugging Face GGUFs work too: `ai-pull hf.co/<user>/<repo>:Q4_K_M`.
+  `ai-toolless on`. Hugging Face GGUFs work too: `ai-pull hf.co/<user>/<repo>:Q4_K_M`, and
+  `ai-pull qwen2.5vl:7b --from hf.co/<user>/<repo>:Q4_K_M` installs that repository and quant under the short name
+  given (the same source again downloads nothing; another source replaces the model once its download is checked).
+  A download shows its progress,
+  Ctrl-C (or stopping the script with a signal) stops it in the engine too, and it gives up after
+  `AI_PULL_MAX_SECONDS` (6 hours unless set) or when nothing arrives for `AI_PULL_STALL_SECONDS` (5 minutes unless set).
 - **Pictures**: `vision_model` in `brain.json` names the model that looks at pictures (`mimo-v2.6:9b`). If it isn't
   downloaded, the first downloaded Arty model that can see is used (never a solo model). The main model and the vision
   model don't fit on the 12 GB card together, so with `route_picture_chats` (on by default) a chat with plain `Arty`
@@ -450,7 +477,7 @@ Know these before relying on it:
 
 | Part | Ran and tested on |
 |---|---|
-| Brain | Proxmox VE 9.2.21 (kernel 7.0.14-25-pve), LXC container on Debian 13 (trixie), Python 3.13.5, Ollama 0.40.16 with `qwen3:14b` on an NVIDIA RTX 3060 (12 GB, CUDA), the tool hub on mcp 2.3.0 with tool servers on mcp 1.30.0, SearXNG |
+| Brain | Proxmox VE 9.2.21 (kernel 7.0.14-25-pve), LXC container on Debian 13 (trixie), Python 3.13.5, ArtyEngine with `qwen3:14b` on an NVIDIA RTX 3060 (12 GB, CUDA), the tool hub on mcp 2.3.0 with tool servers on mcp 1.30.0, SearXNG |
 | Everything else | See each part's own README |
 
 ## Test Results
@@ -511,7 +538,7 @@ cd brain && python3 -m unittest discover -s tests
 (cd hub && /opt/ai-hub/bin/python -m unittest discover -s tests)   # needs mcp 2
 python3 -m pytest -q mcp voice/tests tests arty-pc chat-bots   # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
 (cd downloads && python3 -m unittest discover -p 'test_*.py')
-(cd code-runner && RUNNER_URL=http://<runner address>:8790 python3 -m unittest discover -s tests)   # live tests skip without RUNNER_URL
+(cd code-runner && RUNNER_URL=http://<runner address>:8790 RUNNER_TOKEN=<the token> python3 -m unittest discover -s tests)   # live tests skip without RUNNER_URL
 ARTY_URL=http://<AI_ADDRESS>:8081/v1 ARTY_KEY=... python3 tests/e2e_battery.py   # scored eval against the live brain, see --help
 cd apps/ios && node --test tests/
 ```

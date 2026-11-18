@@ -27,7 +27,7 @@ def conversation(text):
     return [{"role": "system", "content": CLIENT_SYSTEM}, {"role": "user", "content": text}]
 
 
-class FakeOllama:
+class FakeEngine:
     def __init__(self, *messages):
         self.replies = list(messages)
         self.bodies = []
@@ -42,7 +42,7 @@ class FakeOllama:
 
 class AgentTurns(unittest.TestCase):
     def setUp(self):
-        self.ollama = None
+        self.engine = None
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         config = {**CONFIG, "conversations_dir": folder.name}
@@ -62,12 +62,12 @@ class AgentTurns(unittest.TestCase):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def run_agent_turn(self, text, *replies):
-        self.ollama = FakeOllama(*replies)
-        with unittest.mock.patch.object(connections, "http_json", side_effect=self.ollama):
+        self.engine = FakeEngine(*replies)
+        with unittest.mock.patch.object(connections, "http_json", side_effect=self.engine):
             return brain.run_turn(conversation(text), "Arty", client_tools=[READ_FILE], agent=True)
 
     def sent_tool_names(self, index=0):
-        return [tool["function"]["name"] for tool in self.ollama.bodies[index].get("tools") or []]
+        return [tool["function"]["name"] for tool in self.engine.bodies[index].get("tools") or []]
 
     def test_an_agent_turn_offers_only_the_client_tools(self):
         self.run_agent_turn("what does main.py do?", {"role": "assistant", "content": "It prints hello."})
@@ -75,7 +75,7 @@ class AgentTurns(unittest.TestCase):
 
     def test_an_agent_turn_uses_the_client_system_prompt_not_arty_s(self):
         self.run_agent_turn("what does main.py do?", {"role": "assistant", "content": "It prints hello."})
-        system = self.ollama.bodies[0]["messages"][0]
+        system = self.engine.bodies[0]["messages"][0]
         self.assertEqual(system["role"], "system")
         self.assertIn(CLIENT_SYSTEM, system["content"])
         self.assertNotIn("Use your tools.", system["content"])
@@ -83,7 +83,7 @@ class AgentTurns(unittest.TestCase):
     def test_a_tool_call_written_as_text_is_returned_not_sent_back_for_plain_words(self):
         written = '```json\n{"name": "read_file", "arguments": {"path": "main.py"}}\n```'
         answer, _, _, calls = self.run_agent_turn("read main.py", {"role": "assistant", "content": written})
-        self.assertFalse(any("plain words" in json.dumps(body) for body in self.ollama.bodies))
+        self.assertFalse(any("plain words" in json.dumps(body) for body in self.engine.bodies))
         self.assertIn("read_file", answer)
         self.assertIsNone(calls)
 
@@ -108,8 +108,8 @@ class AgentTurns(unittest.TestCase):
         brain.extract_memories.assert_not_called()
 
     def test_ordinary_chat_still_offers_arty_s_own_tools(self):
-        self.ollama = FakeOllama({"role": "assistant", "content": "It prints hello."})
-        with unittest.mock.patch.object(connections, "http_json", side_effect=self.ollama), \
+        self.engine = FakeEngine({"role": "assistant", "content": "It prints hello."})
+        with unittest.mock.patch.object(connections, "http_json", side_effect=self.engine), \
                 unittest.mock.patch.object(brain, "look_up_first", return_value=([], "", None)), \
                 unittest.mock.patch.object(brain, "be_honest", side_effect=lambda answer, *_: answer):
             brain.run_turn(conversation("what does main.py do?"), "Arty", client_tools=[READ_FILE])

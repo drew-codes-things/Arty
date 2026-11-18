@@ -24,7 +24,7 @@ PYFLAKES_ERROR = re.compile(r"undefined name|syntax error|invalid syntax|unexpec
                             r"may be undefined|referenced before assignment|is not defined|'return' outside function|"
                             r"'yield' outside function|default 'except:' must be last|invalid print syntax|"
                             r"too many expressions in star-unpacking|duplicate argument", re.I)
-JS_PACKAGE = re.compile(r"""(?:\brequire\s*\(\s*|\bimport\s*\(\s*|\bfrom\s+|^\s*import\s+)['"]([^'"]+)['"]""", re.M)
+JS_PACKAGE = re.compile(r"""(?:\brequire\s*\(\s*|\bimport\s*\(\s*|\bfrom\s+|^[ \t]*import\s+)['"]([^'"]+)['"]""", re.M)
 BROWSER_GLOBAL = re.compile(r"\b(?:document|window|localStorage|sessionStorage|navigator|alert|HTMLElement|customElements)\b")
 TS_MISSING_PACKAGE = re.compile(r"error TS(?:2307|7016|2875):")
 TS_ERROR_LINE = re.compile(r"error TS\d+:")
@@ -40,30 +40,30 @@ CPP_SIGNAL = re.compile(r"\bstd::|#include\s*<(?:iostream|vector|string|map|algo
 RUST_MAIN = re.compile(r"\bfn\s+main\s*\(")
 RUST_TEST = re.compile(r"#\[(?:test|cfg\(test\))\]")
 RUST_PATH_ROOT = re.compile(r"(?<![\w:.])([a-z_][a-z0-9_]*)::(?!<)")
-RUST_USE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+(?:::)?([^;]+);", re.M)
+RUST_USE = re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s+(?:::)?([^;]+);", re.M)
 RUST_WORD = re.compile(r"[A-Za-z_]\w*")
 RUST_EXTERN = re.compile(r"\bextern\s+crate\s+(\w+)")
 RUST_MODULE = re.compile(r"\bmod\s+(\w+)")
 RUST_LOCAL_ROOTS = frozenset("std core alloc crate self super i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64 "
                              "str char bool".split())
-GO_PACKAGE = re.compile(r"^\s*package\s+(\w+)", re.M)
-GO_MAIN = re.compile(r"^\s*func\s+main\s*\(\s*\)", re.M)
-GO_TEST = re.compile(r"^\s*func\s+(?:Test|Benchmark|Example)\w*\s*\(", re.M)
-GO_IMPORT_BLOCK = re.compile(r"^\s*import\s*\(([^)]*)\)", re.M)
-GO_IMPORT_LINE = re.compile(r'^\s*import\s+(?:\w+\s+)?"([^"]+)"', re.M)
+GO_PACKAGE = re.compile(r"^[ \t]*package\s+(\w+)", re.M)
+GO_MAIN = re.compile(r"^[ \t]*func\s+main\s*\(\s*\)", re.M)
+GO_TEST = re.compile(r"^[ \t]*func\s+(?:Test|Benchmark|Example)\w*\s*\(", re.M)
+GO_IMPORT_BLOCK = re.compile(r"^[ \t]*import\s*\(([^)]*)\)", re.M)
+GO_IMPORT_LINE = re.compile(r'^[ \t]*import\s+(?:\w+\s+)?"([^"]+)"', re.M)
 GO_QUOTED = re.compile(r'"([^"]+)"')
-JAVA_PUBLIC_CLASS = re.compile(r"^\s*public\s+(?:final\s+|abstract\s+)*(?:class|interface|enum|record)\s+(\w+)", re.M)
+JAVA_PUBLIC_CLASS = re.compile(r"^[ \t]*public\s+(?:final\s+|abstract\s+)*(?:class|interface|enum|record)\s+(\w+)", re.M)
 JAVA_CLASS = re.compile(r"\b(?:class|interface|enum|record)\s+(\w+)")
 JAVA_MAIN = re.compile(r"\bstatic\s+void\s+main\s*\(")
-JAVA_IMPORT = re.compile(r"^\s*import\s+(?:static\s+)?([\w.]+)", re.M)
+JAVA_IMPORT = re.compile(r"^[ \t]*import\s+(?:static\s+)?([\w.]+)", re.M)
 JAVA_STANDARD = ("java.", "javax.", "jdk.")
-JAVA_INSTANCE_MAIN = re.compile(r"^\s*void\s+main\s*\(\s*\)", re.M)
-KOTLIN_MAIN = re.compile(r"^\s*fun\s+main\s*\(", re.M)
+JAVA_INSTANCE_MAIN = re.compile(r"^[ \t]*void\s+main\s*\(\s*\)", re.M)
+KOTLIN_MAIN = re.compile(r"^[ \t]*fun\s+main\s*\(", re.M)
 KOTLIN_STANDARD = ("kotlin.", "java.", "javax.")
-CSHARP_USING = re.compile(r"^\s*using\s+(?:static\s+)?([\w.]+)\s*;", re.M)
+CSHARP_USING = re.compile(r"^[ \t]*using\s+(?:static\s+)?([\w.]+)\s*;", re.M)
 CSHARP_MAIN = re.compile(r"\bstatic\s+(?:async\s+)?(?:void|int|Task(?:<int>)?)\s+Main\s*\(")
-CSHARP_DECLARATION = re.compile(r"^\s*(?:(?:public|internal|private|protected|static|sealed|abstract|partial|readonly|record)\s+)*"
-                                r"(?:class|struct|interface|enum|record|namespace)\b|^\s*using\b|^\s*\[|^\s*$|^\s*//", re.M)
+CSHARP_DECLARATION = re.compile(r"^[ \t]*(?:(?:public|internal|private|protected|static|sealed|abstract|partial|readonly|record)\s+)*"
+                                r"(?:class|struct|interface|enum|record|namespace)\b|^[ \t]*using\b|^[ \t]*\[|^[ \t]*$|^[ \t]*//", re.M)
 SQL_CREATED_TABLE = re.compile(r"\bcreate\s+(?:temp(?:orary)?\s+)?(?:table|view)\s+(?:if\s+not\s+exists\s+)?[\"`\[]?(\w+)", re.I)
 SQL_OTHER_DIALECT = re.compile(r"\bauto_increment\b|\bserial\b|\bilike\b|::\w|\btop\s+\d|\bnvarchar\b|\bengine\s*=|\$\d+|"
                                r"\bdate_sub\b|\binterval\b|\bnow\s*\(\s*\)|\bidentity\s*\(|\bgetdate\s*\(|\bvarchar2\b|"
@@ -75,10 +75,60 @@ NOT_INSTALLED_STANDARD_MODULES = frozenset({"tkinter", "turtle", "turtledemo", "
 READS_INPUT_OR_ARGUMENTS = re.compile(
     r"\binput\s*\(|sys\.argv|sys\.stdin|argparse|process\.argv|process\.stdin|\breadline\b|\bprompt\s*\(|os\.Args|"
     r"os\.Stdin|\bscanf\s*\(|\bfgets\s*\(|\bgetchar\s*\(|\bcin\s*>>|std::cin|\bgetline\s*\(|std::env::args|env::args|"
-    r"io::stdin|System\.in\b|\bargs\s*\[|Console\.Read|\breadLine\s*\(|\breadln\s*\(|\bgets\b|\bSTDIN\b|\bARGV\b|"
-    r"\$argv|io\.read\b", re.M)
+    r"io::stdin|System\.in\b|\bargs\s*\[|\bargv\s*\[|Console\.Read|\breadLine\s*\(|\breadln\s*\(|\bgets\b|\bSTDIN\b|"
+    r"\bARGV\b|\$argv|io\.read\b|\bopen\s*\(\s*0\s*[,)]|readFileSync\s*\(\s*0\s*[,)]", re.M)
+STANDARD_INPUT_DEVICE = re.compile(r"""["']/dev/(?:stdin|fd/0)["']""")
+ERRORS_NO_INPUT_CAUSES = {
+    "python": re.compile(r"^(?:[\w.]+\.)?(?:NameError|UnboundLocalError|SyntaxError|IndentationError|TabError|RecursionError)\b|"
+                         r"^(?:[\w.]+\.)?(?:AttributeError|TypeError): (?!'NoneType' object)"),
+    "javascript": re.compile(r"^(?:Uncaught )?SyntaxError\b|^(?:Uncaught )?ReferenceError: (?!prompt is not defined)|"
+                             r"^(?:Uncaught )?TypeError: (?!.*\b(?:undefined|null)\b)"),
+}
+ERRORS_NO_INPUT_CAUSES["typescript"] = ERRORS_NO_INPUT_CAUSES["javascript"]
+ERRORS_NO_INPUT_CAUSES["php"] = re.compile(r"Call to undefined (?:function|method)\b")
+MADE_UP_VALUE_OF_ANOTHER_TYPE = {
+    "python": re.compile(r"^(?:[\w.]+\.)?(?:AttributeError|TypeError): (?:.*'(?:int|float|bool)' object|can only join an iterable)"),
+    "javascript": re.compile(r"^(?:Uncaught )?TypeError: .* is not (?:a function|iterable)\b"),
+}
+MADE_UP_VALUE_OF_ANOTHER_TYPE["typescript"] = MADE_UP_VALUE_OF_ANOTHER_TYPE["javascript"]
+TYPO_SUGGESTION = re.compile(r"\bDid you mean\b")
+TURNS_INPUT_INTO_VALUES = re.compile(r"\bjson\.loads?\b|\bliteral_eval\b|\beval\s*\(|\bJSON\.parse\b|\byaml\.\w*load")
+LOOKED_UP_BY_A_KEY = re.compile(r"\] is not a function\b")
+PROGRAM_FILE = re.compile(r"\bmain\.\w+\b")
+PYTHON_FRAME = re.compile(r'^\s*File "([^"]*)", line \d+', re.M)
+SCRIPT_STACK_FRAME = re.compile(r"^\s+at (.+)$", re.M)
+SCRIPT_STACK_LANGUAGES = frozenset({"javascript", "typescript"})
+STOPS_ON_PURPOSE = re.compile(r"^\s*(?:raise|throw)\b|\bassert\b|\bsys\.exit\s*\(|\bprocess\.exit\s*\(|\bexit\s*\(|\bdie\s*\(")
 SHELL_READS_INPUT_OR_ARGUMENTS = re.compile(r"Read-Host|\$args\b|\$\{?[1-9]\b|\$@|\bread\s+(?:-\w+\s+)*\w+", re.M)
+READS_ARGUMENTS = re.compile(r"sys\.argv|argparse|process\.argv|os\.Args|std::env::args|env::args|\bargs\s*\[|\bargv\s*\[|"
+                             r"\bARGV\b|\$argv", re.M)
+READS_ARGUMENTS_BY_POSITION = re.compile(r"sys\.argv|process\.argv|os\.Args|env::args|\bargs\s*\[|\bargv\s*\[|\bARGV\b|"
+                                         r"\$argv", re.M)
+SHELL_READS_ARGUMENTS = re.compile(r"\$args\b|\$\{?[1-9]\b|\$@", re.M)
+CRASH_LOCATION = re.compile(r"\b(?:main|Main)\.\w+(?:\", line |:)(\d+)")
+INNERMOST_FRAME_LAST = frozenset({"python"})
 SHELL_LANGUAGES = frozenset({"bash", "powershell"})
+DOUBLE_QUOTED = r'"(?:\\[\s\S]?|[^"\\\n])*+(?:"|$)'
+SINGLE_QUOTED = r"'(?:\\[\s\S]?|[^'\\\n])*+(?:'|$)"
+CHARACTER = r"'(?:\\.|[^'\\\n])'"
+TRIPLE_QUOTED = r'"""[\s\S]*?(?:"""|\Z)|\'\'\'[\s\S]*?(?:\'\'\'|\Z)'
+HASH_COMMENT = r"#[^\n]*"
+SHELL_COMMENT = r"(?<![$\w{])#[^\n]*"
+SLASH_COMMENT = r"//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)"
+DASH_COMMENT = r"--[^\n]*"
+BACKTICK_QUOTED = r"`[^`]*`"
+NOT_CODE = {
+    "python": re.compile("|".join((TRIPLE_QUOTED, DOUBLE_QUOTED, SINGLE_QUOTED, HASH_COMMENT)), re.M),
+    "ruby": re.compile("|".join((DOUBLE_QUOTED, SINGLE_QUOTED, HASH_COMMENT)), re.M),
+    "php": re.compile("|".join((DOUBLE_QUOTED, SINGLE_QUOTED, SLASH_COMMENT, HASH_COMMENT)), re.M),
+    "javascript": re.compile("|".join((DOUBLE_QUOTED, SINGLE_QUOTED, BACKTICK_QUOTED, SLASH_COMMENT)), re.M),
+    "typescript": re.compile("|".join((DOUBLE_QUOTED, SINGLE_QUOTED, BACKTICK_QUOTED, SLASH_COMMENT)), re.M),
+    "lua": re.compile("|".join((DOUBLE_QUOTED, SINGLE_QUOTED, DASH_COMMENT)), re.M),
+    "sql": re.compile("|".join((SINGLE_QUOTED, DASH_COMMENT)), re.M),
+    "bash": re.compile("|".join((f"({DOUBLE_QUOTED})", SINGLE_QUOTED, SHELL_COMMENT)), re.M),
+    "powershell": re.compile("|".join((f"({DOUBLE_QUOTED})", SINGLE_QUOTED, SHELL_COMMENT)), re.M),
+}
+C_LIKE_NOT_CODE = re.compile("|".join((DOUBLE_QUOTED, CHARACTER, SLASH_COMMENT)), re.M)
 
 
 @dataclass(frozen=True)
@@ -200,7 +250,7 @@ def bash_plan(code: str, version: str = "") -> Plan:
 
 def c_family_plan(code: str, cpp: bool) -> Plan:
     source = "main.cpp" if cpp else "main.c"
-    compiler = ("/usr/bin/g++", "-std=c++23") if cpp else ("/usr/bin/gcc", "-std=c17")
+    compiler = ("/usr/bin/g++", "-std=c++23") if cpp else ("/usr/bin/gcc", "-std=gnu17")
     flags = ("-Wall", "-Wextra", "-g", "-O0", "-fno-omit-frame-pointer", "-fsanitize=address,undefined",
              "-fno-sanitize-recover=all", "-pthread")
     tool = "g++" if cpp else "gcc"
@@ -404,6 +454,7 @@ PLANS = {
     "xml": format_plan("xml", "XML parser", "data.xml"),
 }
 
+LIBRARY_NAME = r"[\w@./-]{1,60}"
 ENVIRONMENT_TROUBLE = (r"No such file or directory|FileNotFoundError|FileNotFoundException|ENOENT|EACCES|Permission denied|"
                        r"PermissionError|ConnectionRefused|ConnectionError|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|"
                        r"Network is unreachable|Temporary failure in name resolution|Name or service not known|"
@@ -414,9 +465,9 @@ RULES = {
     "python": Rules(re.compile(r"Traceback \(most recent call last\)|^\w*Error:", re.M), re.compile(ENVIRONMENT_TROUBLE),
                     re.compile(r"ModuleNotFoundError: No module named '([\w.]+)'")),
     "javascript": Rules(re.compile(r"\b[A-Z]\w*Error\b|^\s+at\s|Uncaught|\bthrow\b", re.M), re.compile(ENVIRONMENT_TROUBLE),
-                        re.compile(r"Cannot find (?:module|package) '([^']+)'")),
+                        re.compile(rf"Cannot find (?:module|package) '({LIBRARY_NAME})'")),
     "typescript": Rules(re.compile(r"\b[A-Z]\w*Error\b|^\s+at\s|Uncaught|\bthrow\b", re.M), re.compile(ENVIRONMENT_TROUBLE),
-                        re.compile(r"Cannot find (?:module|package) '([^']+)'")),
+                        re.compile(rf"Cannot find (?:module|package) '({LIBRARY_NAME})'")),
     "c": Rules(re.compile(r"ERROR: AddressSanitizer|runtime error:|Segmentation fault|Aborted|core dumped|"
                           r"stack smashing|double free|free\(\): invalid"), re.compile(ENVIRONMENT_TROUBLE),
                re.compile(r"fatal error: ([\w./+-]+): No such file or directory"), signals_crash=True),
@@ -428,9 +479,9 @@ RULES = {
     "php": Rules(re.compile(r"PHP (?:Fatal|Parse) error|Fatal error:|Parse error:|Uncaught|Warning: Undefined"),
                  re.compile(ENVIRONMENT_TROUBLE + r"|Failed opening required|vendor/autoload\.php")),
     "ruby": Rules(re.compile(r"\(\w+(?:Error|Exception)\)|\b\w+Error\b|undefined method|undefined local variable"),
-                  re.compile(ENVIRONMENT_TROUBLE), re.compile(r"cannot load such file -- (\S+)")),
+                  re.compile(ENVIRONMENT_TROUBLE), re.compile(rf"cannot load such file -- ({LIBRARY_NAME})(?!\S)")),
     "lua": Rules(re.compile(r"stack traceback|lua5\.4: |attempt to "), re.compile(ENVIRONMENT_TROUBLE),
-                 re.compile(r"module '([^']+)' not found")),
+                 re.compile(rf"module '({LIBRARY_NAME})' not found")),
     "sql": Rules(re.compile(r"^SQL error", re.M), re.compile(r"^needs table", re.M)),
     "bash": Rules(re.compile(r"syntax error"), re.compile(ENVIRONMENT_TROUBLE)),
     "powershell": Rules(re.compile(r"ParserError|ParseException"), re.compile(ENVIRONMENT_TROUBLE)),
@@ -440,10 +491,96 @@ RULES["kotlin"] = RULES["java"]
 DEFAULT_RULES = Rules(re.compile(r"error", re.I), re.compile(r"(?!)"))
 
 
+def kept_or_blanked(found: re.Match) -> str:
+    return found.group(1) if found.re.groups and found.group(1) is not None else " "
+
+
+def code_only(language: str, code: str) -> str:
+    return NOT_CODE.get(language, C_LIKE_NOT_CODE).sub(kept_or_blanked, code)
+
+
 def reads_input_or_arguments(language: str, code: str) -> bool:
+    if STANDARD_INPUT_DEVICE.search(code):
+        return True
+    code = code_only(language, code)
     if READS_INPUT_OR_ARGUMENTS.search(code):
         return True
     return language in SHELL_LANGUAGES and bool(SHELL_READS_INPUT_OR_ARGUMENTS.search(code))
+
+
+def reads_arguments(language: str, code: str) -> bool:
+    code = code_only(language, code)
+    if READS_ARGUMENTS.search(code):
+        return True
+    return language in SHELL_LANGUAGES and bool(SHELL_READS_ARGUMENTS.search(code))
+
+
+def reads_arguments_by_position(language: str, code: str) -> bool:
+    code = code_only(language, code)
+    if READS_ARGUMENTS_BY_POSITION.search(code):
+        return True
+    return language in SHELL_LANGUAGES and bool(SHELL_READS_ARGUMENTS.search(code))
+
+
+def reads_standard_input(language: str, code: str) -> bool:
+    without_arguments = READS_ARGUMENTS.sub("", code_only(language, code))
+    if READS_INPUT_OR_ARGUMENTS.search(without_arguments) or STANDARD_INPUT_DEVICE.search(code):
+        return True
+    return language in SHELL_LANGUAGES and bool(SHELL_READS_INPUT_OR_ARGUMENTS.search(SHELL_READS_ARGUMENTS.sub("", without_arguments)))
+
+
+def crash_line_number(language: str, output: str) -> int | None:
+    found = CRASH_LOCATION.findall(output)
+    if not found:
+        return None
+    return int(found[-1] if language in INNERMOST_FRAME_LAST else found[0])
+
+
+def innermost_frame_is_the_program(language: str, output: str) -> bool:
+    if language == "python":
+        frames = PYTHON_FRAME.findall(output)
+        return not frames or bool(PROGRAM_FILE.search(frames[-1]))
+    if language in SCRIPT_STACK_LANGUAGES:
+        frames = SCRIPT_STACK_FRAME.findall(output)
+        return not frames or bool(PROGRAM_FILE.search(frames[0]))
+    return True
+
+
+def names_an_error_no_input_causes(language: str, error_line: str) -> bool:
+    pattern = ERRORS_NO_INPUT_CAUSES.get(language)
+    return bool(pattern and pattern.search(error_line))
+
+
+def is_an_error_no_input_causes(language: str, error_line: str, output: str) -> bool:
+    return names_an_error_no_input_causes(language, error_line) and innermost_frame_is_the_program(language, output)
+
+
+def turns_input_into_values(language: str, code: str) -> bool:
+    return bool(TURNS_INPUT_INTO_VALUES.search(code_only(language, code)))
+
+
+def made_up_input_could_cause(language: str, code: str, error_line: str) -> bool:
+    pattern = MADE_UP_VALUE_OF_ANOTHER_TYPE.get(language)
+    if not pattern or not pattern.search(error_line) or TYPO_SUGGESTION.search(error_line):
+        return False
+    return turns_input_into_values(language, code) or bool(LOOKED_UP_BY_A_KEY.search(error_line))
+
+
+def crash_line(language: str, code: str, output: str) -> str:
+    number = crash_line_number(language, output)
+    lines = code.splitlines()
+    if number is None or not 0 < number <= len(lines):
+        return ""
+    return lines[number - 1]
+
+
+def crashed_at_a_read(language: str, code: str, output: str) -> bool:
+    line = crash_line(language, code, output)
+    return bool(line) and reads_input_or_arguments(language, line)
+
+
+def stops_on_purpose(language: str, code: str, output: str) -> bool:
+    return bool(STOPS_ON_PURPOSE.search(crash_line(language, code, output)))
 
 
 def missing_names(language: str, output: str) -> list[str]:

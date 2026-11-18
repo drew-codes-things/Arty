@@ -1,19 +1,48 @@
 #!/bin/bash
-# Gives Arty's AI container whichever GPU is in the host, so swapping cards needs no fiddling.
 # Runs at boot before the guests start (arty-gpu-select.service), and by hand: arty-gpu-select [--dry-run].
-#   NVIDIA (/dev/nvidia0 present, e.g. the RTX 3060): passes the NVIDIA device nodes; Ollama uses CUDA.
-#   AMD (an amdgpu render node, e.g. the RX 570): passes the render node; Ollama uses Vulkan.
-#   Neither: no devices; Ollama runs on the CPU.
-# Inside the container, ollama-gpu-env picks Ollama's backend from the devices it was given.
 set -euo pipefail
 CT=${CT:-104}
-CT_RENDER_GID=992   # "render" group inside the container
-CT_VIDEO_GID=44     # "video" group inside the container
+SETTINGS=${ARTY_GPU_SETTINGS:-/etc/default/arty-gpu-select}
+KFD_NODES=/sys/class/kfd/kfd/topology/nodes
+DEFAULT_RENDER_GID=992
+DEFAULT_VIDEO_GID=44
+given_render_gid=${CT_RENDER_GID:-}
+given_video_gid=${CT_VIDEO_GID:-}
+if [ -r "$SETTINGS" ]; then
+  # shellcheck source=/dev/null
+  . "$SETTINGS"
+fi
+CT_RENDER_GID=${given_render_gid:-${CT_RENDER_GID:-$DEFAULT_RENDER_GID}}
+CT_VIDEO_GID=${given_video_gid:-${CT_VIDEO_GID:-$DEFAULT_VIDEO_GID}}
+for gid in "$CT_RENDER_GID" "$CT_VIDEO_GID"; do
+  if ! [[ "$gid" =~ ^[0-9]+$ ]]; then
+    echo "arty-gpu-select: group id '$gid' (CT_RENDER_GID or CT_VIDEO_GID, from the environment or $SETTINGS) is not a number" >&2
+    exit 1
+  fi
+done
 CONF=/etc/pve/lxc/$CT.conf
 DRY_RUN=false
+SHOW_KIND=false
+SHOW_GFX_TARGET=false
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=true
+[ "${1:-}" = "--kind" ] && SHOW_KIND=true
+[ "${1:-}" = "--gfx-target" ] && SHOW_GFX_TARGET=true
 
 say() { echo "$*"; logger -t arty-gpu-select -- "$*"; }
+
+gfx_target() {
+  local version
+  version=$(awk '$1 == "gfx_target_version" && $2 > 0 { print $2; exit }' "$KFD_NODES"/*/properties 2>/dev/null || true)
+  [[ "$version" =~ ^[0-9]+$ ]] || return 0
+  printf 'gfx%d%x%x\n' $((version / 10000)) $((version / 100 % 100)) $((version % 100))
+}
+
+if $SHOW_GFX_TARGET; then
+  gfx_target
+  exit 0
+fi
+
+own_settings() { sed -n '/^\[/q;p' "$CONF"; }
 
 nvidia_devices() {
   local node
@@ -22,25 +51,52 @@ nvidia_devices() {
   done
 }
 
-amd_devices() {  # the first amdgpu render node, and the card node of the same GPU
-  local render card
+amd_render_node() {
+  local render
   for render in /sys/class/drm/renderD*; do
-    [ "$(basename "$(readlink -f "$render/device/driver")")" = amdgpu ] || continue
-    echo "/dev/dri/$(basename "$render"),gid=$CT_RENDER_GID"
-    card=$(ls -d "$render"/device/drm/card* 2>/dev/null | head -1)
-    [ -n "$card" ] && echo "/dev/dri/$(basename "$card"),gid=$CT_VIDEO_GID"
-    return
+    if [ "$(basename "$(readlink -f "$render/device/driver")")" = amdgpu ]; then
+      echo "$render"
+      return
+    fi
+  done
+}
+
+amd_devices() {
+  local render=$1 card
+  if [ -c /dev/kfd ]; then
+    echo "/dev/kfd,gid=$CT_RENDER_GID"
+  fi
+  echo "/dev/dri/$(basename "$render"),gid=$CT_RENDER_GID"
+  for card in "$render"/device/drm/card*; do
+    if [ -e "$card" ]; then
+      echo "/dev/dri/$(basename "$card"),gid=$CT_VIDEO_GID"
+      return
+    fi
   done
 }
 
 if [ -c /dev/nvidia0 ]; then
-  kind=NVIDIA; mapfile -t wanted < <(nvidia_devices)
+  kind=NVIDIA; short_kind=nvidia; mapfile -t wanted < <(nvidia_devices)
 else
-  mapfile -t wanted < <(amd_devices)
-  if [ ${#wanted[@]} -gt 0 ]; then kind=AMD; else kind="no GPU (CPU only)"; fi
+  render=$(amd_render_node)
+  if [ -n "$render" ] && [ -c /dev/kfd ]; then
+    kind="AMD (ROCm: /dev/kfd and the render node)"; short_kind=amd-rocm; mapfile -t wanted < <(amd_devices "$render")
+  elif [ -n "$render" ]; then
+    kind="AMD (Vulkan only: no /dev/kfd on the host)"; short_kind=amd-vulkan; mapfile -t wanted < <(amd_devices "$render")
+  else
+    wanted=(); short_kind=none; kind="no GPU (no NVIDIA or AMD card is fitted; ArtyEngine runs on the CPU)"
+  fi
+fi
+if $SHOW_KIND; then
+  echo "$short_kind"
+  exit 0
 fi
 
-mapfile -t current < <(grep -E '^dev[0-9]+:' "$CONF" | sed -E 's/^dev[0-9]+: *//')
+if [ ! -r "$CONF" ]; then
+  say "CT $CT has no readable config at $CONF; nothing changed"
+  exit 1
+fi
+mapfile -t current < <(own_settings | sed -nE 's/^dev[0-9]+: *//p')
 if [ "${wanted[*]:-}" = "${current[*]:-}" ]; then
   say "CT $CT already has the $kind devices"
   exit 0
@@ -52,7 +108,7 @@ if [ "$(pct status "$CT" | awk '{print $2}')" = running ]; then
   say "CT $CT is running: stop it and run arty-gpu-select again (it runs by itself at boot)"
   exit 1
 fi
-old=$(grep -oE '^dev[0-9]+' "$CONF" | paste -sd, -)
+old=$(own_settings | { grep -oE '^dev[0-9]+' || [ $? -eq 1 ]; } | paste -sd, -)
 [ -n "$old" ] && pct set "$CT" -delete "$old"
 args=()
 for index in "${!wanted[@]}"; do args+=("-dev$index" "${wanted[$index]}"); done

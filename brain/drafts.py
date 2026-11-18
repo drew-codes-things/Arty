@@ -22,6 +22,45 @@ def _join(before: str, after: str) -> str:
     return f"{before}{ROUND_BREAK}{after}" if before and after else before or after
 
 
+def shared_length(sent: str, final: str) -> int:
+    position = 0
+    for char in sent:
+        if char.isspace():
+            continue
+        while position < len(final) and final[position].isspace():
+            position += 1
+        if position >= len(final) or final[position] != char:
+            return position
+        position += 1
+    return position
+
+
+def shares_a_sentence(sent: str, final: str) -> bool:
+    return bool(SENTENCE_END.search(final[:shared_length(sent, final)]))
+
+
+def sentences_of(text: str) -> list[str]:
+    return [sentence.strip() for sentence in SENTENCE_END.split(text) if sentence.strip()]
+
+
+def without_sentences(text: str, unwanted: set[str]) -> str:
+    kept, start = [], 0
+    for separator in [*SENTENCE_END.finditer(text), None]:
+        end, after = (separator.start(), separator.end()) if separator else (len(text), len(text))
+        if text[start:end].strip() not in unwanted:
+            kept.append(text[start:after])
+        start = after
+    return "".join(kept).strip()
+
+
+def from_the_differing_sentence(sent: str, final: str) -> str:
+    shared = shared_length(sent, final)
+    sentence_starts = [found.end() for found in SENTENCE_END.finditer(final, 0, shared)]
+    differing_start = sentence_starts[-1] if sentence_starts else 0
+    rest = without_sentences(final[differing_start:], set(sentences_of(sent)))
+    return f" {rest}" if rest else ""
+
+
 def remainder(sent: str, final: str) -> str | None:
     """What `final` adds after `sent`, if it starts with it (whitespace may differ: trim_offers
     re-joins sentences with single spaces). None if it says something else."""
@@ -52,13 +91,15 @@ class Draft:
         self.raw = ""             # this round's text as the model wrote it
         self.used = 0             # how much of raw has gone out
         self.open = False
+        self.holds_line = None
 
     def everything(self) -> str:
         return _join(self.earlier, self.sent)
 
-    def start_round(self, allowed: bool):
+    def start_round(self, allowed: bool, holds_line=None):
         """A new model call. allowed=False holds this round back (its answer may be thrown away)."""
         self.earlier, self.sent, self.raw, self.used, self.open = self.everything(), "", "", 0, allowed
+        self.holds_line = holds_line
 
     def feed(self, piece: str, risky):
         """More of the model's text. risky(text) says the round so far might yet be rewritten,
@@ -75,9 +116,16 @@ class Draft:
             if sentence and not self.is_offer(sentence) and not _in_code_block(self.raw[:boundary.start()]):
                 ready = boundary.start()  # a held-back offer goes out once something follows it
             start = boundary.end()
+        ready = max(self.used, min(ready, self.before_a_held_line()))
         if ready > self.used:
             self._send(self.raw[self.used:ready])
             self.used = ready
+
+    def before_a_held_line(self) -> int:
+        line_start = self.raw.rfind("\n") + 1
+        if not self.holds_line or not self.holds_line(self.raw[line_start:]):
+            return len(self.raw)
+        return len(self.raw[:line_start].rstrip("\n"))
 
     def before_tools(self):
         """The round ended in tool calls, so its unfinished last sentence is complete: send it. Small models
@@ -100,6 +148,11 @@ class Draft:
 
     def finish(self, final: str) -> str:
         """The answer to give, starting with exactly what was already sent."""
-        if self.sent and (rest := remainder(self.sent, final)) is not None:
-            return _join(self.earlier, self.sent + rest)
-        return _join(self.everything(), final)
+        if not self.sent:
+            return _join(self.earlier, final)
+        rest = remainder(self.sent, final)
+        if rest is None and not shares_a_sentence(self.sent, final):
+            return _join(self.everything(), final)
+        if rest is None:
+            rest = from_the_differing_sentence(self.sent, final)
+        return _join(self.earlier, self.sent + rest)

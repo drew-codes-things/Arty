@@ -11,7 +11,7 @@ import models
 import owner
 
 from environment import HUB_KEY
-from settings import HUB_URL, OLLAMA_URL
+from settings import HUB_URL, ARTY_ENGINE_URL
 from connections import USER_NAME
 
 log = logging.getLogger("brain")
@@ -152,7 +152,7 @@ def extract_memories(config, user_text, answer, save=None, prefix=None):
         body["tools"] = shared["tools"]
     with memory_lock:
         try:
-            reply = connections.http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, body))
+            reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, body))
             facts = json.loads(reply["message"]["content"]).get("facts") or []
             if isinstance(facts, list) and facts:
                 (save or save_facts)([f for f in facts if isinstance(f, dict)])

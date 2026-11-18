@@ -82,6 +82,27 @@ What the brain checks whatever the caller says:
   data out (`git push`, `ssh`, `curl` with a body, mail, piping a download into a shell and a few more). It does not
   understand the shell: a script written to a file and then run, `gh`, `npm publish`, `docker push` or a here-document
   all pass without asking. Treat it as a guard against slips, not against a model trying to get round it.
+- **Installs are read word by word.** `brain/installs.py` splits each command into its parts (quotes, backticks,
+  `;`, `&&`, `|`, redirects, `if`/`for`/`while`, functions and `{ }`, wrappers such as `sudo`, `env`, `timeout`,
+  `setsid`, `strace`, `flock` and `xargs`, `sh -c`, `su -c` and `eval`, here-strings and here-documents fed to a shell
+  or `at`, and every `$(...)` or backtick, quoted or not, in any word) and asks first for pip and `python -m pip`,
+  `ensurepip`, `easy_install`, `setup.py install`, apt, dpkg, dnf, yum, zypper, apk, pacman, brew, snap, flatpak,
+  conda and mamba installs, global npm, pnpm, yarn and bun installs (also through `npm_config_global`), npx and the
+  other package runners (npx of a common local tool such as `tsc` runs only after `npm install` or `npm ci` in the same
+  command, or with `--no`), pipx, `uv tool` and `uv python`, cargo, `go install` and `go get` of a module, gem, deno,
+  nvm, pyenv, asdf, volta, luarocks, `dotnet tool install`, `composer global require`, rustup, and a download or a
+  cloned repository run by a shell or interpreter, whether piped, saved with `-o` or `>`, read back with `<` or `cat`,
+  sourced, or run through `$(...)` or `<(...)`. Entering a clone with `cd` or `pushd`, or unpacking a downloaded
+  archive with `tar x` or `unzip`, makes any later `./script`, shell script or `make install` in the command ask.
+  When a known installer appears as a bare word after a program it doesn't know (`docker run img pip install x`), or
+  in a quoted string given to `-c`, `-e`, `--command`, `--exec`, `-x`, `tmux`, `screen`, `watch`, `ssh` or
+  `parallel`, it asks too; other quoted text (a title, a search, a here-document written to a file) does not, and
+  typed text is only read on lines that start with a program it knows. A pip inside a folder that looks like a
+  virtual environment (`.venv/bin/pip`) or that the same command made with `python -m venv`, a bare pip right after
+  `source <dir>/bin/activate &&` (or `.`), or `poetry run`/`pipenv run` pip, runs without asking; the folder name is
+  all it can see, not whether it really is one. A script written by the same command and then run, a command held
+  in a variable and run as `$cmd`, `npm link`, `npm --prefix`, corepack, R and downloaders other than curl and wget
+  are not read.
 - **Private folders are a list too.** Uploads and file sends refuse the folders in `sharing.PRIVATE_FOLDERS` (SSH and
   GPG keys, browser profiles including the Gmail Chrome and the browser agent) and names that look like secrets. A
   secret kept anywhere else is not known to be private.

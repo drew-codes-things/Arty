@@ -9,16 +9,16 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
 import tool_guide  # noqa: E402
-from test_review_tonight import FakeHub, FakeOllama, last_user_note, run_agent, said  # noqa: E402
+from test_review_tonight import FakeHub, FakeEngine, last_user_note, run_agent, said  # noqa: E402
 
 READERS = ("fetch__fetch", "research__web_search", "workspace__browser_open")
 
 
 class GivenLinks(unittest.TestCase):
     def note_for(self, text, names=READERS):
-        ollama = FakeOllama([said("It is a placeholder domain.")] * 4)
-        run_agent(ollama, [{"role": "user", "content": text}], hub=FakeHub(names))
-        return last_user_note(ollama.chat_bodies[0])
+        engine = FakeEngine([said("It is a placeholder domain.")] * 4)
+        run_agent(engine, [{"role": "user", "content": text}], hub=FakeHub(names))
+        return last_user_note(engine.chat_bodies[0])
 
     def test_a_link_to_read_is_read_with_the_fetch_tool(self):
         for text in ("Read https://example.org and tell me what that page is for",

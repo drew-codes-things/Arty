@@ -49,7 +49,7 @@ class MakeRoomBeforeAnotherModel(unittest.TestCase):
         with unittest.mock.patch.object(models, "make_room", order.make_room), \
                 unittest.mock.patch.object(models, "find", return_value=CODER), \
                 unittest.mock.patch.object(models, "in_arty", return_value=True), \
-                unittest.mock.patch.object(models, "_ollama", order.chat("ask")):
+                unittest.mock.patch.object(models, "_engine", order.chat("ask")):
             models.ask("coder:9b", "write a function", config)
         self.assertEqual(order.calls, [("make_room", "coder:9b"), ("chat", "ask")])
 

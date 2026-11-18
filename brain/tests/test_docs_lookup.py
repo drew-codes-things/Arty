@@ -187,6 +187,28 @@ class DocsExcerpt(unittest.TestCase):
         self.assertIn("django", docs_reading.named_things(DJANGO_QUESTION))
         self.assertTrue(docs_reading.names_all(docs_reading.readable(FORUM_PAGE), docs_reading.named_things(OPENAI_QUESTION)))
 
+    def test_a_login_part_or_port_cannot_dress_a_host_up_as_docs(self):
+        self.assertFalse(docs_reading.is_docs_site("https://docs.python.org@evil.example/x"))
+        self.assertTrue(docs_reading.is_docs_site("https://docs.python.org:443/3/"))
+
+    def test_project_pages_are_not_called_the_official_documentation(self):
+        for url in ("https://github.com/someone/anything/issues/1", "https://pypi.org/project/any-package/"):
+            with self.subTest(url=url):
+                self.assertEqual(docs_reading.PROJECT_PAGE, docs_reading.kind_of_page(url))
+        self.assertEqual(docs_reading.OFFICIAL, docs_reading.kind_of_page("https://docs.python.org/3/library/re.html"))
+        self.assertEqual(docs_reading.NOT_OFFICIAL, docs_reading.kind_of_page("https://realpython.com/python-t-strings/"))
+
+    def test_a_host_named_like_docs_is_not_called_the_official_documentation(self):
+        for url in ("https://docs.attacker.example/setup", "https://doc.evil.example/x", "https://docs.python.org.evil.example/",
+                    "https://evil.readthedocs.io/en/latest/", "https://requests-helper.readthedocs.org/"):
+            with self.subTest(url=url):
+                self.assertTrue(docs_reading.is_docs_site(url))
+                self.assertEqual(docs_reading.UNLISTED_DOCS_SITE, docs_reading.kind_of_page(url))
+        for url in ("https://docs.python.org/3/", "https://doc.rust-lang.org/std/", "https://docs.rs/serde/latest/serde/",
+                    "https://flask.palletsprojects.com/en/stable/", "https://requests.readthedocs.io/en/latest/"):
+            with self.subTest(url=url):
+                self.assertEqual(docs_reading.OFFICIAL, docs_reading.kind_of_page(url))
+
     def test_docs_sites_are_preferred(self):
         self.assertTrue(docs_reading.is_docs_site("https://docs.python.org/3/library/string.templatelib.html"))
         self.assertTrue(docs_reading.is_docs_site("https://pypi.org/project/django-tasks/"))

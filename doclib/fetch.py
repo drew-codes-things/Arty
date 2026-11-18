@@ -1,15 +1,17 @@
 import gzip
 import json
 import logging
+import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from doclib.sources import DEVDOCS_CATALOGUE, DEVDOCS_DOCUMENTS, PYTHON_ARCHIVE, Source
+from doclib.sources import DEVDOCS_CATALOGUE, DEVDOCS_DOCUMENTS, DOTNET_PATHS, PYTHON_ARCHIVE, Source
 
 log = logging.getLogger("doclib.fetch")
 
@@ -18,7 +20,13 @@ TIMEOUT_SECONDS = 120
 MAX_DOWNLOAD_BYTES = 600 * 1024 * 1024
 CHUNK_BYTES = 1024 * 1024
 META_FILE = "meta.json"
+SAVED_VERSION_KEYS = frozenset({"etag", "last_modified", "mtime", "commit", "file"})
 NOT_MODIFIED = 304
+GIT_SECONDS = 900
+GIT_ARCHIVE = "docs.tar.gz"
+GIT_KEPT_SUFFIXES = (".md", ".cs")
+GIT_KEPT_NAMES = ("LICENSE", "LICENSE-CODE")
+GIT_ENVIRONMENT = {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 class FetchError(RuntimeError):
@@ -34,6 +42,13 @@ def read_meta(folder: Path) -> dict:
 
 def write_meta(folder: Path, meta: dict):
     (folder / META_FILE).write_text(json.dumps(meta, indent=1, sort_keys=True))
+
+
+def forget_saved_version(folder: Path):
+    meta = read_meta(folder)
+    if not meta:
+        return
+    write_meta(folder, {key: value for key, value in meta.items() if key not in SAVED_VERSION_KEYS})
 
 
 def request_for(url: str, previous: dict) -> urllib.request.Request:
@@ -123,13 +138,65 @@ def fetch_deb(package: str, folder: Path) -> bool:
         if not fetched:
             raise FetchError(f"apt-get download {package} left no .deb file")
         newest = fetched[-1]
-        if (folder / newest.name).exists():
+        if (folder / newest.name).exists() and read_meta(folder).get("file") == newest.name:
             return False
         for old in folder.glob(f"{package}_*.deb"):
             old.unlink()
         shutil.move(newest, folder / newest.name)
     write_meta(folder, {"package": package, "file": newest.name,
                         "fetched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    return True
+
+
+def git(arguments: list[str], cwd: Path | None = None) -> str:
+    done = subprocess.run(["git", *arguments], cwd=cwd, capture_output=True, text=True, timeout=GIT_SECONDS,
+                          env={**os.environ, **GIT_ENVIRONMENT})
+    if done.returncode != 0:
+        raise FetchError(f"git {arguments[0]} failed: {done.stderr.strip()[:300]}")
+    return done.stdout
+
+
+def remote_head(repository: str) -> str:
+    listed = git(["ls-remote", repository, "HEAD"]).split()
+    if not listed:
+        raise FetchError(f"{repository} has no HEAD")
+    return listed[0]
+
+
+def is_kept(path: Path) -> bool:
+    return path.is_file() and (path.suffix in GIT_KEPT_SUFFIXES or path.name in GIT_KEPT_NAMES)
+
+
+def packed_checkout(checkout: Path, archive: Path):
+    partial = archive.with_name(archive.name + ".part")
+    try:
+        with tarfile.open(partial, "w:gz") as tar:
+            for path in sorted(checkout.rglob("*")):
+                relative = path.relative_to(checkout)
+                if relative.parts[0] != ".git" and is_kept(path):
+                    tar.add(path, arcname=str(relative))
+        if partial.stat().st_size > MAX_DOWNLOAD_BYTES:
+            raise FetchError(f"the checkout packs to over {MAX_DOWNLOAD_BYTES} bytes; not kept")
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    partial.replace(archive)
+
+
+def fetch_git_docs(source: Source, folder: Path) -> bool:
+    meta = read_meta(folder)
+    archive = folder / GIT_ARCHIVE
+    head = remote_head(source.location)
+    if archive.exists() and meta.get("commit") == head:
+        return False
+    with tempfile.TemporaryDirectory(prefix="doclib-git-", dir=folder.parent) as scratch:
+        checkout = Path(scratch) / "checkout"
+        git(["clone", "--quiet", "--depth", "1", "--filter=blob:none", "--sparse", source.location, str(checkout)])
+        git(["sparse-checkout", "set", "--no-cone", *DOTNET_PATHS], cwd=checkout)
+        commit = git(["rev-parse", "HEAD"], cwd=checkout).strip()
+        packed_checkout(checkout, archive)
+    write_meta(folder, {"url": source.location, "commit": commit, "release": commit[:12],
+                        "bytes": archive.stat().st_size, "fetched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
     return True
 
 
@@ -146,6 +213,8 @@ def fetch_source(source: Source, raw_dir: Path, catalogue: dict[str, dict] | Non
         return fetch_url(source.location, folder, "page.html")
     if source.kind == "deb":
         return fetch_deb(source.location, folder)
+    if source.kind == "dotnet":
+        return fetch_git_docs(source, folder)
     raise FetchError(f"unknown source kind {source.kind}")
 
 

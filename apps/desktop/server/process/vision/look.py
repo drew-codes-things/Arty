@@ -124,7 +124,7 @@ def describe(image_bytes, question=None, mime="image/png"):
             ) from e
         if "not found" in msg or "404" in msg:
             raise VisionError(
-                f"Vision model '{MODEL}' isn't installed. Run: ollama pull {MODEL}"
+                f"Vision model '{MODEL}' isn't installed. Run: ai-pull {MODEL} on the AI server"
             ) from e
         raise VisionError(f"Vision call failed: {type(e).__name__}: {msg[:200]}") from e
 

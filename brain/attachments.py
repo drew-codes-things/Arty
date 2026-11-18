@@ -10,7 +10,7 @@ import models
 
 from api_support import ApiError
 from archive import message_text
-from settings import OLLAMA_URL
+from settings import ARTY_ENGINE_URL
 from steering import parse_arguments
 from model_choice import session_keep_alive
 
@@ -27,7 +27,7 @@ def vision_model(wanted: str = ""):
     model = next((m for m in models.installed() if m["vision"] and models.in_arty(m) and not models.is_separate(m)
                   and not models.kept_solo(m)), None)
     if model is None:
-        raise ApiError(400, "No vision model is installed. Run: ai-pull qwen2.5vl:7b")
+        raise ApiError(400, "No vision model is installed. Run: ai-pull mimo-v2.6:9b")
     return model
 
 
@@ -37,7 +37,7 @@ def look(images: list[str], prompt: str, keep_alive=0) -> str:
     options = {k: v for k, v in config.get("options", {}).items() if k == "num_predict"}
     looker = vision_model()["name"]
     models.make_room(looker, models.vram_budget(config))
-    raw = connections.http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
+    raw = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
         "model": looker, "stream": False, "think": False, "options": options, "keep_alive": session_keep_alive(looker, keep_alive),
         "messages": [{"role": "user", "content": prompt, "images": images}]}))
     return ((raw or {}).get("message") or {}).get("content", "").strip() or "(the vision model gave no description)"
@@ -119,9 +119,7 @@ def expand_attachments(messages: list[dict], look_keep_alive=0) -> tuple[list[di
     return expanded, found
 
 
-def to_ollama_messages(messages):
-    """Client apps send OpenAI-style history: assistant tool_calls with JSON-string arguments and
-    tool results keyed by tool_call_id. Ollama wants argument objects and the tool's name."""
+def to_engine_messages(messages):
     names, out = {}, []
     for message in messages:
         role = message.get("role")

@@ -9,7 +9,7 @@ import models
 import owner
 
 from environment import HUB_KEY
-from settings import HUB_URL, OLLAMA_URL, CONFIG_FILE, HOMELAB_NAMES
+from settings import HUB_URL, ARTY_ENGINE_URL, CONFIG_FILE, HOMELAB_NAMES
 from steering import thinking_for, with_thinking, with_homelab_names
 
 log = logging.getLogger("brain")
@@ -33,9 +33,7 @@ def http_json(url, body=None, headers=None, timeout=600):
 
 
 def stream_chat(body, on_text, timeout=600, on_thinking=None):
-    """A model call like http_json(f"{OLLAMA_URL}/api/chat", body), but streamed: on_text gets each piece of
-    the reply as the model writes it. Returns the same shape as an unstreamed reply."""
-    request = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=json.dumps({**body, "stream": True}).encode(), method="POST")
+    request = urllib.request.Request(f"{ARTY_ENGINE_URL}/api/chat", data=json.dumps({**body, "stream": True}).encode(), method="POST")
     request.add_header("Content-Type", "application/json")
     content, calls, last = [], [], {}
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -146,7 +144,7 @@ def complete_text(prompt: str, json_mode: bool = False, think: bool | None = Non
                                       **({"format": "json"} if json_mode else {})})
     wanted = (not json_mode and thinking_for(config, writing_job=True)) if think is None else think
     body = with_thinking(body, wanted)
-    return (http_json(f"{OLLAMA_URL}/api/chat", body=body).get("message") or {}).get("content") or ""
+    return (http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body).get("message") or {}).get("content") or ""
 
 
 def classify_text(prompt: str) -> str:

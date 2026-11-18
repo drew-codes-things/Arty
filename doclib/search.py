@@ -26,11 +26,13 @@ FAMILY_WORDS = {
     "linux": "linux", "manpage": "linux", "coreutils": "linux",
     "proxmox": "proxmox", "pve": "proxmox",
     "debian": "debian",
+    "csharp": "csharp", "dotnet": "csharp",
 }
 RELATED = {"node": ("javascript",), "typescript": ("javascript",), "bash": ("linux",), "linux": ("bash",),
            "debian": ("linux",), "html": ("javascript",)}
 TOPIC_FAMILIES = {"http", "html", "css"}
 NORMALISED = ((re.compile(r"\bc\+\+", re.IGNORECASE), " cpp "), (re.compile(r"\bc#", re.IGNORECASE), " csharp "),
+              (re.compile(r"(?<![\w.])\.net\b", re.IGNORECASE), " dotnet "),
               (re.compile(r"\bnode\.js\b", re.IGNORECASE), " nodejs "),
               (re.compile(r"\bshell script", re.IGNORECASE), " shellscript script"),
               (re.compile(r"\bman pages?\b", re.IGNORECASE), " manpage "))
@@ -49,6 +51,10 @@ STOP_WORDS = {
     "doc", "docs", "documentation", "language", "programming",
 }
 CANDIDATES = 200
+RANGE_COLUMNS = {"first_id", "last_id"}
+WHATS_NEW = re.compile(r"\bwhat(?:'|\u2019)?s\s+new\b|\bwhat\s+is\s+new\b", re.IGNORECASE)
+WHATS_NEW_PHRASE = "what-s-new"
+VERSION_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
 PAGE_WEIGHT = 6.0
 HEADING_WEIGHT = 4.0
 BODY_WEIGHT = 1.0
@@ -161,12 +167,19 @@ def query_terms(question: str) -> list[str]:
     return terms
 
 
+def whats_new_terms(question: str) -> list[str]:
+    if not WHATS_NEW.search(question):
+        return []
+    return [WHATS_NEW_PHRASE, *dict.fromkeys(VERSION_NUMBER.findall(question))]
+
+
 def plan_for(question: str) -> Plan:
     text = normalised(question)
     families = named_families(text)
     versions = named_versions(text)
     identifiers = list(dict.fromkeys(identifier_text(found) for found in IDENTIFIER.findall(question)))
-    return Plan(query_terms(text), families, versions, chosen_sources(families, versions), identifiers)
+    terms = query_terms(text) + [term for term in whats_new_terms(text) if term not in query_terms(text)]
+    return Plan(terms, families, versions, chosen_sources(families, versions), identifiers)
 
 
 def identifier_text(text: str) -> str:
@@ -250,14 +263,39 @@ def connect(database: Path) -> sqlite3.Connection:
     return connection
 
 
-def ranked_rows(connection: sqlite3.Connection, terms: list[str], sources: list[str], limit: int) -> list[sqlite3.Row]:
+def source_ranges(connection: sqlite3.Connection) -> dict[str, tuple[int, int]]:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(sources)")}
+    if not RANGE_COLUMNS <= columns:
+        return {}
+    return {key: (first, last) for key, first, last in connection.execute("SELECT key, first_id, last_id FROM sources")}
+
+
+def ranked_ids_by_range(terms: list[str], ranges: list[tuple[int, int]], limit: int) -> tuple[str, list]:
+    within = " OR ".join("sections_fts.rowid BETWEEN ? AND ?" for _ in ranges)
+    sql = (f"SELECT sections_fts.rowid AS id, bm25(sections_fts, {PAGE_WEIGHT}, {HEADING_WEIGHT}, {BODY_WEIGHT}) AS rank "
+           f"FROM sections_fts WHERE sections_fts MATCH ? {f'AND ({within})' if ranges else ''} ORDER BY rank LIMIT ?")
+    return sql, [fts_query(terms), *(bound for pair in ranges for bound in pair), limit]
+
+
+def ranked_ids_by_join(terms: list[str], sources: list[str], limit: int) -> tuple[str, list]:
     placeholders = ",".join("?" for _ in sources)
     source_filter = f"AND s.source IN ({placeholders})" if sources else ""
-    sql = (f"SELECT s.id, s.source, src.family, src.version, s.page, s.heading, s.url, s.body, s.has_code, s.about, "
-           f"bm25(sections_fts, {PAGE_WEIGHT}, {HEADING_WEIGHT}, {BODY_WEIGHT}) AS rank "
-           f"FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid JOIN sources src ON src.key = s.source "
+    sql = (f"SELECT sections_fts.rowid AS id, bm25(sections_fts, {PAGE_WEIGHT}, {HEADING_WEIGHT}, {BODY_WEIGHT}) AS rank "
+           f"FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid "
            f"WHERE sections_fts MATCH ? {source_filter} ORDER BY rank LIMIT ?")
-    return connection.execute(sql, [fts_query(terms), *sources, limit]).fetchall()
+    return sql, [fts_query(terms), *sources, limit]
+
+
+def ranked_rows(connection: sqlite3.Connection, terms: list[str], sources: list[str], limit: int) -> list[sqlite3.Row]:
+    ranges = source_ranges(connection)
+    if ranges and all(source in ranges for source in sources):
+        ranked, parameters = ranked_ids_by_range(terms, [ranges[source] for source in sources], limit)
+    else:
+        ranked, parameters = ranked_ids_by_join(terms, sources, limit)
+    sql = (f"SELECT s.id, s.source, src.family, src.version, s.page, s.heading, s.url, s.body, s.has_code, s.about, "
+           f"ranked.rank AS rank FROM ({ranked}) AS ranked JOIN sections s ON s.id = ranked.id "
+           f"JOIN sources src ON src.key = s.source ORDER BY ranked.rank")
+    return connection.execute(sql, parameters).fetchall()
 
 
 def source_groups(plan: Plan, sources: tuple[Source, ...] | None = None) -> list[list[str]]:

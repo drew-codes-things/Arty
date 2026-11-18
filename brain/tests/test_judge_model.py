@@ -21,7 +21,7 @@ class JudgeModel(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def judged_models(self, **be_honest_options):
-        def judge(url, body):
+        def judge(url, body, **_):
             verdict = {"kind": "A"} if body["messages"][0]["content"].startswith("The person said") else \
                 {"false_claims": [{"text": "Done.", "correction": ""}]}
             return {"message": {"content": brain.json.dumps(verdict)}}

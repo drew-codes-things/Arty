@@ -39,7 +39,7 @@ class Honesty(unittest.TestCase):
         self.addCleanup(config.stop)
 
     def judged(self, claims, kind="A"):
-        def judge(url, body):
+        def judge(url, body, **_):
             prompt = body["messages"][0]["content"]
             verdict = {"kind": kind} if prompt.startswith("The person said") else {"false_claims": claims}
             return {"message": {"content": brain.json.dumps(verdict)}}
@@ -60,7 +60,7 @@ class Honesty(unittest.TestCase):
 
     def test_a_failed_confirmation_keeps_the_claim(self):
         claims = {"message": {"content": brain.json.dumps({"false_claims": [{"text": "Done.", "correction": ""}]})}}
-        with unittest.mock.patch.object(connections, "http_json", side_effect=[claims, OSError("ollama down")]):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=[claims, OSError("engine down")]):
             self.assertEqual(brain.be_honest("Done.", [], []), honesty.HONEST_NOTHING_DONE)
 
     def test_a_false_claim_is_replaced_by_its_correction_and_the_rest_is_kept(self):
@@ -119,7 +119,7 @@ class Honesty(unittest.TestCase):
         self.assertIn("- computer_run_command: ran 2 times, 1 failed", record)
 
     def test_a_failed_check_leaves_the_reply_alone(self):
-        with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("ollama down")):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("engine down")):
             self.assertEqual(brain.be_honest("Done, all sorted.", [], []), "Done, all sorted.")
 
     def test_tool_failures_are_recognised(self):

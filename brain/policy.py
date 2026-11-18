@@ -3,6 +3,8 @@ import hashlib
 import re
 from urllib.parse import urlparse
 
+import installs
+
 URL_LINE = re.compile(r"^(?P<title>.*) \| (?P<url>https?://\S+)$", re.MULTILINE)
 ELEMENT_LINE = re.compile(r'^\[(\d+)\] \S+ "(.*)"$', re.MULTILINE)
 GUEST_LINE = re.compile(r"^(?P<kind>VM|CT) (?P<vmid>\d+) (?P<name>[^\s(:]*)", re.MULTILINE)
@@ -22,7 +24,7 @@ DESKTOP_INPUT = {"workspace__press_keys", "workspace__click"}
 ACTIVATING_KEYS = re.compile(r"\b(enter|return|space|kp_enter)\b", re.IGNORECASE)
 SHOWN_COMMAND_CHARS = 200
 SHELL_OPERATORS = re.compile(r"&&|\|\||[|;`]|\$\(|>")
-LOWERCASE_START = re.compile(r"^(?:sudo\s+)?[a-z0-9_./~-]")
+LOWERCASE_START = re.compile(r"^(?:sudo\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*[a-z0-9_./~-]")
 UNTRUSTED_READS = ["fetch__*", "research__web_search", "research__read_document", "research__search_library", "workspace__browser_*",
                    "workspace__gmail_*", "workspace__read_file", "workspace__read_screen_text", "workspace__get_clipboard",
                    "homelab__nextcloud_get", "homelab__nextcloud_search", "chrome_*", "computer_read_file", "computer_look",
@@ -55,6 +57,12 @@ def checked_text(name: str, text: str) -> str:
     if name != "workspace__type_text":
         return text
     return "\n".join(line for line in text.splitlines() if looks_like_a_command(line))
+
+
+def install_checked_text(name: str, checked: str) -> str:
+    if name != "workspace__type_text":
+        return checked
+    return "\n".join(line for line in checked.splitlines() if installs.names_a_known_program(line))
 
 
 def is_sensitive_host(context: dict, rules: dict) -> bool:
@@ -131,10 +139,9 @@ def own_approval_reason(name: str, arguments: dict, context: dict, rules: dict) 
     if name in COMMAND_TOOLS:
         command = str(arguments.get(COMMAND_TOOLS[name], ""))
         checked = checked_text(name, command)
-        for pattern in rules.get("command_patterns", []):
-            if re.search(pattern, checked):
-                verb = "typing" if name == "workspace__type_text" else "running"
-                return f"{verb} `{shown_command(command)}`"
+        if installs.installs_software(install_checked_text(name, checked)) or any(re.search(pattern, checked) for pattern in rules.get("command_patterns", [])):
+            verb = "typing" if name == "workspace__type_text" else "running"
+            return f"{verb} `{shown_command(command)}`"
         return None
     if name in DESKTOP_INPUT:
         return desktop_input_reason(name, arguments, context, rules)

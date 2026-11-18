@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_agent_mode import READ_FILE, FakeOllama  # noqa: E402
+from test_agent_mode import READ_FILE, FakeEngine  # noqa: E402
 from test_round_timings import offline_turns  # noqa: E402
 
 import brain  # noqa: E402
@@ -114,12 +114,12 @@ class ChatTurnsFitTheWindow(unittest.TestCase):
         unittest.mock.patch.object(connections, "load_config", side_effect=lambda: dict(patched)).start()
 
     def sent(self, messages, **turn):
-        ollama = FakeOllama()
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = FakeEngine()
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             brain.run_turn(messages, "Arty", **turn)
-        return ollama.bodies[0]
+        return engine.bodies[0]
 
-    def test_a_long_chat_is_trimmed_by_the_brain_before_ollama_sees_it(self):
+    def test_a_long_chat_is_trimmed_by_the_brain_before_the_engine_sees_it(self):
         body = self.sent(long_chat(120))
         sent = body["messages"]
         self.assertEqual(sent[0]["role"], "system")

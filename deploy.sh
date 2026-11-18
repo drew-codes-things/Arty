@@ -33,7 +33,7 @@ fi
 bundle=$(mktemp --suffix=.tgz)
 trap 'rm -f "$bundle"' EXIT
 tar czf "$bundle" --exclude=services/arty-desktop-egress.service --exclude='mcp/test_*.py' brain/*.py brain/persona.md brain/system-prompt.md brain/brain.json \
-  mcp/*.py mcp/tool-hub.json hub/tool_hub.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless services/*.service \
+  mcp/*.py mcp/tool-hub.json hub/tool_hub.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless bin/ai-engine-lib services/*.service \
   services/*.timer doclib/*.py doclib/retrieval_set.json \
   apps/ios/index.html apps/ios/app.css apps/ios/sw.js apps/ios/manifest.webmanifest apps/ios/js/*.js apps/ios/js/vendor/*.js \
   apps/ios/fonts/*.ttf apps/ios/icons/*.png
@@ -59,6 +59,7 @@ install -d /srv/ai/hub
 install -m 644 deploy/hub/tool_hub.py /srv/ai/hub/
 install -m 644 deploy/desktop_known_hosts /srv/ai/mcp/workspace_known_hosts
 install -m 755 deploy/bin/* /usr/local/bin/
+chmod 644 /usr/local/bin/ai-engine-lib
 install -m 644 deploy/services/*.service deploy/services/*.timer /etc/systemd/system/
 install -d /srv/ai/doclib /srv/ai/docs-library
 install -m 644 deploy/doclib/*.py deploy/doclib/retrieval_set.json /srv/ai/doclib/

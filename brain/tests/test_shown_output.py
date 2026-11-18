@@ -82,10 +82,10 @@ class FindsShownOutput(unittest.TestCase):
 
 class ComparesShownOutputWithTheRealRun(unittest.TestCase):
     def test_a_wrong_claim_is_sent_back_once_with_both_outputs(self):
-        outcome, ollama, checks = run_coding_turn([said(WRONG_CLAIM), said(HONEST_CLAIM)], [ran(REAL_T_STRING), ran(REAL_T_STRING)],
+        outcome, engine, checks = run_coding_turn([said(WRONG_CLAIM), said(HONEST_CLAIM)], [ran(REAL_T_STRING), ran(REAL_T_STRING)],
                                                   question=T_STRING_QUESTION)
-        self.assertEqual(2, len(ollama.chat_bodies))
-        note = last_user_note(ollama.chat_bodies[1])
+        self.assertEqual(2, len(engine.chat_bodies))
+        note = last_user_note(engine.chat_bodies[1])
         self.assertIn(CLAIMED_HTML, note)
         self.assertIn("Interpolation('Robin'", note)
         self.assertTrue(outcome["answer"].startswith(HONEST_CLAIM))
@@ -93,39 +93,53 @@ class ComparesShownOutputWithTheRealRun(unittest.TestCase):
         self.assertEqual(["python", "python"], [unit.language for unit in checks])
 
     def test_a_claim_still_wrong_after_the_rewrite_is_replaced_with_the_real_output(self):
-        outcome, ollama, _ = run_coding_turn([said(WRONG_CLAIM), said(WRONG_CLAIM), said(HONEST_CLAIM)],
+        outcome, engine, _ = run_coding_turn([said(WRONG_CLAIM), said(WRONG_CLAIM), said(HONEST_CLAIM)],
                                              [ran(REAL_T_STRING), ran(REAL_T_STRING)], question=T_STRING_QUESTION)
-        self.assertEqual(2, len(ollama.chat_bodies))
+        self.assertEqual(2, len(engine.chat_bodies))
         self.assertNotIn(CLAIMED_HTML, outcome["answer"])
         self.assertIn(REAL_T_STRING.strip(), outcome["answer"])
         self.assertIn("```html\nTemplate(strings=", outcome["answer"])
         self.assertIn("the output shown is what it really printed in the sandbox, not what I first wrote", outcome["answer"])
 
+    def test_a_claim_replaced_after_a_freshened_rewrite_lands_in_its_own_block(self):
+        doubled = "values = [1, 2, 3]\nfor value in values:\n    print(value * 2)"
+        claimed = fence("", "2\n4\n8")
+        first = f"Here's the script:\n\n{fence('python', doubled)}\n\nIt prints:\n{claimed}\nThat's the doubled list."
+        second = f"Here's the corrected version of the script:\n\n{fence('python', doubled)}\n\nIt prints:\n{claimed}\nThat's the doubled list."
+        outcome, engine, _ = run_coding_turn([said(first), said(second)], [ran("2\n4\n6\n"), ran("2\n4\n6\n")],
+                                             question="write a python script that doubles each number in a list and prints it")
+        self.assertEqual(2, len(engine.chat_bodies))
+        answer = outcome["answer"]
+        self.assertTrue(answer.startswith("Here's the code:"), answer)
+        self.assertIn("It prints:\n```\n2\n4\n6\n```\nThat's the doubled list.", answer)
+        self.assertNotIn("8", answer)
+        self.assertIn("what it really printed in the sandbox", answer)
+
     def test_a_matching_claim_is_answered_straight_away(self):
-        outcome, ollama, _ = run_coding_turn([said(HONEST_CLAIM)], [ran(REAL_T_STRING)], question=T_STRING_QUESTION)
-        self.assertEqual(1, len(ollama.chat_bodies))
+        outcome, engine, _ = run_coding_turn([said(HONEST_CLAIM)], [ran(REAL_T_STRING)], question=T_STRING_QUESTION)
+        self.assertEqual(1, len(engine.chat_bodies))
         self.assertTrue(outcome["answer"].startswith(HONEST_CLAIM))
 
     def test_a_runner_that_gives_no_stdout_changes_nothing(self):
-        outcome, ollama, _ = run_coding_turn([said(WRONG_CLAIM)], [PASSED], question=T_STRING_QUESTION)
-        self.assertEqual(1, len(ollama.chat_bodies))
+        outcome, engine, _ = run_coding_turn([said(WRONG_CLAIM)], [PASSED], question=T_STRING_QUESTION)
+        self.assertEqual(1, len(engine.chat_bodies))
         self.assertIn(CLAIMED_HTML, outcome["answer"])
 
     def test_random_output_is_not_flagged(self):
         answer = f"{fence('python', 'import random\nprint(random.randint(1, 6))')}\n\nOutput:\n{fence('', '4')}"
-        outcome, ollama, _ = run_coding_turn([said(answer)], [ran("2\n")], question="write a python dice roller")
-        self.assertEqual(1, len(ollama.chat_bodies))
+        outcome, engine, _ = run_coding_turn([said(answer)], [ran("2\n")], question="write a python dice roller")
+        self.assertEqual(1, len(engine.chat_bodies))
         self.assertIn("```\n4\n```", outcome["answer"])
 
     def test_shell_function_calls_named_in_the_answer_are_run_and_compared(self):
         fixed = JOIN_ANSWER.replace("x - y", "x y")
-        outcome, ollama, checks = run_coding_turn(
+        outcome, engine, checks = run_coding_turn(
             [said(JOIN_ANSWER), said(fixed)],
             [bash_ran(""), bash_ran("a,b,c\n"), bash_ran("x y\n"), bash_ran(""), bash_ran("a,b,c\n"), bash_ran("x y\n")],
             question=JOIN_QUESTION)
-        self.assertEqual(2, len(ollama.chat_bodies))
+        self.assertEqual(2, len(engine.chat_bodies))
         self.assertTrue(checks[2].code.endswith("join_by ' - ' x y\n"))
-        note = last_user_note(ollama.chat_bodies[1])
+        note = last_user_note(engine.chat_bodies[1])
         self.assertIn("x - y", note)
         self.assertIn("x y", note)
         self.assertTrue(outcome["answer"].startswith(fixed))
@@ -143,21 +157,21 @@ class ComparesInlineShellClaims(unittest.TestCase):
         self.assertEqual([], code_sandbox.inline_shell_claims(fence("bash", "# `ls` prints `a`\necho hi")))
 
     def test_wrong_inline_claims_are_sent_back_then_replaced(self):
-        outcome, ollama, checks = run_coding_turn(
+        outcome, engine, checks = run_coding_turn(
             [said(INLINE_ANSWER), said(INLINE_ANSWER)],
             [bash_ran(""), bash_ran("abc"), bash_ran("xy"), bash_ran(""), bash_ran("abc"), bash_ran("xy")],
             question=JOIN_QUESTION)
-        self.assertEqual(2, len(ollama.chat_bodies))
-        self.assertIn("a,b,c", last_user_note(ollama.chat_bodies[1]))
+        self.assertEqual(2, len(engine.chat_bodies))
+        self.assertIn("a,b,c", last_user_note(engine.chat_bodies[1]))
         self.assertTrue(checks[1].code.endswith("join_by , a b c\n"))
         self.assertIn("- `join_by , a b c` will output `abc`", outcome["answer"])
         self.assertIn("- `join_by ' - ' x y` will output `xy`", outcome["answer"])
         self.assertIn("not what I first wrote", outcome["answer"])
 
     def test_right_inline_claims_change_nothing(self):
-        outcome, ollama, _ = run_coding_turn([said(INLINE_ANSWER)], [bash_ran(""), bash_ran("a,b,c\n"), bash_ran("x - y\n")],
+        outcome, engine, _ = run_coding_turn([said(INLINE_ANSWER)], [bash_ran(""), bash_ran("a,b,c\n"), bash_ran("x - y\n")],
                                              question=JOIN_QUESTION)
-        self.assertEqual(1, len(ollama.chat_bodies))
+        self.assertEqual(1, len(engine.chat_bodies))
         self.assertIn("will output `x - y`", outcome["answer"])
 
 

@@ -1,10 +1,27 @@
 #!/bin/sh
-BACKEND_ENV=/etc/default/arty-backend
-if [ -r "$BACKEND_ENV" ]; then set -a; . "$BACKEND_ENV"; set +a; fi
-ollama list
-echo
-if [ -n "${OLLAMA_HOST:-}" ]; then
-  echo "Remove one with: OLLAMA_HOST=$OLLAMA_HOST ollama rm <model> (Arty's engine removes only the models it pulled)"
-else
-  echo "Remove one with: ollama rm <model>"
+. "$(dirname "$0")/ai-engine-lib"
+
+if [ "${1:-}" = rm ]; then
+  if [ $# -ne 2 ]; then
+    echo "Usage: ai-models rm <model>"
+    exit 1
+  fi
+  engine_call DELETE /api/delete 60 "$(jq -cn --arg model "$2" '{model: $model}')" || exit 1
+  if [ "$status" = 200 ]; then
+    echo "Removed $2."
+    exit 0
+  fi
+  echo "Not removed: $(engine_error)"
+  exit 1
 fi
+
+engine_call GET /api/tags 30 || exit 1
+if [ "$status" != 200 ]; then
+  echo "The engine couldn't list its models: $(engine_error)"
+  exit 1
+fi
+printf '%s' "$reply" | jq -r '.models | sort_by(.name)[]
+  | [.name, (((.size // 0) / 1e8 | round) / 10 | tostring) + " GB", ((.capabilities // []) - ["completion"] | join(", "))]
+  | @tsv' | awk -F '\t' '{printf "%-44s %9s  %s\n", $1, $2, $3}'
+echo
+echo "Remove one with: ai-models rm <model> (the engine removes only the models it downloaded itself)"

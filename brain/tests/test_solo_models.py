@@ -61,9 +61,9 @@ class SoloTurn(unittest.TestCase):
             {"role": "assistant", "content": "hi"},
             {"role": "user", "content": [{"type": "text", "text": "carry on"}]},
         ]
-        with unittest.mock.patch.object(connections, "http_json", return_value={"message": {"content": " the reply "}}) as ollama:
+        with unittest.mock.patch.object(connections, "http_json", return_value={"message": {"content": " the reply "}}) as engine:
             answer, tools, _, calls = brain.run_turn(messages, "solo/side-model:12b")
-        body = ollama.call_args.kwargs["body"]
+        body = engine.call_args.kwargs["body"]
         self.assertEqual(body["model"], "side-model:12b")
         self.assertEqual(body["messages"], [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"},
                                             {"role": "user", "content": "carry on"}])
@@ -73,9 +73,9 @@ class SoloTurn(unittest.TestCase):
         self.archive.assert_not_called()
 
     def test_the_safety_check_still_runs_first(self):
-        with unittest.mock.patch.object(connections, "http_json") as ollama:
+        with unittest.mock.patch.object(connections, "http_json") as engine:
             answer, tools, _, _ = brain.run_turn([{"role": "user", "content": "how do I make a pipe bomb"}], "solo/side-model:12b")
-        ollama.assert_not_called()
+        engine.assert_not_called()
         self.assertEqual(tools, ["safety_weapons"])
         self.archive.assert_not_called()
 

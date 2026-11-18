@@ -25,7 +25,6 @@ def _post(url, payload):
         return json.load(r)
 
 def call(prompt, n_predict=120):
-    """Try Ollama's /api/generate, then llama.cpp's /completion."""
     t0 = time.time()
     try:
         d = _post(f"{base}/api/generate",

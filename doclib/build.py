@@ -11,16 +11,17 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
-from doclib.convert import Section, html_sections, rst_document
-from doclib.fetch import read_meta
-from doclib.sources import (DEBIAN_REFERENCE_PAGE, DEVDOCS_MISSING_LICENCES, DEVDOCS_PAGE, PEP_PAGE, PEPS_LICENCE,
-                            PROXMOX_LICENCE, PSF_LICENCE, PYTHON_PAGE, Source)
+from doclib.convert import Section, html_sections, markdown_document, rst_document
+from doclib.fetch import GIT_ARCHIVE, forget_saved_version, read_meta
+from doclib.sources import (DEBIAN_REFERENCE_PAGE, DEVDOCS_MISSING_LICENCES, DEVDOCS_PAGE, DOTNET_LICENCE, DOTNET_PAGE,
+                            PEP_PAGE, PEPS_LICENCE, PROXMOX_LICENCE, PSF_LICENCE, PYTHON_PAGE, Source)
 
 log = logging.getLogger("doclib.build")
 
 SCHEMA = """
 CREATE TABLE sources(key TEXT PRIMARY KEY, family TEXT NOT NULL, version TEXT NOT NULL, name TEXT NOT NULL,
-                     licence TEXT NOT NULL, release TEXT NOT NULL, fetched TEXT NOT NULL, sections INTEGER NOT NULL);
+                     licence TEXT NOT NULL, release TEXT NOT NULL, fetched TEXT NOT NULL, sections INTEGER NOT NULL,
+                     first_id INTEGER NOT NULL, last_id INTEGER NOT NULL);
 CREATE TABLE sections(id INTEGER PRIMARY KEY, source TEXT NOT NULL, page TEXT NOT NULL, heading TEXT NOT NULL,
                       url TEXT NOT NULL, body TEXT NOT NULL, has_code INTEGER NOT NULL, about TEXT NOT NULL);
 CREATE VIRTUAL TABLE sections_fts USING fts5(page, heading, body, content='', tokenize='porter unicode61');
@@ -35,6 +36,8 @@ DEBIAN_PAGE = re.compile(r"/debian-reference-common/docs/([\w.-]+\.en\.html)$")
 HTML_TITLE = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 TAGS = re.compile(r"<[^>]+>")
 ANCHOR_WORDS = re.compile(r"[^A-Za-z0-9]+")
+DOTNET_PAGES = re.compile(r"^docs/csharp/(?!(?:.*/)?includes/)(.+?)\.md$")
+DOTNET_INDEX_PAGE = re.compile(r"(?:^|/)index$")
 INSERT_BATCH = 2000
 TITLE_SEPARATOR = " \u2014 "
 
@@ -141,6 +144,24 @@ def debian_pages(folder: Path) -> Iterator[Page]:
         yield Page(page_title(html), DEBIAN_REFERENCE_PAGE.format(name=page), html_sections(html))
 
 
+def archive_texts(archive: Path) -> dict[str, str]:
+    return dict(tar_texts(archive, lambda name: True))
+
+
+def dotnet_url(page: str) -> str:
+    return DOTNET_PAGE.format(path=DOTNET_INDEX_PAGE.sub(lambda found: "/" if found.group(0).startswith("/") else "", page))
+
+
+def dotnet_pages(folder: Path) -> Iterator[Page]:
+    files = archive_texts(folder / GIT_ARCHIVE)
+    for path in sorted(files):
+        page = DOTNET_PAGES.match(path)
+        if page is None:
+            continue
+        title, sections = markdown_document(files[path], path, files)
+        yield Page(title, dotnet_url(page.group(1)), sections)
+
+
 def pages_of(source: Source, folder: Path) -> Iterator[Page]:
     if source.kind == "devdocs":
         return devdocs_pages(source, folder)
@@ -152,6 +173,8 @@ def pages_of(source: Source, folder: Path) -> Iterator[Page]:
         return single_page(folder, source.location)
     if source.kind == "deb":
         return debian_pages(folder)
+    if source.kind == "dotnet":
+        return dotnet_pages(folder)
     raise ValueError(f"unknown source kind {source.kind}")
 
 
@@ -165,6 +188,8 @@ def licence_of(source: Source, meta: dict) -> str:
         return PEPS_LICENCE
     if source.kind == "page":
         return PROXMOX_LICENCE
+    if source.kind == "dotnet":
+        return DOTNET_LICENCE
     return "GPL-2+ (Debian Reference, Osamu Aoki)"
 
 
@@ -179,30 +204,36 @@ def section_rows(source: Source, page: Page) -> Iterator[tuple]:
                int("```" in section.body), page.about, anchor_words(section.anchor))
 
 
-def insert_rows(connection: sqlite3.Connection, rows: list[tuple]):
+def insert_rows(connection: sqlite3.Connection, rows: list[tuple]) -> list[int]:
+    ids = []
     for row in rows:
         cursor = connection.execute(
             "INSERT INTO sections(source, page, heading, url, body, has_code, about) VALUES (?, ?, ?, ?, ?, ?, ?)", row[:7])
         connection.execute("INSERT INTO sections_fts(rowid, page, heading, body) VALUES (?, ?, ?, ?)",
                            (cursor.lastrowid, row[1], f"{row[2]} {row[7]}", row[4]))
+        ids.append(cursor.lastrowid)
+    return ids
 
 
 def index_source(connection: sqlite3.Connection, source: Source, folder: Path) -> int:
-    count, batch = 0, []
+    ids, batch = [], []
     for page in pages_of(source, folder):
         batch.extend(section_rows(source, page))
         if len(batch) >= INSERT_BATCH:
-            insert_rows(connection, batch)
-            count += len(batch)
+            ids += insert_rows(connection, batch)
             batch.clear()
-    insert_rows(connection, batch)
-    count += len(batch)
+    ids += insert_rows(connection, batch)
     meta = read_meta(folder)
-    connection.execute("INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    connection.execute("INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        (source.key, source.family, source.version, source.name, licence_of(source, meta),
-                        str(meta.get("release") or meta.get("file") or ""), str(meta.get("fetched", "")), count))
+                        str(meta.get("release") or meta.get("file") or ""), str(meta.get("fetched", "")), len(ids),
+                        min(ids, default=0), max(ids, default=-1)))
     connection.commit()
-    return count
+    return len(ids)
+
+
+class SourcesNotIndexed(RuntimeError):
+    pass
 
 
 def build(sources: list[Source], raw_dir: Path, database: Path) -> dict[str, int]:
@@ -210,6 +241,7 @@ def build(sources: list[Source], raw_dir: Path, database: Path) -> dict[str, int
     building.unlink(missing_ok=True)
     connection = sqlite3.connect(building)
     counts = {}
+    failed = []
     try:
         connection.executescript(SCHEMA)
         for source in sources:
@@ -222,13 +254,20 @@ def build(sources: list[Source], raw_dir: Path, database: Path) -> dict[str, int
                 counts[source.key] = index_source(connection, source, folder)
             except (OSError, ValueError, RuntimeError, tarfile.TarError, json.JSONDecodeError) as error:
                 connection.rollback()
-                log.error("%s couldn't be indexed and is left out: %s", source.key, error)
+                log.error("%s couldn't be indexed: %s", source.key, error)
+                forget_saved_version(folder)
+                failed.append(source.key)
                 continue
             log.info("%s: %d sections in %.0f s", source.key, counts[source.key], time.monotonic() - started)
         connection.execute("INSERT INTO sections_fts(sections_fts) VALUES ('optimize')")
         connection.commit()
     finally:
         connection.close()
+    if failed and database.exists():
+        building.unlink()
+        raise SourcesNotIndexed(f"{', '.join(failed)} couldn't be indexed; the old index is kept")
     os.chmod(building, 0o644)
     building.replace(database)
+    if failed:
+        raise SourcesNotIndexed(f"{', '.join(failed)} couldn't be indexed and are left out of the new index")
     return counts

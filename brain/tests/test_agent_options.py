@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_agent_mode import CLIENT_SYSTEM, CONFIG, READ_FILE, WEB_SEARCH, FakeOllama, client_call, client_result  # noqa: E402
+from test_agent_mode import CLIENT_SYSTEM, CONFIG, READ_FILE, WEB_SEARCH, FakeEngine, client_call, client_result  # noqa: E402
 
 import agent_sessions  # noqa: E402
 import brain  # noqa: E402
@@ -73,10 +73,10 @@ class AgentTurnOptions(unittest.TestCase):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def sent(self, messages, agent=True):
-        ollama = FakeOllama({"role": "assistant", "content": "Done."})
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = FakeEngine({"role": "assistant", "content": "Done."})
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=agent)
-        return ollama.bodies[0]
+        return engine.bodies[0]
 
     def asked(self, text):
         return [{"role": "system", "content": CLIENT_SYSTEM}, {"role": "user", "content": text}]

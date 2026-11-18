@@ -21,11 +21,20 @@ HEADING_BONUS = 4
 DISTINCT_WORD_WEIGHT = 2
 UNIT_LENGTH_STEP = 400
 
-DOCS_HOSTS = {"pypi.org", "github.com", "peps.python.org", "developer.mozilla.org", "pkg.go.dev", "go.dev", "kotlinlang.org",
+PROJECT_HOSTS = {"pypi.org", "github.com"}
+DOCS_HOSTS = PROJECT_HOSTS | {"peps.python.org", "developer.mozilla.org", "pkg.go.dev", "go.dev", "kotlinlang.org",
               "nodejs.org", "react.dev", "kubernetes.io", "learn.microsoft.com", "typescriptlang.org", "man7.org",
               "fastapi.tiangolo.com", "numpy.org", "pandas.pydata.org", "rust-lang.org", "developer.android.com"}
 DOCS_HOST_PREFIXES = ("docs.", "doc.")
-DOCS_HOST_SUFFIXES = (".readthedocs.io", ".readthedocs.org", ".palletsprojects.com")
+LISTED_DOCS_HOSTS = {"docs.python.org", "doc.rust-lang.org", "docs.rs", "docs.djangoproject.com", "docs.docker.com",
+                     "docs.github.com", "docs.gitlab.com", "docs.oracle.com", "docs.npmjs.com", "docs.pytest.org",
+                     "docs.sqlalchemy.org", "docs.scipy.org", "docs.ansible.com", "docs.kernel.org", "docs.aws.amazon.com",
+                     "docs.astral.sh", "docs.pydantic.dev", "docs.flutter.dev", "docs.swift.org", "requests.readthedocs.io",
+                     "python-telegram-bot.readthedocs.io", "pyinstaller.readthedocs.io", "docker-py.readthedocs.io",
+                     "pillow.readthedocs.io"}
+OWNED_DOCS_SUFFIXES = (".palletsprojects.com",)
+OPEN_DOCS_SUFFIXES = (".readthedocs.io", ".readthedocs.org")
+DOCS_HOST_SUFFIXES = OWNED_DOCS_SUFFIXES + OPEN_DOCS_SUFFIXES
 
 FETCH_HEADER = re.compile(r"^\s*Contents of \S+:\s*\n")
 FETCH_NOTE = re.compile(r"<error>[^<]*</error>")
@@ -50,18 +59,31 @@ DOCS_NOTE = ("[read from {url} just now ({kind}). Where it differs from what you
 UNCONFIRMED_NOTE = ("[read {url} just now: it never mentions {names}, and neither do the search results, so nothing "
                     "found confirms that {names} exists. Say you couldn't confirm it rather than describing it]")
 OFFICIAL = "the official documentation"
+PROJECT_PAGE = "the project's own page, which may not be its documentation"
+UNLISTED_DOCS_SITE = "a documentation site that may not be the official one"
 LOCAL_COPY = "the official documentation, local copy"
 NOT_OFFICIAL = ("a page about this, not the official documentation; any setup or versions on it are someone else's, not "
                 "the user's")
 
 
 def host_of(url: str) -> str:
-    return urlparse(url).netloc.lower().removeprefix("www.")
+    return (urlparse(url).hostname or "").removeprefix("www.")
 
 
 def is_docs_site(url: str) -> bool:
     host = host_of(url)
     return host in DOCS_HOSTS or host.startswith(DOCS_HOST_PREFIXES) or host.endswith(DOCS_HOST_SUFFIXES)
+
+
+def kind_of_page(url: str) -> str:
+    if not is_docs_site(url):
+        return NOT_OFFICIAL
+    host = host_of(url)
+    if host in PROJECT_HOSTS:
+        return PROJECT_PAGE
+    if host in DOCS_HOSTS or host in LISTED_DOCS_HOSTS or host.endswith(OWNED_DOCS_SUFFIXES):
+        return OFFICIAL
+    return UNLISTED_DOCS_SITE
 
 
 def described_results(search_text: str) -> dict[str, str]:
@@ -268,4 +290,4 @@ def read_top_page(search_text: str, question: str, fetch=fetch_page, find_local=
     if not found:
         log.info("nothing on %s matches the question; leaving it out", url)
         return ""
-    return DOCS_NOTE.format(url=url, kind=OFFICIAL if is_docs_site(url) else NOT_OFFICIAL, excerpt=found)
+    return DOCS_NOTE.format(url=url, kind=kind_of_page(url), excerpt=found)

@@ -1,6 +1,6 @@
 [Unit]
 Description=Arty's tool hub: serves the MCP tool servers to the brain over HTTP
-After=network-online.target ollama.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]

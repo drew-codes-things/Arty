@@ -7,6 +7,9 @@
   "coding_model": "qwen3:14b",
   "route_coding_chats": true,
   "route_picture_chats": true,
+  "example_checks": [
+    "c"
+  ],
   "model_strengths": {
     "mimo-v2.6:9b": "writing, fixing and testing code across several files, and reading pictures and screenshots"
   },
@@ -746,15 +749,7 @@
       "\\b(nc|ncat|netcat|socat|telnet)\\s",
       "\\b(python[\\d.]*|perl|ruby|node|php)\\s+-\\w*[ce]\\b",
       "\\bsudo\\b",
-      "\\b(apt|apt-get|aptitude)\\s+(-\\S+\\s+)*(install|reinstall|upgrade|full-upgrade|dist-upgrade)\\b",
-      "\\bdpkg\\s+(-\\S+\\s+)*(-i|--install)\\b",
-      "\\b(snap|flatpak)\\s+(-\\S+\\s+)*install\\b",
-      "^(?!.*\\bactivate\\b)(?:.*[\\s;&|(])?(pip3?|python[\\d.]*\\s+-m\\s+pip)\\s+install\\b",
       "--break-system-packages\\b",
-      "\\b(npm|pnpm)(?=[^;&|]*\\s(i|install|add)\\b)[^;&|]*\\s(-g|--global)\\b",
-      "\\byarn\\s+global\\s+add\\b",
-      "\\b(cargo|go|gem)\\s+install\\b",
-      "\\brustup(-init)?\\b",
       "\\b(ba|z|da)?sh\\s+(-\\w+\\s+)*(<\\(|[\\\"']?\\$\\()\\s*(curl|wget)\\b"
     ],
     "always": [

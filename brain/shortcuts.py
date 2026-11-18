@@ -18,7 +18,7 @@ import undo
 import weather
 
 from archive import message_text, archive_records
-from settings import OLLAMA_URL
+from settings import ARTY_ENGINE_URL
 from native_tools import NATIVE_TOOLS
 from reply_rules import (REMIND_REQUEST, CHAT_APP, reminder_from, DO_REQUEST, ADDRESSED_PROMPT, APP_NOTES,
     without_app_notes, user_words)
@@ -35,7 +35,7 @@ ASKED_TO_DO = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please|can you|coul
 def addressed_to_arty(config, heard: str, conversation: list[dict]) -> bool:
     previous = next((message_text(m) for m in reversed(conversation) if m.get("role") == "assistant"), "") or "(nothing yet)"
     try:
-        reply = connections.http_json(f"{OLLAMA_URL}/api/chat", timeout=60, body=models.for_runner(config, {
+        reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", timeout=60, body=models.for_runner(config, {
             "model": config["model"], "stream": False, "format": "json", "think": False,
             "options": {"temperature": 0, "num_predict": 20},
             "messages": [{"role": "user", "content": ADDRESSED_PROMPT % (previous[-400:], heard[:400])}]}))
@@ -160,7 +160,7 @@ Student's answer: %s"""
 
 def judge_answer(config, question: str, expected: str, given: str) -> tuple[bool, str]:
     try:
-        reply = connections.http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
+        reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
             "model": config["model"], "stream": False, "format": "json", "think": False,
             "options": {"temperature": 0, "num_predict": 120},
             "messages": [{"role": "user", "content": QUIZ_JUDGE_PROMPT % (question, expected, given[:500])}]}))
@@ -193,5 +193,5 @@ def solo_turn(model_name, messages, client=""):
         return reply, [f"safety_{kind}"], {}, None
     body = models.for_runner(config, {"model": model_name, "messages": solo_conversation(messages), "stream": False,
                                       "keep_alive": config.get("keep_alive", "10m")})
-    reply = connections.http_json(f"{OLLAMA_URL}/api/chat", body=body)
+    reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body)
     return ((reply.get("message") or {}).get("content") or "").strip(), [], reply, None

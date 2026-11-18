@@ -7,7 +7,7 @@ import connections
 import models
 
 from archive import message_text
-from settings import OLLAMA_URL
+from settings import ARTY_ENGINE_URL
 from reply_rules import TOOL_FAILED, NOT_ACTIONS, LOOK_ONLY_TOOLS
 from steering import LOOKUP_TOOLS
 from memory_facts import prefix_for
@@ -42,6 +42,7 @@ B: the assistant answering a question, giving information, or repeating what the
 Answer only with JSON: {"kind": "A" or "B"}"""
 CLAIM_CONFIRM_TOKENS = 20
 CLAIM_CHECK_CHARS = 6000
+JUDGE_SECONDS = 600
 CLAIM_CHECK_REQUEST_CHARS = 2000
 HONEST_NOTHING_DONE = ("I didn't actually do that: I don't have a way to do it from here, so nothing has changed. "
                        "If you tell me how you'd like it done, I'll help where I can.")
@@ -92,7 +93,8 @@ def some_tool_worked(tools_used: list[str], failed: list[tuple[str, str]]) -> bo
     return any(tool not in failed_names for tool in tools_used)
 
 
-def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None, prefix=None) -> dict:
+def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None, prefix=None,
+              seconds: float = JUDGE_SECONDS) -> dict:
     config = connections.load_config()
     judge_model = model or config["model"]
     judge_keep_alive = keep_alive if model else config.get("keep_alive", "10m")
@@ -103,7 +105,7 @@ def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None, pr
     if shared.get("tools"):
         asked["tools"] = shared["tools"]
     body = models.for_runner(config, asked)
-    return json.loads(connections.http_json(f"{OLLAMA_URL}/api/chat", body=body)["message"]["content"])
+    return json.loads(connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body, timeout=seconds)["message"]["content"])
 
 
 def false_claims(answer: str, tools_used: list[str], failed: list[tuple[str, str]], request: str = "", model: str = "",
@@ -131,12 +133,12 @@ def reports_an_action(request: str, sentence: str, model: str = "", keep_alive=N
 
 
 def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]], already_sent: str = "",
-              request: str = "", model: str = "", keep_alive=None, prefix=None) -> str:
+              request: str = "", model: str = "", keep_alive=None, prefix=None, sandbox_line: str = "") -> str:
     failed_names = {name for name, _ in failed}
     acted = [tool for tool in tools_used if tool not in NOT_ACTIONS and tool not in LOOKUP_TOOLS and tool not in LOOK_ONLY_TOOLS]
     if acted and not failed_names & set(acted):
         return answer
-    body, sandbox_line = code_sandbox.without_summary(answer)
+    body, sandbox_line = code_sandbox.without_summary(answer, sandbox_line)
     pieces = prose_and_code(body)
     prose = "\n".join(text for text, is_code in pieces if not is_code)
     claims = [claim for claim in false_claims(body, tools_used, failed, request, model, keep_alive, prefix)

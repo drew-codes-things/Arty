@@ -9,8 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
     os.environ.setdefault(key, "test")
 
-from test_review_tonight import FakeHub, FakeOllama, last_user_note, said  # noqa: E402
+from test_review_tonight import FakeHub, FakeEngine, last_user_note, run_agent, said  # noqa: E402
 
+import agent_loop  # noqa: E402
 import brain  # noqa: E402
 import code_check  # noqa: E402
 import connections  # noqa: E402
@@ -85,6 +86,25 @@ class NamesTheCodeCalls(unittest.TestCase):
         code = "```python\nimport json\nprint(json.load_safely('x'))\n```"
         self.assertEqual(code_check.unconfirmed_calls(code, ""), ["load_safely"])
 
+    def test_a_module_that_runs_when_imported_is_never_loaded_into_the_brain(self):
+        before = set(sys.modules)
+        code = "```python\nimport venv.__main__\nimport unittest.__main__\nresult = helper.build()\n```"
+        with unittest.mock.patch.object(sys, "argv", ["brain.py"]):
+            unconfirmed = code_check.unconfirmed_calls(code, "")
+        self.assertEqual(["build"], unconfirmed)
+        self.assertEqual(set(), {"venv.__main__", "unittest.__main__", "venv"} & (set(sys.modules) - before))
+
+    def test_module_names_are_looked_up_outside_the_brain_process(self):
+        before = set(sys.modules)
+        code = "```python\nimport wave\nimport sndhdr_missing\nprint(wave.open('a.wav').getnframes())\n```"
+        self.assertEqual([], code_check.unconfirmed_calls(code, ""))
+        self.assertNotIn("wave", set(sys.modules) - before)
+
+    def test_a_catalogue_that_cannot_be_built_stops_the_check_instead_of_guessing(self):
+        with unittest.mock.patch.object(code_check, "CATALOGUE_SECONDS", 0.001):
+            with self.assertRaises(code_check.CatalogueUnavailable):
+                code_check.unconfirmed_calls("```python\nimport json\nprint(json.dumps(1))\n```", "")
+
     def test_methods_of_classes_imported_from_the_standard_library_pass(self):
         code = "```python\nfrom pathlib import Path\nfolder = Path('.')\nprint(folder.read_text())\n```"
         self.assertEqual(code_check.unconfirmed_calls(code, ""), [])
@@ -131,17 +151,17 @@ class PageReadForTheTurn(unittest.TestCase):
 
 
 def run_with_lookups(replies, looked_up=LOOKED_UP, draft=None):
-    ollama = FakeOllama(replies)
+    engine = FakeEngine(replies)
     state = {"messages": [{"role": "user", "content": QUESTION}], "context": {}}
 
     def streamed(body, on_text, timeout=600, on_thinking=None):
-        reply = ollama(f"{brain.OLLAMA_URL}/api/chat", body)
+        reply = engine(f"{brain.ARTY_ENGINE_URL}/api/chat", body)
         for line in reply["message"]["content"].splitlines(keepends=True):
             on_text(line)
         return reply
 
     with unittest.mock.patch.object(connections, "hub", FakeHub(("research__web_search", docs_reading.FETCH_TOOL))), \
-            unittest.mock.patch.object(connections, "http_json", side_effect=ollama), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
             unittest.mock.patch.object(connections, "stream_chat", side_effect=streamed), \
             unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
@@ -149,7 +169,7 @@ def run_with_lookups(replies, looked_up=LOOKED_UP, draft=None):
             unittest.mock.patch("agent_loop.current_context", return_value=""), \
             unittest.mock.patch.object(brain.policy, "select_tools", side_effect=lambda tools, *args, **kwargs: tools):
         outcome = brain.run_agent({"model": "m"}, state, run=brain.AgentRun(looked_up=looked_up, draft=draft))
-    return outcome, ollama
+    return outcome, engine
 
 
 def collecting_draft(sent):
@@ -158,31 +178,31 @@ def collecting_draft(sent):
 
 class AnswersAreCheckedAgainstThePageRead(unittest.TestCase):
     def test_code_calling_an_unconfirmed_method_is_rewritten_once_from_the_page(self):
-        outcome, ollama = run_with_lookups([said(INVENTED), said(FROM_THE_PAGE)])
-        self.assertEqual(len(ollama.chat_bodies), 2)
-        note = last_user_note(ollama.chat_bodies[1])
+        outcome, engine = run_with_lookups([said(INVENTED), said(FROM_THE_PAGE)])
+        self.assertEqual(len(engine.chat_bodies), 2)
+        note = last_user_note(engine.chat_bodies[1])
         self.assertIn("substitute()", note)
         self.assertIn(PAGE_URL, note)
         self.assertEqual(outcome["answer"], FROM_THE_PAGE)
 
     def test_the_rewrite_is_written_from_the_notes_without_tools(self):
-        _, ollama = run_with_lookups([said(INVENTED), said(FROM_THE_PAGE)])
-        self.assertFalse(ollama.chat_bodies[1].get("tools"))
+        _, engine = run_with_lookups([said(INVENTED), said(FROM_THE_PAGE)])
+        self.assertFalse(engine.chat_bodies[1].get("tools"))
 
     def test_only_one_rewrite_is_asked_for(self):
-        outcome, ollama = run_with_lookups([said(INVENTED), said(INVENTED), said(FROM_THE_PAGE)])
-        self.assertEqual(len(ollama.chat_bodies), 2)
+        outcome, engine = run_with_lookups([said(INVENTED), said(INVENTED), said(FROM_THE_PAGE)])
+        self.assertEqual(len(engine.chat_bodies), 2)
         self.assertEqual(outcome["answer"], INVENTED)
 
     def test_code_from_the_page_is_answered_straight_away(self):
-        outcome, ollama = run_with_lookups([said(FROM_THE_PAGE)])
-        self.assertEqual(len(ollama.chat_bodies), 1)
+        outcome, engine = run_with_lookups([said(FROM_THE_PAGE)])
+        self.assertEqual(len(engine.chat_bodies), 1)
         self.assertEqual(outcome["answer"], FROM_THE_PAGE)
 
     def test_without_a_page_read_the_code_is_not_checked(self):
         looked_up = (["research__web_search"], "\n\n[research__web_search]\n1. A result", None)
-        outcome, ollama = run_with_lookups([said(INVENTED)], looked_up=looked_up)
-        self.assertEqual(len(ollama.chat_bodies), 1)
+        outcome, engine = run_with_lookups([said(INVENTED)], looked_up=looked_up)
+        self.assertEqual(len(engine.chat_bodies), 1)
         self.assertEqual(outcome["answer"], INVENTED)
 
     def test_a_reply_that_may_be_rewritten_is_not_streamed_and_the_rewrite_is(self):
@@ -197,6 +217,15 @@ class AnswersAreCheckedAgainstThePageRead(unittest.TestCase):
         draft = collecting_draft(sent)
         outcome, _ = run_with_lookups([said(FROM_THE_PAGE)], draft=draft)
         self.assertEqual(draft.finish(outcome["answer"]), FROM_THE_PAGE)
+
+
+
+class ATurnNeverEndsSilently(unittest.TestCase):
+    def test_a_system_exit_inside_the_turn_becomes_an_error_the_handlers_answer(self):
+        with unittest.mock.patch.object(agent_loop, "agent_round", side_effect=SystemExit(2)):
+            with self.assertRaises(Exception) as caught:
+                run_agent(FakeEngine([]), [{"role": "user", "content": "hi"}])
+        self.assertIn("SystemExit", str(caught.exception))
 
 
 if __name__ == "__main__":

@@ -83,7 +83,7 @@ class BrokenDatabase(Server):
 class KeylessModules(unittest.TestCase):
     def test_the_archive_and_models_load_without_any_keys(self):
         code = ("import os\nfor key in ('BRAIN_API_KEY', 'MCPO_API_KEY'):\n    os.environ.pop(key, None)\n"
-                "import archive, models, settings\nprint(models.OLLAMA_URL == settings.OLLAMA_URL)")
+                "import archive, models, settings\nprint(models.ARTY_ENGINE_URL == settings.ARTY_ENGINE_URL)")
         folder = str(Path(__file__).resolve().parents[1])
         done = subprocess.run([sys.executable, "-c", code], cwd=folder, capture_output=True, text=True, timeout=60,
                               env={"PATH": "/usr/bin:/bin", "PYTHONPATH": folder})

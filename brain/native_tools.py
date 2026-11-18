@@ -110,7 +110,7 @@ NATIVE_TOOLS = {
     "switch_model": _tool(
         "switch_model",
         "ONLY when the user explicitly asks you to change your main model: switch to it, e.g. 'qwen3:14b'. Downloads it first if needed.",
-        {"model": {"type": "string", "description": "Ollama model name, e.g. qwen3:14b"}},
+        {"model": {"type": "string", "description": "Model name, e.g. qwen3:14b"}},
         ["model"]),
 }
 NATIVE_TOOLS.update({name: definition for name, (_, definition) in personal.TOOLS.items()})

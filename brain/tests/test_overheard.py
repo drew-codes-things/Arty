@@ -34,7 +34,7 @@ class AddressedTest(unittest.TestCase):
     def test_unsure_or_failed_checks_answer(self):
         with self.reply("not json"):
             self.assertTrue(brain.addressed_to_arty(self.CONFIG, "what time is it", []))
-        with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("ollama down")):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("engine down")):
             self.assertTrue(brain.addressed_to_arty(self.CONFIG, "what time is it", []))
 
 

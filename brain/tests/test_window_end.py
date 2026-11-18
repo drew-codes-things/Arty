@@ -21,7 +21,7 @@ AT_WINDOW_END = {"prompt_eval_count": WINDOW - 600, "eval_count": 599}
 AT_REPLY_CAP = {"prompt_eval_count": 9000, "eval_count": 2048}
 
 
-class CutOllama:
+class CutEngine:
     def __init__(self, counts):
         self.counts = counts
 
@@ -32,7 +32,7 @@ class CutOllama:
 
 
 def cut_turn(counts, agent=False):
-    with unittest.mock.patch.object(connections, "http_json", side_effect=CutOllama(counts)):
+    with unittest.mock.patch.object(connections, "http_json", side_effect=CutEngine(counts)):
         return brain.run_turn(asked("explain the whole codebase"), "Arty", client_tools=[READ_FILE], agent=agent)[0]
 
 
@@ -51,7 +51,7 @@ class ChatReplies(unittest.TestCase):
         self.assertIn(agent_loop.WINDOW_END_NOTE.strip(), answer)
         self.assertNotIn(REPLY_CAP_NOTE, answer)
 
-    def test_without_ollamas_counts_it_stays_the_reply_cap(self):
+    def test_without_the_engines_counts_it_stays_the_reply_cap(self):
         self.assertIn(REPLY_CAP_NOTE, cut_turn({}))
 
 
@@ -78,20 +78,20 @@ class AgentRepliesOverHttp(Server):
 
     def test_unstreamed_it_is_a_413(self):
         body = {"model": "Arty", "messages": asked("explain the whole codebase"), "tools": [READ_FILE]}
-        with unittest.mock.patch.object(connections, "http_json", side_effect=CutOllama(AT_WINDOW_END)):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=CutEngine(AT_WINDOW_END)):
             status, raw = self.request("POST", "/v1/chat/completions", headers=AGENT_HEADERS, body=body)
         self.assertEqual((status, json.loads(raw)["error"]["type"]), (413, "context_length_exceeded"))
 
     def test_streamed_the_cut_text_is_followed_by_the_window_error(self):
         body = {"model": "Arty", "stream": True, "messages": asked("explain the whole codebase"), "tools": [READ_FILE]}
-        ollama = CutOllama(AT_WINDOW_END)
+        engine = CutEngine(AT_WINDOW_END)
 
         def stream(chat_body, on_text, timeout=600, on_thinking=None):
-            reply = ollama(f"{brain.OLLAMA_URL}/api/chat", chat_body)
+            reply = engine(f"{brain.ARTY_ENGINE_URL}/api/chat", chat_body)
             on_text(reply["message"]["content"])
             return reply
         with unittest.mock.patch.object(connections, "stream_chat", side_effect=stream), \
-                unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+                unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             status, raw = self.request("POST", "/v1/chat/completions", headers=AGENT_HEADERS, body=body)
         chunks = [json.loads(line[6:]) for line in raw.decode().split("\n\n") if line.startswith("data: {")]
         said = "".join(chunk["choices"][0]["delta"].get("content", "") for chunk in chunks)

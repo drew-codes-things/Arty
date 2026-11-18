@@ -95,7 +95,11 @@ class FakeHub:
     def __init__(self):
         self.calls = []
         self.routes = {name: "x" for name in ("workspace__gmail_read", "workspace__run_command")}
-        self.tools = []
+
+    @property
+    def tools(self):
+        return [{"type": "function", "function": {"name": name, "description": name, "parameters": {"type": "object", "properties": {}}}}
+                for name in self.routes]
 
     def refresh(self):
         pass

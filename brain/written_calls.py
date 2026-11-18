@@ -13,6 +13,7 @@ CALL_MARKUP = re.compile(r"</?tool_call>|\[TOOL_CALLS\]|</?think>", re.I)
 SAFE_TOOL_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 CODE = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`", re.S)
 JSON_READER = json.JSONDecoder()
+NOTHING_HAPPENED = "(Nothing happened:"
 
 
 def looks_swallowed(raw: dict, tools: list) -> bool:
@@ -116,5 +117,5 @@ def safe_names(names: list[str]) -> list[str]:
 
 
 def missing_tool_note(missing: list[str], offered: list[str]) -> str:
-    return (f"(Nothing happened: you have no tool called {', '.join(safe_names(missing)) or 'that'} here. The tools you can "
+    return (f"{NOTHING_HAPPENED} you have no tool called {', '.join(safe_names(missing)) or 'that'} here. The tools you can "
             f"use right now are: {', '.join(safe_names(offered))}. Use one of those, or answer in words.)")

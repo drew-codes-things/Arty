@@ -1,15 +1,19 @@
+import html
+import http.client
 import json
 import logging
 import re
 import textwrap
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import settings
 import shown_output
+import stated_input
 from fresh_answer import FRESH_ANSWER
 
 log = logging.getLogger("brain.code_sandbox")
@@ -17,20 +21,46 @@ log = logging.getLogger("brain.code_sandbox")
 MAX_REWRITES = 2
 CHECK_ROUND_SECONDS = 70
 TURN_SECONDS = 160
-PARALLEL_CHECKS = 3
+PARALLEL_CHECKS = 2
 MAX_UNITS = 6
 TRIVIAL_CHARS = 80
 PROBLEM_CHARS = 1200
 SUMMARY_PROBLEM_CHARS = 160
 TOOL_NAME = "code_sandbox"
 NEWEST_PYTHON = "3.14"
-VERDICTS = frozenset({"passed", "failed", "unchecked"})
+NEEDS_INPUT = "needs_input"
+VERDICTS = frozenset({"passed", "failed", "unchecked", NEEDS_INPUT})
+WITH_STATED_INPUT = "with_stated_input"
+RUN_STEP = "run"
+MADE_UP_INPUT_HEADER = re.compile(r"^Run again with made-up input\b")
+MIN_RERUN_SECONDS = 5
 OUTPUT_NOT_COMPARED = frozenset({"sql"})
 INLINE_SHELL_CLAIM = re.compile(r"`([^`\n]+)`[^`\n]{0,12}?\b(?:will |would |should )?(?:outputs?|prints?|gives?|returns?|"
                                 r"produces?|displays?|echoes)\s*:?\s*`([^`\n]+)`", re.I)
 INLINE_TAG = "inline"
 SUMMARY_START = "Sandbox check: "
 SUMMARY_LINE = re.compile(r"\s*^Sandbox check: [^\n]*\s*\Z", re.M)
+MARKER_NAMED = re.compile(r"sandbox[\W_]{0,8}check", re.I)
+MARKER_LABEL = re.compile(r"sandbox[\W_]{0,8}check[\W_]{0,4}?[:\uff1a]\s*", re.I)
+MARKER_REPLACEMENT = "check"
+NO_CHECK_RESULT = "I don't have a result from running this code."
+HIDDEN_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+MARKUP_TAG = re.compile(r"</?[A-Za-z][^<>\n]{0,300}>")
+MARKUP_COMMENT = re.compile(r"<!--.*?-->", re.S)
+MARKDOWN_LINK = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")
+HIDING_MARKS = re.compile(r"[*_~`\\]+")
+SPACING = re.compile(r"\s+")
+LOOKALIKE_LETTERS = str.maketrans({
+    "\u0430": "a", "\u0410": "A", "\u0441": "c", "\u0421": "C", "\u03f2": "c", "\u0435": "e", "\u0415": "E", "\u043e": "o",
+    "\u041e": "O", "\u03bf": "o", "\u039f": "O", "\u0445": "x", "\u0425": "X", "\u0455": "s", "\u0405": "S", "\u0501": "d",
+    "\u04bb": "h", "\u041d": "H", "\u043a": "k", "\u041a": "K", "\u03ba": "k", "\u0412": "B", "\u042c": "b", "\u0578": "n",
+    "\u0251": "a", "\ua731": "s", "\u0432": "b", "\u03c7": "x", "\u13da": "S",
+})
+SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+ONLY_LIST_MARKS = re.compile(r"^[\s>*_#|+\u2022\u2713-]*(?:\d+[.)]|[a-z][.)])?[\s>*_#|+-]*$", re.I)
+SUMMARY_MARKER = "sandbox check:"
+MARKDOWN_AROUND_A_LINE = " \t>*_#-"
+MARKDOWN_EMPHASIS = "*_"
 CORRECTED_OUTPUT = "the output shown is what it really printed in the sandbox, not what I first wrote"
 
 FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([^\s`{]*)[^\n]*\n(.*?)^[ \t]*\2[ \t]*$", re.M | re.S)
@@ -81,6 +111,9 @@ class Unit:
     code: str
     version: str = ""
     label: str = ""
+    input_excuse: bool = True
+    stdin: str = ""
+    arguments: tuple = ()
 
 
 class RunnerUnavailable(RuntimeError):
@@ -93,6 +126,11 @@ def runner_url() -> str:
 
 def is_on() -> bool:
     return bool(runner_url())
+
+
+def warn_about_a_missing_token():
+    if is_on() and not settings.CODE_RUNNER_TOKEN:
+        log.warning("CODE_RUNNER_URL is set but CODE_RUNNER_TOKEN is empty, so the code runner will refuse every check")
 
 
 @dataclass(frozen=True)
@@ -254,8 +292,16 @@ def units_in(answer: str, request: str = "") -> list[Unit]:
 
 
 def post_check(url: str, unit: Unit, timeout: float) -> dict:
-    body = json.dumps({"language": unit.language, "code": unit.code, "version": unit.version}).encode()
-    request = urllib.request.Request(f"{url}/check", data=body, method="POST", headers={"Content-Type": "application/json"})
+    fields = {"language": unit.language, "code": unit.code, "version": unit.version}
+    if not unit.input_excuse:
+        fields["input_excuse"] = False
+    if unit.stdin:
+        fields["stdin"] = unit.stdin
+    if unit.arguments:
+        fields["args"] = list(unit.arguments)
+    body = json.dumps(fields).encode()
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.CODE_RUNNER_TOKEN}"}
+    request = urllib.request.Request(f"{url}/check", data=body, method="POST", headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read())
 
@@ -267,7 +313,7 @@ def checked_unit(unit: Unit, timeout: float) -> dict:
     except urllib.error.HTTPError as error:
         detail = error.read(300).decode(errors="replace") if error.fp else ""
         raise RunnerUnavailable(f"the code runner answered {error.code}: {detail.strip()}") from error
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
         raise RunnerUnavailable(f"couldn't reach the code runner at {url}: {error}") from error
     except ValueError as error:
         raise RunnerUnavailable(f"the code runner's answer wasn't JSON: {error}") from error
@@ -313,12 +359,37 @@ class Report:
         return any(verdict and verdict.get("checked") for verdict in self.verdicts)
 
 
+def wants_the_stated_input(verdict: dict | None) -> bool:
+    if not verdict:
+        return False
+    failed_running = verdict.get("status") == "failed" and verdict.get("step") == RUN_STEP
+    return verdict.get("status") == NEEDS_INPUT or failed_running
+
+
+def with_stated_input(units: list[Unit], verdicts: list, request: str, seconds: float, answer: str = "") -> list:
+    given = stated_input.stated_input(request, answer)
+    waiting = [index for index, verdict in enumerate(verdicts) if wants_the_stated_input(verdict)]
+    if given is None or not waiting or seconds < MIN_RERUN_SECONDS:
+        return verdicts
+    rerun = [replace(units[index], stdin=given.stdin, arguments=given.arguments) for index in waiting]
+    verdicts = list(verdicts)
+    for index, verdict in zip(waiting, checked_units(rerun, min(CHECK_ROUND_SECONDS, seconds))):
+        if verdict is not None and not loses_a_found_failure(verdicts[index], verdict):
+            verdicts[index] = {**verdict, WITH_STATED_INPUT: True}
+    return verdicts
+
+
+def loses_a_found_failure(first: dict, retried: dict) -> bool:
+    return first.get("status") == "failed" and retried.get("status") == NEEDS_INPUT
+
+
 def report_for(answer: str, request: str, seconds_left: float) -> Report | None:
     units = units_in(answer, request)
     if not units or seconds_left <= 0:
         return None
     started = time.monotonic()
     verdicts = checked_units(units, min(CHECK_ROUND_SECONDS, seconds_left))
+    verdicts = with_stated_input(units, verdicts, request, seconds_left - (time.monotonic() - started), answer)
     seconds = round(time.monotonic() - started, 1)
     log.info("sandbox checked %s in %.1f s: %s", ", ".join(unit.label for unit in units), seconds,
              ", ".join(verdict["status"] if verdict else "not checked" for verdict in verdicts))
@@ -403,7 +474,8 @@ def rewrite_note(failures: list[tuple[Unit, dict]]) -> str:
     parts = []
     for unit, verdict in failures:
         tool = verdict.get("tool") or unit.label
-        parts.append(f"The {unit.label} failed at the {verdict.get('step', 'check')} step ({tool}):\n```\n"
+        given = " with the input from the question" if verdict.get(WITH_STATED_INPUT) else ""
+        parts.append(f"The {unit.label} failed at the {verdict.get('step', 'check')} step{given} ({tool}):\n```\n"
                      f"{problem_text(verdict, PROBLEM_CHARS)}\n```")
     return ("(I ran the code from your answer in a sandbox and it doesn't work yet.\n\n" + "\n\n".join(parts)
             + "\n\nFix what these errors show and write your whole answer again. Change only what the errors need, keep "
@@ -411,7 +483,8 @@ def rewrite_note(failures: list[tuple[Unit, dict]]) -> str:
 
 
 def first_line(text: str) -> str:
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and line.strip() != "..."]
+    lines = [line.strip() for line in str(text or "").splitlines()
+             if line.strip() and line.strip() != "..." and not MADE_UP_INPUT_HEADER.match(line.strip())]
     if not lines:
         return ""
     pool = [line for line in lines if ERROR_LINE.search(line)] or lines
@@ -428,9 +501,15 @@ def described(unit: Unit, verdict: dict | None) -> str:
         return f"the {unit.label} still fails ({tool}): {first_line(verdict.get('problem'))}"
     if verdict["status"] == "unchecked":
         return f"the {unit.label} couldn't be checked ({notes or 'no checker for it'})"
+    if verdict["status"] == NEEDS_INPUT and verdict.get(WITH_STATED_INPUT):
+        return f"the {unit.label} couldn't be tested with the input from the question ({notes or tool})"
+    if verdict["status"] == NEEDS_INPUT:
+        return f"the {unit.label} couldn't be tested without input ({notes or tool})"
     checked = verdict.get("checked") or []
     if "tests" in checked:
         text = f"the {unit.label}'s tests pass ({tool})"
+    elif "run" in checked and verdict.get(WITH_STATED_INPUT):
+        text = f"the {unit.label} ran without errors on the input from the question ({tool})"
     elif "run" in checked:
         text = f"the {unit.label} ran without errors ({tool})"
     elif "compile" in checked:
@@ -440,21 +519,84 @@ def described(unit: Unit, verdict: dict | None) -> str:
     return f"{text} ({notes})" if notes else text
 
 
-def without_summary(answer: str) -> tuple[str, str]:
+def without_summary(answer: str, brain_line: str) -> tuple[str, str]:
     found = SUMMARY_LINE.search(answer or "")
-    if not found:
+    if not brain_line or not found or found.group(0).strip() != brain_line.strip():
         return answer, ""
     return answer[:found.start()], found.group(0).strip()
+
+
+def plain_text(text: str) -> str:
+    shown = MARKUP_TAG.sub("", MARKUP_COMMENT.sub("", html.unescape(MARKDOWN_LINK.sub(r"\1", text or ""))))
+    letters = unicodedata.normalize("NFKD", shown).translate(LOOKALIKE_LETTERS)
+    visible = "".join(character for character in letters if unicodedata.category(character) not in HIDDEN_CATEGORIES)
+    return SPACING.sub(" ", HIDING_MARKS.sub("", visible))
+
+
+def has_lookalike_summary(text: str) -> bool:
+    return bool(MARKER_NAMED.search(plain_text(text)))
+
+
+def without_the_marker_words(text: str) -> str:
+    plain = MARKER_NAMED.sub(MARKER_REPLACEMENT, MARKER_LABEL.sub("", plain_text(text))).strip()
+    return plain[:1].upper() + plain[1:]
+
+
+def without_marker_sentences(line: str) -> str:
+    if not has_lookalike_summary(line):
+        return line
+    body = line.rstrip("\n")
+    kept = " ".join(sentence for sentence in SENTENCE_BREAK.split(body) if not has_lookalike_summary(sentence))
+    if ONLY_LIST_MARKS.match(kept):
+        return ""
+    return kept + line[len(body):]
+
+
+def lines_read_together(text: str) -> list[str]:
+    units = []
+    for line in text.splitlines(keepends=True):
+        split_marker = bool(units) and not has_lookalike_summary(units[-1]) and not has_lookalike_summary(line) \
+            and has_lookalike_summary(units[-1] + line)
+        if split_marker:
+            units[-1] += line
+        else:
+            units.append(line)
+    return units
+
+
+def without_lookalike_lines(text: str) -> str:
+    return "".join(without_marker_sentences(unit) for unit in lines_read_together(text))
+
+
+def may_become_a_summary_line(line: str) -> bool:
+    plain = "".join(character for character in line.lstrip(MARKDOWN_AROUND_A_LINE)
+                    if character not in MARKDOWN_EMPHASIS).lower()
+    return SUMMARY_MARKER.startswith(plain) or plain.startswith(SUMMARY_MARKER)
+
+
+def without_lookalike_summaries(answer: str) -> str:
+    answer, kept, position = answer or "", [], 0
+    for start, end in code_spans(answer):
+        kept += [without_lookalike_lines(answer[position:start]), answer[start:end]]
+        position = end
+    cleaned = "".join(kept + [without_lookalike_lines(answer[position:])])
+    if not answer.strip() or cleaned.strip():
+        return cleaned
+    if MARKER_LABEL.search(plain_text(answer)):
+        return NO_CHECK_RESULT
+    return without_the_marker_words(answer)
 
 
 def code_spans(text: str) -> list[tuple[int, int]]:
     return [(found.start(), found.end()) for found in FENCE.finditer(text or "")]
 
 
-def summary(report: Report | None, corrected_output: bool = False) -> str:
+def summary(report: Report | None, corrected_output: bool = False, examples: str = "") -> str:
     if report is None:
         return ""
     parts = [described(unit, verdict) for unit, verdict in zip(report.units, report.verdicts)]
+    if examples:
+        parts.append(examples)
     if corrected_output:
         parts.append(CORRECTED_OUTPUT)
     return f"{SUMMARY_START}{'; '.join(parts)}."

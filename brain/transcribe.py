@@ -1,8 +1,3 @@
-"""Prints the speech in an audio or video file as timestamped lines.
-
-Run by media.py with the faster-whisper venv's Python (provision.sh creates /srv/ai/media/venv),
-so the brain itself keeps to the standard library. Runs on the CPU, because Ollama has the GPU.
-"""
 import os
 import sys
 

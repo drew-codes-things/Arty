@@ -8,7 +8,7 @@ import connections
 import models
 
 from api_support import ApiError
-from settings import OLLAMA_URL
+from settings import ARTY_ENGINE_URL
 
 log = logging.getLogger("brain")
 
@@ -20,7 +20,7 @@ def reload_main_model(config: dict):
     def load():
         models.make_room(config["model"], models.vram_budget(config))
         try:
-            connections.http_json(f"{OLLAMA_URL}/api/generate", body=models.for_runner(config, {"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}),
+            connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=models.for_runner(config, {"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}),
                       timeout=300)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             log.warning("could not bring %s back after another model ran: %s", config["model"], error)
@@ -29,7 +29,7 @@ def reload_main_model(config: dict):
     return thread
 
 
-OLLAMA_DOWN = "the AI server's model runner isn't answering; try again in a minute"
+ENGINE_DOWN = "the AI server's model runner isn't answering; try again in a minute"
 OTHER_MODEL_KEEP_ALIVE = "3m"
 MAIN_RELOAD_DELAY_SECONDS = 200
 AGENT_KEEP_ALIVE = "15m"
@@ -42,8 +42,8 @@ def found_model(name: str) -> dict | None:
     try:
         return models.find(name)
     except (urllib.error.URLError, TimeoutError) as error:
-        log.warning("could not list Ollama models: %s", error)
-        raise ApiError(503, OLLAMA_DOWN) from error
+        log.warning("could not list the engine's models: %s", error)
+        raise ApiError(503, ENGINE_DOWN) from error
 
 
 def chosen_model(main: str, requested: str, any_installed: bool) -> str:
@@ -223,7 +223,7 @@ def warm_picture_model(config: dict):
     def load():
         models.make_room(looker, models.vram_budget(config))
         try:
-            connections.http_json(f"{OLLAMA_URL}/api/generate", body=models.for_runner(config, {"model": looker, "keep_alive": OTHER_MODEL_KEEP_ALIVE}),
+            connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=models.for_runner(config, {"model": looker, "keep_alive": OTHER_MODEL_KEEP_ALIVE}),
                                   timeout=300)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             log.warning("could not load %s ahead of a picture question: %s", looker, error)

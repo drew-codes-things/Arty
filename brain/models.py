@@ -1,10 +1,3 @@
-"""Which Ollama models Arty can run on, and switching between them.
-
-Only models with tool support qualify: without tools Arty loses its memory saving,
-its computer and the browser. The tool budget (how many tools the model is shown
-at once) follows model size when brain.json says "auto": small models pick tools
-badly from a long list, so they get a focused subset.
-"""
 import json
 import logging
 import math
@@ -16,7 +9,7 @@ import urllib.error
 import urllib.request
 
 import notify
-from settings import CONFIG_FILE, OLLAMA_URL
+from settings import CONFIG_FILE, ARTY_ENGINE_URL
 
 CACHE_SECONDS = 60
 PULL_TIMEOUT_SECONDS = 6 * 3600
@@ -38,9 +31,9 @@ _refresh_lock = threading.Lock()
 _pulls: set[str] = set()
 
 
-def _ollama(path: str, body: dict | None = None, timeout: int = 30):
+def _engine(path: str, body: dict | None = None, timeout: int = 30):
     data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(f"{OLLAMA_URL}{path}", data=data, headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(f"{ARTY_ENGINE_URL}{path}", data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read() or b"{}")
 
@@ -69,9 +62,9 @@ def installed(refresh: bool = False) -> list[dict]:
 
 def _refresh_installed() -> list[dict]:
     models = []
-    for entry in _ollama("/api/tags").get("models", []):
+    for entry in _engine("/api/tags").get("models", []):
         try:
-            shown = _ollama("/api/show", {"model": entry["name"]})
+            shown = _engine("/api/show", {"model": entry["name"]})
         except (urllib.error.URLError, TimeoutError):
             continue
         capabilities = shown.get("capabilities") or []
@@ -302,14 +295,14 @@ def list_text(current: str) -> str:
     if not models:
         return "No tool-capable models are installed."
     lines = [f"{'* ' if m['name'] == current else '  '}{describe(m)}" for m in models]
-    return "Models I can run on (* = my main model):\n" + "\n".join(lines) + "\nMore at https://ollama.com/search?c=tools"
+    return "Models I can run on (* = my main model):\n" + "\n".join(lines)
 
 
 def switch(name: str, current: str, notify_send) -> str:
     """Make `name` Arty's main model, downloading it first if needed (in the background)."""
     name = name.strip().lower()
     if not MODEL_NAME.match(name):
-        return f"'{name}' doesn't look like an Ollama model name (e.g. qwen2.5:7b)."
+        return f"'{name}' doesn't look like a model name (e.g. qwen2.5:7b)."
     if name in (current, f"{current}:latest") or current == f"{name}:latest":
         return f"I'm already running on {current}."
     if not in_arty({"name": name}):
@@ -329,7 +322,7 @@ def switch(name: str, current: str, notify_send) -> str:
 
 def _pull_then_switch(name: str, previous: str, notify_send):
     try:
-        _ollama("/api/pull", {"model": name, "stream": False}, timeout=PULL_TIMEOUT_SECONDS)
+        _engine("/api/pull", {"model": name, "stream": False}, timeout=PULL_TIMEOUT_SECONDS)
         model = find(name) or (installed(refresh=True) and find(name))
         if not model:
             notify_send("Arty: model download failed", f"{name} didn't install.", category=notify.ARTY)
@@ -366,9 +359,9 @@ def _size_on_card(name: str, budget_bytes: int) -> int:
 
 def is_loaded(name: str) -> bool:
     try:
-        running = _ollama("/api/ps").get("models", [])
+        running = _engine("/api/ps").get("models", [])
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
-        log.warning("couldn't ask Ollama which models are loaded: %s", error)
+        log.warning("couldn't ask the engine which models are loaded: %s", error)
         return False
     wanted = {name, f"{name}:latest"}
     return any(model.get("name") in wanted or model.get("model") in wanted for model in running)
@@ -377,16 +370,16 @@ def is_loaded(name: str) -> bool:
 def _wait_until_gone(names: list[str]) -> None:
     deadline = time.monotonic() + UNLOAD_WAIT_SECONDS
     while time.monotonic() < deadline:
-        still = {m["name"] for m in _ollama("/api/ps").get("models", [])} & set(names)
+        still = {m["name"] for m in _engine("/api/ps").get("models", [])} & set(names)
         if not still:
             return
         time.sleep(UNLOAD_POLL_SECONDS)
-    log.warning("Ollama still holds %s %s s after being asked to unload it", ", ".join(names), UNLOAD_WAIT_SECONDS)
+    log.warning("the engine still holds %s %s s after being asked to unload it", ", ".join(names), UNLOAD_WAIT_SECONDS)
 
 
 def make_room(name: str, budget_bytes: int) -> list[str]:
     try:
-        running = _ollama("/api/ps").get("models", [])
+        running = _engine("/api/ps").get("models", [])
         if any(m["name"] == name for m in running):
             return []
         in_use = sum(int(m.get("size_vram", 0)) for m in running)
@@ -394,11 +387,11 @@ def make_room(name: str, budget_bytes: int) -> list[str]:
             return []
         others = [m["name"] for m in running]
         for other in others:
-            _ollama("/api/generate", {"model": other, "keep_alive": 0}, timeout=60)
+            _engine("/api/generate", {"model": other, "keep_alive": 0}, timeout=60)
         _wait_until_gone(others)
         return others
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
-        log.warning("couldn't make room on the GPU for %s, leaving it to Ollama: %s", name, error)
+        log.warning("couldn't make room on the GPU for %s, leaving it to the engine: %s", name, error)
         return []
 
 
@@ -433,7 +426,7 @@ def ask(name: str, prompt: str, config: dict, keep_alive=0) -> str:
     options = {key: value for key, value in config.get("options", {}).items() if key in ("num_predict", "repeat_penalty")}
     make_room(model["name"], vram_budget(config))
     try:
-        reply = _ollama("/api/chat", for_runner(config, {"model": model["name"], "messages": [{"role": "user", "content": prompt}],
+        reply = _engine("/api/chat", for_runner(config, {"model": model["name"], "messages": [{"role": "user", "content": prompt}],
                                                          "stream": False, "options": options, "keep_alive": keep_alive}),
                         timeout=900)
     except (urllib.error.URLError, TimeoutError) as error:

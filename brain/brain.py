@@ -24,12 +24,14 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import calendar_feed
+import code_sandbox
 import connections
 import desktop_look
 import devices
 import drafts
 import email_watch
 import greetings
+import hidden_notes
 import keepalive
 import lectures
 import media
@@ -39,6 +41,7 @@ import notify
 import personal
 import phone
 import policy
+import private_text
 import quick
 import remote_sessions
 import research
@@ -53,7 +56,7 @@ from api_support import (IDENTITY_NONCE, optional_int, ApiError, same_secret, id
     valid_messages, client_name)
 from archive import is_overheard, message_text, archive_records, recall_records, archive_turn
 from environment import BRAIN_KEY, APP_KEY, HUB_KEY
-from settings import LISTEN_HOST, LISTEN_PORT, HUB_URL, OLLAMA_URL, TRUSTED_PROXIES, STARFIRE_URL
+from settings import LISTEN_HOST, LISTEN_PORT, HUB_URL, ARTY_ENGINE_URL, TRUSTED_PROXIES, STARFIRE_URL
 from native_tools import NATIVE_TOOLS, API_CALLABLE_NATIVE
 from reply_rules import (OFFER_SENTENCE, trim_offers, ACTION_REQUEST, REMIND_REQUEST, DO_REQUEST, NOT_FOR_ME,
     VOICE_MODE, user_words, APP_NOTES)
@@ -63,10 +66,10 @@ from connections import complete_text, http_json, load_config
 from replies import tidy_answer, as_written, never_an_offer
 from memory_facts import (remember_reply, forget_reply, restore_memory_reply, extract_memories, SECRET_PATTERN,
     NOT_A_FACT, REMEMBER_REQUEST, as_fact, draft_facts)
-from model_choice import (MODEL_ID, OLLAMA_DOWN, VISION_KEEP_ALIVE, VISION_MAIN_RETURN_SECONDS, chosen_model,
+from model_choice import (MODEL_ID, ENGINE_DOWN, VISION_KEEP_ALIVE, VISION_MAIN_RETURN_SECONDS, chosen_model,
     session_keep_alive, use_requested_model, arty_description, chat_model, main_model_return)
 from native_calls import NATIVE_TOOL_ERRORS, look_up_first, declined_reply, run_native, convert_attachment
-from attachments import vision_model, expand_attachments, has_new_picture, to_ollama_messages
+from attachments import vision_model, expand_attachments, has_new_picture, to_engine_messages
 from agent_loop import know_the_page, private_upload, turn_rounds, WindowOverflow, AgentRun, run_agent, ROUNDS_KEY
 from honesty import client_tool_runs, empty_reply, be_honest
 from shortcuts import (addressed_to_arty, TALKED_ABOUT, recap_conversations, phone_action, asks_for_something_else,
@@ -78,10 +81,10 @@ from alerts import record_alert
 from api_keys import issue_device_key, make_device_key, is_main_key, is_device_key, remote_caller
 
 
-__all__ = ["APP_NOTES", "AgentRun", "NOT_A_FACT", "OFFER_SENTENCE", "OLLAMA_URL", "REMEMBER_REQUEST", "ROUNDS_KEY",
+__all__ = ["APP_NOTES", "AgentRun", "NOT_A_FACT", "OFFER_SENTENCE", "ARTY_ENGINE_URL", "REMEMBER_REQUEST", "ROUNDS_KEY",
            "SECRET_PATTERN", "archive_turn", "as_fact", "as_written", "expand_attachments", "extract_memories",
            "http_json", "load_config", "log", "main_model_return", "message_text", "models", "never_an_offer",
-           "personal", "policy", "run_agent", "tidy_answer", "to_ollama_messages"]
+           "personal", "policy", "run_agent", "tidy_answer", "to_engine_messages"]
 
 ALERT_TOKEN = os.environ.get("ALERT_TOKEN", "")  # Uptime Kuma's webhook puts this in its URL
 MAX_BODY_BYTES = 64 * 1024 * 1024  # chat requests can carry full-size photos as base64
@@ -121,6 +124,13 @@ def facts_for_draft(config, said):
     return "" if "own_memories" in config else draft_facts(said)
 
 
+def private_text_of_turn(messages: list, client_tools) -> private_text.HiddenText:
+    config = connections.load_config()
+    instructions = "\n\n".join(part for part in (config.get("persona"), config.get("system_prompt")) if part)
+    tools = [*connections.hub.tools, *NATIVE_TOOLS.values()]
+    return hidden_notes.private_text_for(instructions, tools, hidden_notes.known_to_the_client(messages, client_tools))
+
+
 def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
              agent=False, on_thinking=None):
     """One chat turn. Returns (answer, tools_used, raw, client_calls); client_calls is set when the
@@ -131,6 +141,16 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
         return solo_turn(solo["name"], messages, client)
     if local_addon and (handled := local_addon.turn(messages, requested_model, client_tools, skip_groups, on_text)) is not None:
         return handled
+    private = private_text_of_turn(messages, client_tools)
+    stream = private_text.GuardedStream(on_text, private) if on_text else None
+    answer, tools_used, raw, client_calls = arty_turn(messages, requested_model, client_tools, skip_groups, stream, client,
+                                                      any_installed, agent, on_thinking)
+    kept = stream.kept(answer or "") if stream else 0
+    return private_text.without_hidden_text(answer, private, kept), tools_used, raw, client_calls
+
+
+def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
+              agent=False, on_thinking=None):
     if agent:
         return agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking, client)
     config = connections.load_config()
@@ -216,7 +236,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
             archive_turn(config, said, answer, used)
             return answer, used, {}, None
     messages, attached = expand_attachments(messages, look_keep_alive(config, on_routed_model))
-    conversation = to_ollama_messages([m for m in messages if m.get("role") != "system"])
+    conversation = to_engine_messages([m for m in messages if m.get("role") != "system"])
     client_system = "\n".join(message_text(m) for m in messages if m.get("role") == "system").strip()
     # With an attachment in the chat, the conversion tool is always on offer, however few tools the model gets.
     state = {"messages": conversation, "context": {}, "groups": ["files"] if attached else []}
@@ -247,7 +267,8 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
                      + f"\n\n[convert_file]\n{converted}", None)
     outcome = run_agent(config, state, run=AgentRun(chat_approved=policy.approved_reason(conversation, message_text),
                                                     client_system=client_system, client_tools=client_tools,
-                                                    skip_groups=skip_groups, draft=draft, looked_up=looked_up))
+                                                    skip_groups=skip_groups, draft=draft, looked_up=looked_up,
+                                                    client_texts=hidden_notes.known_to_the_client(messages, client_tools)))
     if outcome["status"] == "client_tools":
         content = draft.finish(outcome["content"]) if draft else outcome["content"]
         return content, outcome["tools_used"], outcome["raw"], outcome["calls"]
@@ -267,7 +288,7 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     if answer != fallback:
         answer = be_honest(answer, client_used + outcome["tools_used"], client_failed + state.get("context", {}).get("failed", []),
                            draft.everything() if draft else "", said if last_user is not None else "", config["model"],
-                           config.get("keep_alive"), state.get("prefix"))
+                           config.get("keep_alive"), state.get("prefix"), outcome.get("sandbox_line", ""))
     if draft:
         answer = draft.finish(answer)
     # Small models sometimes describe the conversion but drop the link; never lose a file the user asked for.
@@ -515,8 +536,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 downloaded = models.downloaded_chat_models()
             except (urllib.error.URLError, TimeoutError) as error:
-                log.warning("could not list Ollama models: %s", error)
-                raise ApiError(503, OLLAMA_DOWN) from error
+                log.warning("could not list the engine's models: %s", error)
+                raise ApiError(503, ENGINE_DOWN) from error
             config = connections.load_config()
             coding_name = config.get("coding_model", "")
             reply_size = models.reply_tokens(config)
@@ -537,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
                 listed += models.solo_entries()
                 listed += local_addon.listed_models() if local_addon else []
             except (urllib.error.URLError, TimeoutError) as error:
-                log.warning("could not list Ollama models: %s", error)
+                log.warning("could not list the engine's models: %s", error)
             return self.send_json(200, {"object": "list", "data": listed})
         if segments == ["v1", "tools"]:
             connections.hub.refresh()
@@ -863,7 +884,7 @@ class Handler(BaseHTTPRequestHandler):
             options["num_predict"] = max_tokens
         models.make_room(model["name"], models.vram_budget(config))
         try:
-            raw = connections.http_json(f"{OLLAMA_URL}/api/chat", body=models.for_runner(config, {
+            raw = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
                 "model": model["name"], "messages": converted, "stream": False, "options": options,
                 "keep_alive": session_keep_alive(model["name"], VISION_KEEP_ALIVE)}))
         finally:
@@ -1007,6 +1028,7 @@ local_addon = load_local_addon()
 
 if __name__ == "__main__":
     init_storage(connections.load_config())
+    code_sandbox.warn_about_a_missing_token()
     notify.listeners.append(record_announcement)
     threading.Thread(target=lectures.worker, args=(complete_text, notify.send), name="lectures", daemon=True).start()
     threading.Thread(target=worker_loop, name="worker", daemon=True).start()

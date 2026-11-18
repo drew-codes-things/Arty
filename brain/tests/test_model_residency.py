@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_agent_mode import CLIENT_SYSTEM, READ_FILE, FakeOllama  # noqa: E402
+from test_agent_mode import CLIENT_SYSTEM, READ_FILE, FakeEngine  # noqa: E402
 
 import brain  # noqa: E402
 import agent_turns  # noqa: E402
@@ -54,12 +54,12 @@ class Residency(unittest.TestCase):
         self.config = {**CONFIG, "conversations_dir": folder.name}
         self.main_return = model_choice.MainModelReturn()
         self.reload = unittest.mock.Mock()
-        self.ollama = FakeOllama()
+        self.engine = FakeEngine()
         patches = [
             unittest.mock.patch.object(connections, "load_config", side_effect=lambda: json.loads(json.dumps(self.config))),
             unittest.mock.patch.object(model_choice, "main_model_return", self.main_return),
             unittest.mock.patch.object(model_choice, "reload_main_model", self.reload),
-            unittest.mock.patch.object(connections, "http_json", side_effect=self.ollama),
+            unittest.mock.patch.object(connections, "http_json", side_effect=self.engine),
             unittest.mock.patch.object(connections.hub, "refresh"),
             unittest.mock.patch.object(connections.hub, "tools", []),
             unittest.mock.patch.object(connections.hub, "routes", {}),
@@ -86,8 +86,8 @@ class Residency(unittest.TestCase):
 
     def test_an_agent_step_keeps_the_coding_model_for_the_session(self):
         self.agent_step()
-        self.assertEqual(self.ollama.bodies[0]["model"], CODER)
-        self.assertEqual(self.ollama.bodies[0]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
+        self.assertEqual(self.engine.bodies[0]["model"], CODER)
+        self.assertEqual(self.engine.bodies[0]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_the_main_model_comes_back_only_after_the_session_goes_quiet(self):
         self.agent_step()
@@ -95,7 +95,7 @@ class Residency(unittest.TestCase):
         self.assertIsNotNone(self.main_return.timer)
         self.reload.assert_not_called()
 
-    def test_ollama_never_drops_the_coding_model_before_the_brain_brings_the_main_one_back(self):
+    def test_the_engine_never_drops_the_coding_model_before_the_brain_brings_the_main_one_back(self):
         self.assertGreater(keep_alive_minutes(model_choice.AGENT_KEEP_ALIVE) * 60, model_choice.AGENT_QUIET_SECONDS)
 
     def test_each_new_step_pushes_the_return_back(self):
@@ -148,28 +148,28 @@ class Residency(unittest.TestCase):
         self.main_return.hold(CODER)
         self.main_return.release(self.config, model_choice.AGENT_QUIET_SECONDS)
         self.direct_vision()
-        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
+        self.assertEqual(self.engine.bodies[-1]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
         self.assertGreater(self.seconds_until_main_returns(), model_choice.AGENT_QUIET_SECONDS - 5)
 
     def test_a_direct_picture_without_a_session_keeps_its_short_keep_alive(self):
         self.direct_vision()
-        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], brain.VISION_KEEP_ALIVE)
+        self.assertEqual(self.engine.bodies[-1]["keep_alive"], brain.VISION_KEEP_ALIVE)
 
     def test_looking_at_an_attachment_during_a_session_does_not_unload_the_model(self):
         self.main_return.hold(CODER)
         attachments.look(["aW1n"], "what is it?")
-        self.assertEqual(self.ollama.bodies[-1]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
+        self.assertEqual(self.engine.bodies[-1]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_handing_a_job_to_the_session_model_does_not_unload_it(self):
         self.main_return.hold(CODER)
         sent = []
-        with unittest.mock.patch.object(models, "_ollama", side_effect=lambda path, body, timeout=30: sent.append(body) or {}):
+        with unittest.mock.patch.object(models, "_engine", side_effect=lambda path, body, timeout=30: sent.append(body) or {}):
             brain.run_native("ask_other_model", {"model": CODER, "prompt": "write a function"}, self.config, False, None)
         self.assertEqual(sent[0]["keep_alive"], model_choice.AGENT_KEEP_ALIVE)
 
     def test_handing_a_job_to_another_model_still_unloads_it_after(self):
         sent = []
-        with unittest.mock.patch.object(models, "_ollama", side_effect=lambda path, body, timeout=30: sent.append(body) or {}):
+        with unittest.mock.patch.object(models, "_engine", side_effect=lambda path, body, timeout=30: sent.append(body) or {}):
             brain.run_native("ask_other_model", {"model": CODER, "prompt": "write a function"}, self.config, False, None)
         self.assertEqual(sent[0]["keep_alive"], 0)
 
@@ -185,7 +185,7 @@ class OneContextSize(unittest.TestCase):
             unittest.mock.patch.object(models, "find", side_effect=found),
             unittest.mock.patch.object(models, "installed", return_value=INSTALLED),
             unittest.mock.patch.object(models, "arty_models", return_value=[MAIN, CODER]),
-            unittest.mock.patch.object(models, "_ollama", side_effect=lambda path, body, timeout=30: self.record("", body)),
+            unittest.mock.patch.object(models, "_engine", side_effect=lambda path, body, timeout=30: self.record("", body)),
         ]
         for patch in patches:
             patch.start()

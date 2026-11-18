@@ -3,6 +3,7 @@ import logging
 import connections
 import desktop_look
 import drafts
+import hidden_notes
 import model_choice
 import safety
 
@@ -10,7 +11,7 @@ from archive import message_text
 from reply_rules import user_words
 from replies import as_written, never_an_offer
 from model_choice import AGENT_QUIET_SECONDS, use_requested_model, agent_model
-from attachments import expand_attachments, to_ollama_messages
+from attachments import expand_attachments, to_engine_messages
 from agent_loop import ROUNDS_KEY, AgentRun, run_agent
 from honesty import client_tool_runs, some_tool_worked, be_honest
 
@@ -38,13 +39,14 @@ def agent_reply(config, messages, client_tools, on_text, on_thinking, client="")
             log.info("declined a %s request from an agent", kind)
             return reply, [f"safety_{kind}"], {}, None
     messages, _ = expand_attachments(messages)
-    conversation = to_ollama_messages([m for m in messages if m.get("role") != "system"])
+    conversation = to_engine_messages([m for m in messages if m.get("role") != "system"])
     client_system = "\n".join(message_text(m) for m in messages if m.get("role") == "system").strip()
     state = {"messages": conversation, "context": {}, "groups": []}
     draft = drafts.Draft(on_text, as_written, never_an_offer) if on_text else None
     connections.hub.refresh()
     outcome = run_agent(config, state, run=AgentRun(client_system=client_system, client_tools=client_tools, draft=draft,
-                                                    agent=True, on_thinking=on_thinking))
+                                                    agent=True, on_thinking=on_thinking,
+                                                    client_texts=hidden_notes.known_to_the_client(messages, client_tools)))
     outcome["raw"] = {**(outcome.get("raw") or {}), ROUNDS_KEY: state.get("rounds", [])}
     if outcome["status"] == "client_tools":
         content = draft.finish(outcome["content"]) if draft else outcome["content"]
@@ -55,7 +57,7 @@ def agent_reply(config, messages, client_tools, on_text, on_thinking, client="")
     client_used, client_failed = client_tool_runs(conversation, by_last_result=True, whole_conversation=True)
     if not some_tool_worked(client_used, client_failed):
         answer = be_honest(answer, client_used + outcome["tools_used"], client_failed, draft.everything() if draft else "",
-                           said, config["model"], config.get("keep_alive"))
+                           said, config["model"], config.get("keep_alive"), None, outcome.get("sandbox_line", ""))
     if draft:
         answer = draft.finish(answer)
     return answer, outcome["tools_used"], outcome["raw"], None

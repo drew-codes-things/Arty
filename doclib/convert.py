@@ -1,3 +1,4 @@
+import posixpath
 import re
 from html.parser import HTMLParser
 from typing import NamedTuple
@@ -410,3 +411,168 @@ def rst_events(text: str) -> tuple[dict[str, str], list[Event]]:
 def rst_document(text: str) -> tuple[dict[str, str], list[Section]]:
     fields, events = rst_events(text)
     return fields, sections_from_events(events, fields.get("Title", ""))
+
+
+MD_FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
+MD_TITLE = re.compile(r"^title:[ \t]*[\"']?(.*?)[\"']?[ \t]*$", re.M)
+MD_HEADING = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
+MD_FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([\w+#.-]*)")
+MD_CODE_INCLUDE = re.compile(r"^[ \t]*:::code\b(.*?):::[ \t]*$")
+MD_LEGACY_CODE = re.compile(r"^[ \t]*\[!code-([\w+#-]+)\[[^\]]*\]\(([^)\s]+)[^)]*\)\][ \t]*$")
+MD_INCLUDE = re.compile(r"\[!INCLUDE[ \t]*\[[^\]]*\]\(([^)\s]+)[^)]*\)\]", re.I)
+MD_ATTRIBUTE = re.compile(r"([\w-]+)=\"([^\"]*)\"")
+MD_ALERT = re.compile(r"^[ \t]*>[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*$", re.I)
+MD_QUOTE = re.compile(r"^[ \t]*>[ \t]?")
+MD_DIRECTIVE = re.compile(r"^[ \t]*:::[\w-]+.*$")
+MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+MD_LINK = re.compile(r"\[([^\]]+)\]\((?:[^()\s]|\([^()\s]*\))*(?:[ \t]+\"[^\"]*\")?\)")
+MD_XREF = re.compile(r"<xref:([^>?#\s]+)[^>]*>")
+MD_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+MD_HTML_TAG = re.compile(r"</?(?:a|span|br|sup|sub|div|p|em|strong|b|i)\b[^>]*>", re.I)
+MD_ANCHOR_DROPPED = re.compile(r"[^\w\s-]")
+MD_INCLUDE_DEPTH = 3
+SNIPPET_MARKER = re.compile(r"^[ \t]*(?://|')[ \t]*</?[\w.-]+>[ \t]*$|^[ \t]*#(?:end)?region\b.*$", re.M)
+ALERT_WORDS = {"note": "Note", "tip": "Tip", "important": "Important", "warning": "Warning", "caution": "Caution"}
+
+
+def md_anchor(title: str) -> str:
+    return re.sub(r"[\s]+", "-", MD_ANCHOR_DROPPED.sub("", title.lower()).strip())
+
+
+def md_inline(text: str) -> str:
+    text = MD_IMAGE.sub("", text)
+    text = MD_XREF.sub(lambda found: found.group(1).replace("%60", "`"), text)
+    text = MD_LINK.sub(r"\1", text)
+    return MD_HTML_TAG.sub("", text)
+
+
+def joined_path(base: str, reference: str) -> str:
+    reference = reference.split("#", 1)[0].split("?", 1)[0]
+    if reference.startswith("~/"):
+        return posixpath.normpath(reference[2:])
+    return posixpath.normpath(posixpath.join(posixpath.dirname(base), reference))
+
+
+def snippet_lines(lines: list[str], name: str) -> list[str]:
+    start = re.compile(rf"^[ \t]*(?:(?://|')[ \t]*<{re.escape(name)}>|#region[ \t]+{re.escape(name)})[ \t]*$", re.I)
+    end = re.compile(rf"^[ \t]*(?:(?://|')[ \t]*</{re.escape(name)}>|#endregion\b.*)$", re.I)
+    first = next((index for index, line in enumerate(lines) if start.match(line)), None)
+    if first is None:
+        return []
+    last = next((index for index in range(first + 1, len(lines)) if end.match(lines[index])), len(lines))
+    return lines[first + 1:last]
+
+
+def dedented(lines: list[str]) -> str:
+    kept = [line for line in lines if not SNIPPET_MARKER.match(line)]
+    inner = min((len(line) - len(line.lstrip()) for line in kept if line.strip()), default=0)
+    return "\n".join(line[inner:].rstrip() for line in kept).strip("\n")
+
+
+def code_from(files: dict[str, str], path: str, name: str) -> str:
+    text = files.get(path)
+    if text is None:
+        return ""
+    lines = text.splitlines()
+    return dedented(snippet_lines(lines, name) if name else lines)
+
+
+def included_code(line: str, base: str, files: dict[str, str]) -> str | None:
+    found = MD_CODE_INCLUDE.match(line)
+    if found:
+        attributes = dict(MD_ATTRIBUTE.findall(found.group(1)))
+        source = attributes.get("source", "")
+        code = code_from(files, joined_path(base, source), attributes.get("id", "")) if source else ""
+        return f"{FENCE}{attributes.get('language', '')}\n{code}\n{FENCE}" if code else ""
+    legacy = MD_LEGACY_CODE.match(line)
+    if legacy:
+        reference = legacy.group(2)
+        name = reference.split("#", 1)[1] if "#" in reference else ""
+        code = code_from(files, joined_path(base, reference), name)
+        return f"{FENCE}{legacy.group(1)}\n{code}\n{FENCE}" if code else ""
+    return None
+
+
+def without_front_matter(text: str) -> tuple[str, str]:
+    found = MD_FRONT_MATTER.match(text)
+    if not found:
+        return "", text.lstrip("﻿")
+    title = MD_TITLE.search(found.group(1))
+    return (title.group(1).strip() if title else ""), text[found.end():]
+
+
+def with_includes(text: str, base: str, files: dict[str, str], depth: int = 0) -> str:
+    def included(found) -> str:
+        path = joined_path(base, found.group(1))
+        if depth >= MD_INCLUDE_DEPTH or path not in files:
+            return ""
+        return with_includes(without_front_matter(files[path])[1].strip(), path, files, depth + 1)
+
+    return MD_INCLUDE.sub(included, MD_HTML_COMMENT.sub("", text))
+
+
+def md_events(text: str, base: str, files: dict[str, str]) -> list[Event]:
+    events, paragraph = [], []
+    lines = with_includes(text, base, files).splitlines()
+
+    def flush():
+        joined = "\n".join(line for line in paragraph if line.strip())
+        if joined.strip():
+            events.append(Event("text", 0, md_inline(joined).strip(), ""))
+        paragraph.clear()
+
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        fence = MD_FENCE.match(line)
+        if fence:
+            flush()
+            indent, marker, language = fence.groups()
+            body, index = [], index + 1
+            while index < len(lines) and not lines[index].strip().startswith(marker):
+                body.append(lines[index][len(indent):] if lines[index].startswith(indent) else lines[index])
+                index += 1
+            events.append(Event("code", 0, f"{FENCE}{language}\n" + "\n".join(body).strip("\n") + f"\n{FENCE}", ""))
+            index += 1
+            continue
+        code = included_code(line, base, files)
+        if code is not None:
+            flush()
+            if code:
+                events.append(Event("code", 0, code, ""))
+            index += 1
+            continue
+        heading = MD_HEADING.match(line)
+        if heading:
+            flush()
+            title = md_inline(heading.group(2)).strip()
+            level = len(heading.group(1))
+            events.append(Event("heading", level, title, md_anchor(title) if level > 1 else ""))
+            index += 1
+            continue
+        alert = MD_ALERT.match(line)
+        if alert:
+            flush()
+            paragraph.append(f"{ALERT_WORDS[alert.group(1).lower()]}:")
+            index += 1
+            continue
+        if MD_DIRECTIVE.match(line):
+            flush()
+            index += 1
+            continue
+        if not line.strip():
+            flush()
+            index += 1
+            continue
+        paragraph.append(MD_QUOTE.sub("", line).rstrip())
+        index += 1
+    flush()
+    return events
+
+
+def markdown_document(text: str, base: str, files: dict[str, str]) -> tuple[str, list[Section]]:
+    front_title, body = without_front_matter(text)
+    events = md_events(body, base, files)
+    first_heading = next((event.text for event in events if event.kind == "heading" and event.level == 1), "")
+    title = first_heading or front_title
+    return title, sections_from_events(events, title)

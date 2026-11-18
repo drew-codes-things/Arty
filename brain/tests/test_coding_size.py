@@ -44,19 +44,19 @@ class CodingJobSize(unittest.TestCase):
 
 
 class LoadedModels(unittest.TestCase):
-    def test_a_model_ollama_holds_is_loaded(self):
+    def test_a_model_the_engine_holds_is_loaded(self):
         running = {"models": [{"name": "mimo-v2.6:9b", "model": "mimo-v2.6:9b", "size_vram": 1}]}
-        with unittest.mock.patch.object(models, "_ollama", return_value=running):
+        with unittest.mock.patch.object(models, "_engine", return_value=running):
             self.assertTrue(models.is_loaded("mimo-v2.6:9b"))
             self.assertFalse(models.is_loaded("qwen3:14b"))
 
     def test_a_latest_tag_matches_the_short_name(self):
         running = {"models": [{"name": "coder:latest", "model": "coder:latest"}]}
-        with unittest.mock.patch.object(models, "_ollama", return_value=running):
+        with unittest.mock.patch.object(models, "_engine", return_value=running):
             self.assertTrue(models.is_loaded("coder"))
 
-    def test_an_unreachable_ollama_counts_as_not_loaded(self):
-        with unittest.mock.patch.object(models, "_ollama", side_effect=urllib.error.URLError("down")):
+    def test_an_unreachable_engine_counts_as_not_loaded(self):
+        with unittest.mock.patch.object(models, "_engine", side_effect=urllib.error.URLError("down")):
             self.assertFalse(models.is_loaded("mimo-v2.6:9b"))
 
 

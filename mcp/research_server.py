@@ -1,10 +1,3 @@
-"""Finding things out: web search, reading documents, read-only git, and a searchable document library.
-
-Web search goes to the self-hosted SearXNG on this container. Documents are read on
-the desktop VM by `doc2text` (pdftotext, pandoc, xlsx2csv, Tesseract OCR). The
-library is ~/library on the desktop, indexed into a local SQLite file with
-embeddings from Ollama, so it can be searched by meaning, not just file name.
-"""
 import array
 import json
 import math
@@ -25,7 +18,7 @@ from remote import PRIVATE_EXIT, PRIVATE_REFUSAL, clip, private_path, quoted, re
 from remote import text as remote_text
 
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8888")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+ARTY_ENGINE_URL = os.environ.get("ARTY_ENGINE_URL", "http://127.0.0.1:11438")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 LIBRARY_DIR = "~/library"
 LIBRARY_DB = os.environ.get("LIBRARY_DB", "/srv/ai/brain/state/library.db")
@@ -98,7 +91,7 @@ class EmbedRefused(RuntimeError):
     pass
 
 
-class OllamaUnreachable(RuntimeError):
+class EngineUnreachable(RuntimeError):
     pass
 
 
@@ -262,7 +255,7 @@ def _db() -> sqlite3.Connection:
 
 def _embed(texts: list[str]) -> list[list[float]]:
     body = json.dumps({"model": EMBED_MODEL, "input": texts, "keep_alive": "5m", "options": {"num_gpu": 0}}).encode()
-    request = urllib.request.Request(f"{OLLAMA_URL}/api/embed", data=body, headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(f"{ARTY_ENGINE_URL}/api/embed", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
             vectors = json.loads(response.read())["embeddings"]
@@ -270,9 +263,9 @@ def _embed(texts: list[str]) -> list[list[float]]:
         detail = error.read().decode(errors="replace")
         if "not found" in detail:
             raise EmbedModelMissing(f"the embedding model {EMBED_MODEL} isn't installed") from None
-        raise EmbedRefused(f"Ollama said {error.code}: {detail[:200]}") from None
+        raise EmbedRefused(f"the engine said {error.code}: {detail[:200]}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise OllamaUnreachable(f"could not reach Ollama: {error}") from None
+        raise EngineUnreachable(f"could not reach Arty's engine: {error}") from None
     normalised = []
     for vector in vectors:
         length = math.sqrt(sum(value * value for value in vector)) or 1.0
@@ -380,7 +373,7 @@ def search_library(query: str, results: int = 5) -> str:
         query_vector = _embed([f"search_query: {query}"])[0]
     except EmbedModelMissing:
         return f"The embedding model isn't installed. Ask the user to run: ai-pull {EMBED_MODEL}"
-    except (EmbedRefused, OllamaUnreachable) as error:
+    except (EmbedRefused, EngineUnreachable) as error:
         return str(error)
     connection = _db()
     try:

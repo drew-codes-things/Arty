@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_agent_mode import CLIENT_SYSTEM, CONFIG, READ_FILE, FakeOllama  # noqa: E402
+from test_agent_mode import CLIENT_SYSTEM, CONFIG, READ_FILE, FakeEngine  # noqa: E402
 from test_any_model import downloaded  # noqa: E402
 from test_review_brain import Server  # noqa: E402
 
@@ -106,11 +106,11 @@ class SamplingOnTurns(unittest.TestCase):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def options(self, text, agent=True):
-        ollama = FakeOllama()
+        engine = FakeEngine()
         messages = [{"role": "system", "content": CLIENT_SYSTEM}, {"role": "user", "content": text}]
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=agent)
-        return ollama.bodies[0]["options"]
+        return engine.bodies[0]["options"]
 
     def test_a_thinking_agent_turn_uses_the_thinking_card_values(self):
         options = self.options(HARD_REQUEST)

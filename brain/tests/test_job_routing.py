@@ -36,7 +36,7 @@ class HandOffTool(unittest.TestCase):
                 unittest.mock.patch.object(models, "installed", return_value=installed):
             return models.handoff_tool(CONFIG, NATIVE_TOOLS["ask_other_model"])["function"]["description"]
 
-    def test_an_unreachable_ollama_leaves_the_plain_description(self):
+    def test_an_unreachable_engine_leaves_the_plain_description(self):
         with unittest.mock.patch.object(models, "arty_models", return_value=["qwen3:14b", "coder:9b"]), \
                 unittest.mock.patch.object(models, "installed", side_effect=urllib.error.URLError("refused")):
             definition = models.handoff_tool(CONFIG, NATIVE_TOOLS["ask_other_model"])
@@ -92,7 +92,7 @@ class AgentModel(unittest.TestCase):
         with self.assertLogs("brain", level="WARNING"):
             self.assertEqual(model_choice.agent_model({"model": "qwen3:14b"}, "arty/qwen2.5-coder:14b"), "Arty")
 
-    def test_an_unreachable_ollama_falls_back_to_the_main_model(self):
+    def test_an_unreachable_engine_falls_back_to_the_main_model(self):
         with unittest.mock.patch.object(models, "installed", side_effect=urllib.error.URLError("refused")), \
                 self.assertLogs("brain", level="WARNING"):
             self.assertEqual(model_choice.agent_model(CONFIG, "Arty"), "Arty")

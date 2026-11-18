@@ -184,7 +184,11 @@ class FakeHub:
         self.page = page
         self.calls = []
         self.routes = {name: "x" for name in ("workspace__browser_click", "workspace__browser_read", "workspace__browser_upload")}
-        self.tools = []
+
+    @property
+    def tools(self):
+        return [{"type": "function", "function": {"name": name, "description": name, "parameters": {"type": "object", "properties": {}}}}
+                for name in self.routes]
 
     def refresh(self):
         pass
@@ -362,8 +366,9 @@ class ApprovedOnce(unittest.TestCase):
 class Archive(unittest.TestCase):
     def test_odd_lines_in_the_archive_are_skipped(self):
         folder = Path(tempfile.mkdtemp(prefix="arty-archive-"))
-        good = {"time": "2026-11-11T10:00:00", "user": "hello", "assistant": "hi", "tools": []}
-        (folder / "2026-11.jsonl").write_text("\n".join([json.dumps(good), "[1, 2]", json.dumps({"time": "x"}),
+        an_hour_ago = datetime.now() - timedelta(hours=1)
+        good = {"time": an_hour_ago.isoformat(timespec="seconds"), "user": "hello", "assistant": "hi", "tools": []}
+        (folder / f"{an_hour_ago:%Y-%m}.jsonl").write_text("\n".join([json.dumps(good), "[1, 2]", json.dumps({"time": "x"}),
                                                           "not json", json.dumps(good)]) + "\n")
         config = {"conversations_dir": str(folder)}
         self.assertEqual(len(list(brain.archive_records(config))), 2)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_agent_mode import CLIENT_SYSTEM, CONFIG, READ_FILE, WEB_SEARCH, FakeOllama  # noqa: E402
+from test_agent_mode import CLIENT_SYSTEM, CONFIG, READ_FILE, WEB_SEARCH, FakeEngine  # noqa: E402
 from test_agent_options import CLIENT_FOLLOW_UPS, HARD_REQUEST, nudged_mid_task  # noqa: E402
 
 import agent_sessions  # noqa: E402
@@ -71,10 +71,10 @@ class ThinkingPerSession(unittest.TestCase):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def thinks(self, messages):
-        ollama = FakeOllama({"role": "assistant", "content": "Done."})
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = FakeEngine({"role": "assistant", "content": "Done."})
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             brain.run_turn(messages, "Arty", client_tools=[READ_FILE], agent=True)
-        return ollama.bodies[0]["think"]
+        return engine.bodies[0]["think"]
 
     def test_compaction_never_changes_the_choice_whatever_its_wording(self):
         for lead in COMPACTION_WORDINGS:
@@ -115,11 +115,11 @@ class ThinkingPerSession(unittest.TestCase):
         self.assertTrue(self.thinks(compacted(COMPACTION_WORDINGS[0], SETUP_SUMMARY, PLAIN_JOB)))
 
     def test_chat_turns_still_decide_from_their_own_message(self):
-        ollama = FakeOllama({"role": "assistant", "content": "Done."})
-        with unittest.mock.patch.object(connections, "http_json", side_effect=ollama):
+        engine = FakeEngine({"role": "assistant", "content": "Done."})
+        with unittest.mock.patch.object(connections, "http_json", side_effect=engine):
             brain.run_turn([{"role": "user", "content": PLAIN_JOB}, {"role": "assistant", "content": "ok"},
                             {"role": "user", "content": HARD_REQUEST}], "Arty")
-        self.assertTrue(ollama.bodies[0]["think"])
+        self.assertTrue(engine.bodies[0]["think"])
 
 
 class Remembering(unittest.TestCase):
