@@ -32,7 +32,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import unicodedata
 from pathlib import Path
 
 try:
@@ -41,6 +40,7 @@ except ImportError:
     import sre_parse as _parser
 
 from process import config as cfg
+from process import shown_text
 from process.config import setting
 from process.tools import guard_windows
 from process.tools import portal
@@ -728,16 +728,14 @@ def computer_look(question=""):
 
 
 MAX_LOOK_APP_CHARS = 80
+MAX_CARD_TITLE_CHARS = 200
+TITLE_SEPARATORS = (" - ", " | ")
 WHOLE_SCREEN = "your whole screen"
 PICTURE_MIME = "image/jpeg"
 
 
-def is_hidden_character(character):
-    return unicodedata.category(character).startswith(("C", "Z")) and character != " "
-
-
 def is_plain_app_name(app):
-    return len(app) <= MAX_LOOK_APP_CHARS and not any(is_hidden_character(character) for character in app)
+    return len(app) <= MAX_LOOK_APP_CHARS and not shown_text.has_hidden_text(app)
 
 
 class CannotLook(Exception):
@@ -802,45 +800,107 @@ def _is_covered(window):
     return False
 
 
-def _located_window_of(app):
-    wanted = app.lower().removesuffix(".desktop")
+def _is_overlapped_on_screen(window):
+    frame = session.top_level_window(window.window_id)
+    on_screen = session.windows_top_to_bottom()
+    frame_ids = [listed.window_id for listed in on_screen]
+    if frame is None or frame not in frame_ids:
+        return True
+    above = on_screen[:frame_ids.index(frame)]
+    return any(_overlaps(window, (listed.x, listed.y, listed.width, listed.height)) and not session.is_unmapped(listed.window_id)
+               for listed in above)
+
+
+def _something_may_be_on_top(app):
+    return CannotLook("cannot_see", f"Arty could not make sure that nothing, such as a menu or a tooltip, is on top of "
+                                    f"the window for {app}, and on this desktop it would show in the picture, so "
+                                    "nothing was sent. Close any menu over it and ask again.")
+
+
+def _refuse_if_anything_on_top(app, window):
+    if _is_covered(window):
+        raise CannotLook("cannot_see", f"The window for {app} is covered by another window, and on this desktop the "
+                                       "cover could show through, so nothing was sent. Bring it to the front and ask again.")
+    if _is_overlapped_on_screen(window):
+        raise _something_may_be_on_top(app)
+
+
+def _refuse_secret_app(app):
+    if _SECRET_APPS.search(app):
+        raise CannotLook("off_limits", f"{app} is where their passwords live, so it is never looked at.")
+
+
+def _is_named_window(wanted, window):
+    if window.app.casefold().removesuffix(".desktop") == wanted:
+        return True
+    if _BROWSER_WINDOWS.search(_squashed(window.app)) and not _BROWSER_WINDOWS.search(_squashed(wanted)):
+        return False
+    title = window.title.strip().casefold()
+    return title == wanted or any(title.endswith(separator + wanted) or title.startswith(wanted + separator)
+                                  for separator in TITLE_SEPARATORS)
+
+
+def _is_shown_on_card(text):
+    return len(text) <= MAX_CARD_TITLE_CHARS and shown_text.is_shown_exactly(text)
+
+
+def window_for_card(app):
+    _refuse_secret_app(app)
+    wanted = app.strip().casefold().removesuffix(".desktop")
     found = [window for window in session.located_windows()
-             if not _SECRET_APPS.search(f"{window.app} {window.title}") and _is_window_of(wanted, (window.app, window.title))]
+             if not _SECRET_APPS.search(f"{window.app} {window.title}") and _is_named_window(wanted, window)]
     if not found:
         raise CannotLook("not_found", _no_window(app, session.kind() == "x11"))
-    return found[0]
+    if len(found) > 1:
+        raise CannotLook("ambiguous", f"More than one window matches {app}, so none was picked and nothing was "
+                                      "captured. Ask again with the full title of the window.")
+    window = found[0]
+    if not _is_shown_on_card(window.title) or (window.app and not _is_shown_on_card(window.app)):
+        raise CannotLook("bad_request", f"The window for {app} has a title or name that cannot be shown exactly on "
+                                        "the Allow card, so it was not asked.")
+    return window
 
 
-def _one_window_picture(app):
-    window = _located_window_of(app)
+def _still_the_window(window):
+    current = next((listed for listed in session.located_windows() if listed.window_id == window.window_id), None)
+    if current is None:
+        raise CannotLook("not_found", f'The window "{window.title}" was closed, so nothing was captured.')
+    if (current.app, current.title) != (window.app, window.title):
+        raise CannotLook("changed", f'The window "{window.title}" changed after the card was shown, so nothing was '
+                                    "captured. Ask again.")
+    return current
+
+
+def _one_window_picture(app, window):
+    window = _still_the_window(window)
     note = _front_note(app)
     try:
         _guard_front()
     except PermissionError as refused:
         raise CannotLook("off_limits", str(refused))
-    if session.kind() == "x11" and _is_covered(window):
-        raise CannotLook("cannot_see", f"The window for {app} is covered by another window, and on this desktop the "
-                                       "cover could show through, so nothing was sent. Bring it to the front and ask again.")
+    if session.kind() == "x11":
+        _refuse_if_anything_on_top(app, window)
     try:
         image = _window_image(window.window_id)
     except Exception as failure:
         raise CannotLook("failed", f"Capturing the window failed, so nothing was sent: {type(failure).__name__}: "
                                    f"{str(failure)[:200]}")
+    if session.kind() == "x11" and _is_overlapped_on_screen(window):
+        raise _something_may_be_on_top(app)
     print("[computer] took a picture of one window for a linked app", flush=True)
-    return {"image": _jpeg_base64(image), "mime": PICTURE_MIME, "target": f'the window "{app}"',
+    return {"image": _jpeg_base64(image), "mime": PICTURE_MIME, "target": f'the window "{window.title}"',
             "window": window.title, "note": note}
 
 
-def window_picture(app="", only_window=False):
+def window_picture(app="", window=None):
     app = (app or "").strip()
     if not is_plain_app_name(app):
         raise CannotLook("bad_request", "That app name is too long or has characters that cannot be shown.")
     if not can_see():
         raise CannotLook("cannot_see", _no_screen())
-    if _SECRET_APPS.search(app):
-        raise CannotLook("off_limits", f"{app} is where their passwords live, so it is never looked at.")
-    if app and only_window:
-        return _one_window_picture(app)
+    _refuse_secret_app(app)
+    if app and window is not None:
+        return _one_window_picture(app, window)
     title, note = "", ""
     if app:
         found, is_every_window = _windows_of(app)

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 
 PRIME = int(
@@ -14,6 +15,7 @@ GENERATOR = 2
 ORDER = (PRIME - 1) // 2
 ELEMENT_BYTES = 256
 SHARE_HEX_CHARS = ELEMENT_BYTES * 2
+SHARE_FORMAT = re.compile(f"[0-9a-f]{{{SHARE_HEX_CHARS}}}")
 CONTEXT = b"arty-link-pair-v1"
 HASH_BLOCKS_PER_ELEMENT = 5
 APP = "app"
@@ -55,12 +57,9 @@ def share_hex(secret, code, role):
 
 
 def element_from_hex(text):
-    if not isinstance(text, str) or len(text) != SHARE_HEX_CHARS:
-        raise BadShare("A pairing share is 512 hex characters.")
-    try:
-        element = int(text, 16)
-    except ValueError:
-        raise BadShare("A pairing share is 512 hex characters.")
+    if not isinstance(text, str) or not SHARE_FORMAT.fullmatch(text):
+        raise BadShare("A pairing share is 512 lowercase hex characters.")
+    element = int(text, 16)
     is_in_group = 1 < element < PRIME - 1 and pow(element, ORDER, PRIME) == 1
     if not is_in_group:
         raise BadShare("That pairing share is not a value this pairing can use.")

@@ -920,6 +920,9 @@ def link_pairing_start(request: Request):
 def link_pair_start(body: LinkPairStartIn):
     try:
         return starfire_link.begin_pair(body.name, body.share)
+    except link.BadPairingShare as problem:
+        print(f"[link] pairing refused: {problem}", flush=True)
+        return _refused(str(problem), 400, reason="bad_request")
     except link.PairingRefused as problem:
         print(f"[link] pairing refused: {problem}", flush=True)
         return _refused(str(problem))
@@ -1021,8 +1024,7 @@ def _ask_the_user(question, request, what):
     notifications.record_link_ask(ask.text, ask.id)
     outcome = _answer_while_caller_waits(ask, request)
     print(f"[link] {what}: {LINK_OUTCOME_LOG[outcome]}", flush=True)
-    if outcome != "abandoned":
-        link_refusals.note(outcome == "allowed")
+    link_refusals.note(outcome == "allowed")
     return outcome
 
 
@@ -1067,29 +1069,40 @@ def link_computer(body: LinkComputerIn, request: Request):
         _link_computer_busy.release()
 
 
-LOOK_REFUSAL_STATUS = {"not_found": 404, "cannot_see": 503, "off_limits": 403, "bad_request": 400, "failed": 500}
+LOOK_REFUSAL_STATUS = {"not_found": 404, "cannot_see": 503, "off_limits": 403, "bad_request": 400, "failed": 500,
+                       "ambiguous": 409, "changed": 409}
 
 
-def _screenshot_question(app, only_window):
+def _screenshot_question(app, window):
     name = _linked_name()
     if not app:
         return f"{name} wants a screenshot of your whole screen. Allow it?"
-    if only_window:
-        return f'{name} wants a picture of the window "{app}", and only that window, captured by itself so nothing on top of it is sent. Allow it?'
+    if window is not None:
+        lines = [f"{name} wants a picture of one window, captured by itself so nothing on top of it is sent.",
+                 f"window: {window.title}"]
+        lines += [f"app: {window.app}"] if window.app else []
+        return "\n".join(lines + [link.ALLOW_LINE])
     return (f'{name} wants a screenshot of your whole screen, to look for the window "{app}". This desktop cannot show '
             "Arty where that window is, so the whole screen would be sent. Allow it?")
 
 
+def _look_refused(refusal):
+    print(f"[link] screenshot: {refusal.reason}", flush=True)
+    return _refused(str(refusal), LOOK_REFUSAL_STATUS.get(refusal.reason, 500), reason=refusal.reason)
+
+
 def _take_asked_picture(app, request):
-    only_window = bool(app) and computer.can_picture_one_window()
-    outcome = _ask_the_user(_screenshot_question(app, only_window), request, "screenshot")
+    try:
+        window = computer.window_for_card(app) if app and computer.can_picture_one_window() else None
+    except computer.CannotLook as refusal:
+        return _look_refused(refusal)
+    outcome = _ask_the_user(_screenshot_question(app, window), request, "screenshot")
     if outcome != "allowed":
         return _not_allowed(outcome)
     try:
-        picture = computer.window_picture(app, only_window=only_window)
+        picture = computer.window_picture(app, window=window)
     except computer.CannotLook as refusal:
-        print(f"[link] screenshot: {refusal.reason}", flush=True)
-        return _refused(str(refusal), LOOK_REFUSAL_STATUS.get(refusal.reason, 500), reason=refusal.reason)
+        return _look_refused(refusal)
     return {"ok": True, **picture}
 
 

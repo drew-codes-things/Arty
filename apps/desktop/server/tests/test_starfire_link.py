@@ -180,7 +180,7 @@ def test_the_app_and_arty_pair_once_through_the_open_routes(served):
 def test_a_pairing_message_that_is_not_a_share_is_refused_with_a_reason(served):
     client.post("/link/pairing/start", headers=WINDOW)
     answer = client.post("/link/pair/start", json={"name": APP_NAME, "share": "abcdef"})
-    assert answer.status_code == 403 and answer.json()["error"]
+    assert answer.status_code == 400 and answer.json()["error"]
 
 
 @pytest.mark.parametrize("headers", [

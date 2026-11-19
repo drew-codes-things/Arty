@@ -90,15 +90,19 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
   starfire Desktop can check it is talking to this Arty before it sends the token. Each step a linked app asks for
   shows an Allow / Not now card first, whatever Arty would have done on its own, and needs **HANDS** on. The card shows
   the whole step, every argument in full; a step that cannot be shown exactly (more than one line, over 1,000
-  characters, control, direction or invisible characters, or arguments the tool does not take) is refused before
-  anything is asked. After three refusals or unanswered cards in a row, new steps are turned away for a minute. If the
-  app stops waiting, the card is withdrawn and a late Allow does nothing (the card says it was too late). **Unlink** in
-  the same screen, or in starfire Desktop, ends it. A linked app can also ask for a picture (`/link/screenshot`, with
-  an app name when it wants one app): where Arty can find the window (X11, or X11 windows under Wayland, with `xprop`,
-  `xwininfo` and `xwd` installed) that window is captured by itself, so nothing on top of it is sent, and the card says
-  so. On plain X11 a window with another one over it is not captured (the cover could show through). Otherwise the
-  card says plainly that the whole screen would be sent. An
-  app with no window is reported as not found and nothing is captured, and a password manager is never looked at.
+  characters, control, direction, invisible or blank-looking characters such as fillers and combining marks, a run of
+  more than three spaces, or arguments the tool does not take) is refused before anything is asked. After three
+  refusals, unanswered cards or cards the app stopped waiting for in a row, new steps are turned away for a minute. If
+  the app stops waiting, the card is withdrawn and a late Allow does nothing (the card says it was too late).
+  **Unlink** in the same screen, or in starfire Desktop, ends it. A linked app can also ask for a picture
+  (`/link/screenshot`, with an app name when it wants one app): where Arty can find the window (X11, or X11 windows
+  under Wayland, with `xprop`, `xwininfo` and `xwd` installed) it finds it before asking, and the card names that
+  window's real title and app; only that window is captured, by itself, so nothing on top of it is sent. The name has
+  to match the app, the whole title, or the title up to a " - " or " | "; when more than one window matches, nothing
+  is asked and the app is told to use the full title. If the window closes or changes its title before the Allow,
+  nothing is captured. On plain X11 a window with anything over it, a menu or tooltip included, is not captured (the
+  cover could show through). Otherwise the card says plainly that the whole screen would be sent. An app with no
+  window is reported as not found and nothing is captured, and a password manager is never looked at.
 - **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) (it also loads in Edge, Brave,
   Chromium and Firefox) and it can open, read, scroll, look at, click and type in your own tabs too.
   Pair it once with the code under **Chrome sites…** in the tray menu; the same screen lists the sites Arty may

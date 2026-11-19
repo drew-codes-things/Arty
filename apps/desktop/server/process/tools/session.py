@@ -59,6 +59,12 @@ _WINDOW_ID = re.compile(r"0x[0-9a-fA-F]+")
 _PLACE_LINE = re.compile(r"^\s*(Absolute upper-left X|Absolute upper-left Y|Width|Height):\s*(-?\d+)\s*$", re.M)
 _PLACE_NAMES = {"Absolute upper-left X": "x", "Absolute upper-left Y": "y", "Width": "width", "Height": "height"}
 LocatedWindow = namedtuple("LocatedWindow", "app title x y width height window_id")
+ScreenWindow = namedtuple("ScreenWindow", "window_id x y width height")
+_SCREEN_WINDOW_LINE = re.compile(r"^[ \t]+(0x[0-9a-fA-F]+)[ \t].*[ \t](\d+)x(\d+)\+(-?\d+)\+(-?\d+)[ \t]+\+-?\d+\+-?\d+[ \t]*$", re.M)
+_ROOT_ID_LINE = re.compile(r"^[ \t]*Root window id:[ \t]*(0x[0-9a-fA-F]+)", re.M)
+_PARENT_ID_LINE = re.compile(r"^[ \t]*Parent window id:[ \t]*(0x[0-9a-fA-F]+)", re.M)
+_HIDDEN_MAP_STATE = re.compile(r"^[ \t]*Map State:[ \t]*(IsUnMapped|IsUnviewable)[ \t]*$", re.M)
+MAX_FRAME_DEPTH = 8
 _QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
@@ -158,3 +164,31 @@ def located_windows():
 
 def stacked_window_ids():
     return _WINDOW_ID.findall(run(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"]) or "")
+
+
+def _normal_window_id(window_id):
+    return hex(int(window_id, 16))
+
+
+def windows_top_to_bottom():
+    listing = run(["xwininfo", "-root", "-children"])
+    return [ScreenWindow(_normal_window_id(found.group(1)), int(found.group(4)), int(found.group(5)),
+                         int(found.group(2)), int(found.group(3)))
+            for found in _SCREEN_WINDOW_LINE.finditer(listing or "")]
+
+
+def top_level_window(window_id):
+    current = window_id
+    for _ in range(MAX_FRAME_DEPTH):
+        info = run(["xwininfo", "-children", "-id", current]) or ""
+        root, parent = _ROOT_ID_LINE.search(info), _PARENT_ID_LINE.search(info)
+        if not root or not parent:
+            return None
+        if int(parent.group(1), 16) == int(root.group(1), 16):
+            return _normal_window_id(current)
+        current = parent.group(1)
+    return None
+
+
+def is_unmapped(window_id):
+    return bool(_HIDDEN_MAP_STATE.search(run(["xwininfo", "-id", window_id]) or ""))

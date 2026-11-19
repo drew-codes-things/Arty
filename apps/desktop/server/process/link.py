@@ -8,7 +8,7 @@ import time
 import unicodedata
 
 from process import config as cfg
-from process import spake2
+from process import shown_text, spake2
 
 LINK_FILE = cfg.DATA_ROOT / ".arty_link"
 CODE_DIGITS = 6
@@ -33,6 +33,10 @@ class PairingRefused(ValueError):
     pass
 
 
+class BadPairingShare(PairingRefused):
+    pass
+
+
 class StepNotShown(ValueError):
     pass
 
@@ -42,7 +46,8 @@ def fingerprint(token):
 
 
 def _is_name_character(character):
-    return character in NAME_MARKS or unicodedata.category(character)[0] in ("L", "N")
+    is_letter_or_digit = unicodedata.category(character)[0] in ("L", "N")
+    return character in NAME_MARKS or (is_letter_or_digit and not shown_text.is_hidden(character))
 
 
 def _clean_name(name):
@@ -52,11 +57,6 @@ def _clean_name(name):
     return " ".join(kept.split())[:NAME_CHARS].strip() or DEFAULT_NAME
 
 
-def is_shown_exactly(text):
-    has_hidden = any(unicodedata.category(character)[0] in ("C", "Z") and character != " " for character in text)
-    return bool(text) and text == text.strip(" ") and not has_hidden
-
-
 def _shown_value(key, value):
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -64,9 +64,9 @@ def _shown_value(key, value):
         return json.dumps(value)
     if not isinstance(value, str):
         raise StepNotShown(f"The {key} is not plain text or a number, so the card could not show it.")
-    if not is_shown_exactly(value):
-        raise StepNotShown(f"The {key} is empty, has more than one line, spaces at its ends or characters "
-                           "that cannot be shown on the card, so it was not asked.")
+    if not shown_text.is_shown_exactly(value):
+        raise StepNotShown(f"The {key} is empty, has more than one line, spaces at its ends, a long run of spaces "
+                           "or characters that cannot be shown on the card, so it was not asked.")
     return value
 
 
@@ -126,15 +126,15 @@ class Link:
         return {"code": code, "expires_in": CODE_LIFETIME_SECONDS}
 
     def begin_pair(self, name, app_share):
+        try:
+            spake2.element_from_hex(app_share)
+        except spake2.BadShare as problem:
+            raise BadPairingShare(str(problem))
         with self._lock:
             pairing = self._usable_pairing()
             if pairing["wrong"] >= MAX_WRONG_CODES:
                 self._pairing = None
                 raise PairingRefused("Too many tries. Make a new code in Arty Desktop.")
-            try:
-                spake2.element_from_hex(app_share)
-            except spake2.BadShare as problem:
-                raise PairingRefused(str(problem))
             pairing["wrong"] += 1
             secret = spake2.new_secret()
             arty_share = spake2.share_hex(secret, pairing["code"], spake2.ARTY)

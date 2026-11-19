@@ -22,8 +22,8 @@ android {
         applicationId = "app.arty"
         minSdk = 28
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.5.4"
+        versionCode = 12
+        versionName = "1.5.8"
     }
 
     // personal: the owner's own build, with the brain's address and keys built in (keep that APK private).
