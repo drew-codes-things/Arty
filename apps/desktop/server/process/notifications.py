@@ -91,6 +91,10 @@ def record_notice(summary, notice_id):
     _record("Arty", summary, "", kind="notice", notice=notice_id)
 
 
+def record_link_ask(question, ask_id):
+    _record("Arty", question, "", kind="link_ask", ask=ask_id)
+
+
 def desktop_notifications(limit=10):
     """The tool: the latest notifications from other apps, newest last."""
     items = [n for n in _recent if n["kind"] == "app"][-max(1, min(int(limit or 10), KEEP)):]

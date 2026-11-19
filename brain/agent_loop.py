@@ -165,6 +165,31 @@ class WindowOverflow(ApiError):
                 "context_tokens": self.window}
 
 
+TOO_LONG_COUNTS = re.compile(r"request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)")
+TOO_LONG_ANSWER = "That message is too long for me to read in one go ({sizes}). Try sending a shorter part."
+OVERFLOW_AFTER_STEPS = "the step results did not fit in what I can read at once"
+
+
+def too_long_sizes(window: int, prompt_tokens: int | None) -> str:
+    if prompt_tokens is None:
+        return f"I can take about {window:,} tokens at once"
+    return f"with it this chat comes to about {prompt_tokens:,} tokens; I can take about {window:,} at once"
+
+
+class MessageTooLong(Exception):
+    def __init__(self, window: int, prompt_tokens: int | None = None):
+        super().__init__(TOO_LONG_ANSWER.format(sizes=too_long_sizes(window, prompt_tokens)))
+        self.window = window
+        self.prompt_tokens = prompt_tokens
+
+
+def message_too_long(config: dict, reason: str) -> MessageTooLong:
+    counts = TOO_LONG_COUNTS.search(reason)
+    if counts:
+        return MessageTooLong(int(counts.group(2)), int(counts.group(1)))
+    return MessageTooLong(models.context_tokens(config, config["model"]))
+
+
 def engine_error_text(error: Exception) -> str:
     if not isinstance(error, urllib.error.HTTPError):
         return str(error)
@@ -240,15 +265,27 @@ def failed_after_tools_reply(ran: list[tuple[str, str]], reason: str) -> dict:
             ENGINE_FAILED_KEY: True}
 
 
+def overflowed_reply(config: dict, reason: str, ran: list[tuple[str, str]]) -> dict:
+    if ran:
+        log.warning("the prompt outgrew %s's window after %d tool call(s) ran (%s); answering with the steps that ran",
+                    config["model"], len(ran), reason)
+        return failed_after_tools_reply(ran, OVERFLOW_AFTER_STEPS)
+    log.warning("a message did not fit %s's window (%s); answering that it is too long", config["model"], reason)
+    raise message_too_long(config, reason)
+
+
 def model_reply(body: dict, config: dict, draft, risky, on_thinking, agent: bool, ran: list[tuple[str, str]]) -> dict:
     try:
         return engine_reply(body, draft, risky, on_thinking)
     except (urllib.error.HTTPError, RuntimeError) as error:
         reason = engine_error_text(error)
-        if WINDOW_OVERFLOW.search(reason) and agent:
+        overflowed = bool(WINDOW_OVERFLOW.search(reason))
+        if overflowed and agent:
             log.warning("an agent conversation did not fit %s's window: %s", config["model"], reason)
             raise WindowOverflow(config["model"], models.context_tokens(config, config["model"])) from None
-        if WINDOW_OVERFLOW.search(reason) or not is_an_engine_fault(error) or draft and draft.raw:
+        if overflowed:
+            return overflowed_reply(config, reason, ran)
+        if not is_an_engine_fault(error) or draft and draft.raw:
             raise
         if ran:
             log.warning("the engine failed a reply from %s (%s) after %d tool call(s) ran; not retrying",

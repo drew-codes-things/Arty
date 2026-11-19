@@ -405,6 +405,7 @@ function buildTray() {
     { label: 'Connect to another Arty…', click: () => { win.show(); win.focus(); win.webContents.send('connect'); } },
     { label: 'Phone setup code…', click: () => { win.show(); win.focus(); win.webContents.send('phone-code'); } },
     { label: 'Chrome sites…', click: () => { win.show(); win.focus(); win.webContents.send('chrome-sites'); } },
+    { label: 'Link starfire…', click: () => { win.show(); win.focus(); win.webContents.send('starfire-link'); } },
     { type: 'separator' },
     { label: 'Quit Arty', click: () => app.quit() },
   ]);

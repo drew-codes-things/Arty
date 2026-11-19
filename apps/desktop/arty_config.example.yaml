@@ -52,6 +52,10 @@ asr:
 # Text to speech, on this computer.
 tts:
   provider: kokoro
+  server:
+    host: ""
+    port: 10300
+    timeout_seconds: 8
   kokoro:
     model_path: "models/kokoro/kokoro-v1.0.onnx"
     voices_path: "models/kokoro/voices-v1.0.bin"

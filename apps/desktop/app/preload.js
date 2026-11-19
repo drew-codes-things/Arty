@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('arty', {
   onConnect: (callback) => ipcRenderer.on('connect', () => callback()),
   onPhoneCode: (callback) => ipcRenderer.on('phone-code', () => callback()),
   onChromeSites: (callback) => ipcRenderer.on('chrome-sites', () => callback()),
+  onStarfireLink: (callback) => ipcRenderer.on('starfire-link', () => callback()),
 });

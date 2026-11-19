@@ -1,6 +1,6 @@
 {
   "name": "arty",
-  "version": "1.5.3",
+  "version": "1.5.7",
   "description": "Arty on your desktop: talk to it, and let it use your computer",
   "main": "main.js",
   "scripts": {

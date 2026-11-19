@@ -21,6 +21,7 @@ What it needs from the desktop:
 import base64
 import glob
 import html
+import io
 import json
 import fnmatch
 import itertools
@@ -31,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 try:
@@ -46,6 +48,7 @@ from process.tools import session
 from process.tools import shell
 from process.tools import win_apps
 from process.tools import win_desktop
+from process.tools import xwd
 
 HOME = Path.home()
 OUTPUT_CHARS = 6000
@@ -75,6 +78,9 @@ _SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "snap", "__pycache__", ".
               ".pytest_cache", "build", "dist", ".next", "target"}
 TIMEOUT = 120
 MAX_EDGE = 1600
+JPEG_QUALITY = 75
+ONE_WINDOW_TOOLS = ("xprop", "xwininfo", "xwd")
+WINDOW_CAPTURE_SECONDS = 15
 
 # Never read, written, opened or typed into, whatever she is asked.
 _SECRET_PLACES = [
@@ -657,6 +663,13 @@ def _screen_pixels():
 
 def screenshot():
     """(base64 JPEG scaled to MAX_EDGE, the screen's real width, height in pixels)."""
+    image = _screen_image()
+    width, height = image.size
+    _last_screen["size"] = (width, height)
+    return _jpeg_base64(image), width, height
+
+
+def _screen_image():
     from PIL import Image
 
     # A folder of its own, so the tool is given a file that doesn't exist yet
@@ -665,15 +678,19 @@ def screenshot():
         raw = os.path.join(folder, "screen.png")
         _capture(raw)
         with Image.open(raw) as shot:
-            width, height = shot.size
-            image = shot.convert("RGB")
-        _last_screen["size"] = (width, height)
-        if max(width, height) > MAX_EDGE:
-            scale = MAX_EDGE / max(width, height)
-            image = image.resize((round(width * scale), round(height * scale)), Image.LANCZOS)
-        scaled = os.path.join(folder, "screen.jpg")
-        image.save(scaled, format="JPEG", quality=75)
-        return base64.b64encode(Path(scaled).read_bytes()).decode(), width, height
+            return shot.convert("RGB")
+
+
+def _jpeg_base64(image):
+    from PIL import Image
+
+    width, height = image.size
+    if max(width, height) > MAX_EDGE:
+        scale = MAX_EDGE / max(width, height)
+        image = image.resize((round(width * scale), round(height * scale)), Image.LANCZOS)
+    encoded = io.BytesIO()
+    image.save(encoded, format="JPEG", quality=JPEG_QUALITY)
+    return base64.b64encode(encoded.getvalue()).decode()
 
 
 def ask_vision(prompt, image, max_tokens=300):
@@ -708,6 +725,139 @@ def computer_look(question=""):
         return f"Looking failed: {type(e).__name__}: {str(e)[:200]}"
     print("[computer] looked at the screen", flush=True)
     return reply or "You couldn't make anything out."
+
+
+MAX_LOOK_APP_CHARS = 80
+WHOLE_SCREEN = "your whole screen"
+PICTURE_MIME = "image/jpeg"
+
+
+def is_hidden_character(character):
+    return unicodedata.category(character).startswith(("C", "Z")) and character != " "
+
+
+def is_plain_app_name(app):
+    return len(app) <= MAX_LOOK_APP_CHARS and not any(is_hidden_character(character) for character in app)
+
+
+class CannotLook(Exception):
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _windows_of(app):
+    wanted = app.lower().removesuffix(".desktop")
+    listing, is_every_window = session.window_listing()
+    found = [(name, title) for name, titles in listing.items() for title in titles
+             if not _SECRET_APPS.search(f"{name} {title}") and _is_window_of(wanted, (name, title))]
+    return found, is_every_window
+
+
+def _no_window(app, is_every_window):
+    if is_every_window:
+        return f"There is no window for {app} open, so nothing was captured."
+    return (f"No window for {app} was found, but this desktop cannot list every window, "
+            "so it may be open. Nothing was captured.")
+
+
+def _front_note(app):
+    front = session.front_window()
+    if front is None:
+        return f"This desktop does not say whether {app} is in front, so other windows may cover it in this picture."
+    if _is_window_of(app.lower(), front):
+        return f"{app} is in front."
+    return f"{app} is open but not in front, so other windows may cover it in this picture."
+
+
+def can_picture_one_window():
+    desktop = session.kind()
+    has_x11_windows = desktop == "x11" or (desktop == "wayland" and bool(os.environ.get("DISPLAY")))
+    return has_x11_windows and all(session.have(tool) for tool in ONE_WINDOW_TOOLS)
+
+
+def _window_image(window_id):
+    with tempfile.TemporaryDirectory(prefix="arty-window-") as folder:
+        dump = os.path.join(folder, "window.xwd")
+        finished = subprocess.run(["xwd", "-silent", "-id", window_id, "-out", dump], capture_output=True,
+                                  timeout=WINDOW_CAPTURE_SECONDS, stdin=subprocess.DEVNULL)
+        if finished.returncode != 0 or not os.path.exists(dump):
+            raise RuntimeError(f"xwd could not capture the window: {finished.stderr.decode(errors='replace')[:200]}")
+        return xwd.image_from_xwd(Path(dump).read_bytes()).copy()
+
+
+def _overlaps(window, place):
+    x, y, width, height = place
+    return window.x < x + width and x < window.x + window.width and window.y < y + height and y < window.y + window.height
+
+
+def _is_covered(window):
+    stack = session.stacked_window_ids()
+    if window.window_id not in stack:
+        return True
+    for above_id in stack[stack.index(window.window_id) + 1:]:
+        place = session.window_place(above_id)
+        if place is None or _overlaps(window, place):
+            return True
+    return False
+
+
+def _located_window_of(app):
+    wanted = app.lower().removesuffix(".desktop")
+    found = [window for window in session.located_windows()
+             if not _SECRET_APPS.search(f"{window.app} {window.title}") and _is_window_of(wanted, (window.app, window.title))]
+    if not found:
+        raise CannotLook("not_found", _no_window(app, session.kind() == "x11"))
+    return found[0]
+
+
+def _one_window_picture(app):
+    window = _located_window_of(app)
+    note = _front_note(app)
+    try:
+        _guard_front()
+    except PermissionError as refused:
+        raise CannotLook("off_limits", str(refused))
+    if session.kind() == "x11" and _is_covered(window):
+        raise CannotLook("cannot_see", f"The window for {app} is covered by another window, and on this desktop the "
+                                       "cover could show through, so nothing was sent. Bring it to the front and ask again.")
+    try:
+        image = _window_image(window.window_id)
+    except Exception as failure:
+        raise CannotLook("failed", f"Capturing the window failed, so nothing was sent: {type(failure).__name__}: "
+                                   f"{str(failure)[:200]}")
+    print("[computer] took a picture of one window for a linked app", flush=True)
+    return {"image": _jpeg_base64(image), "mime": PICTURE_MIME, "target": f'the window "{app}"',
+            "window": window.title, "note": note}
+
+
+def window_picture(app="", only_window=False):
+    app = (app or "").strip()
+    if not is_plain_app_name(app):
+        raise CannotLook("bad_request", "That app name is too long or has characters that cannot be shown.")
+    if not can_see():
+        raise CannotLook("cannot_see", _no_screen())
+    if _SECRET_APPS.search(app):
+        raise CannotLook("off_limits", f"{app} is where their passwords live, so it is never looked at.")
+    if app and only_window:
+        return _one_window_picture(app)
+    title, note = "", ""
+    if app:
+        found, is_every_window = _windows_of(app)
+        if not found:
+            raise CannotLook("not_found", _no_window(app, is_every_window))
+        title = found[0][1]
+        note = _front_note(app)
+    try:
+        _guard_front()
+    except PermissionError as refused:
+        raise CannotLook("off_limits", str(refused))
+    try:
+        image, _width, _height = screenshot()
+    except Exception as failure:
+        raise CannotLook("failed", f"The screenshot failed: {type(failure).__name__}: {str(failure)[:200]}")
+    print("[computer] took a picture of the screen for a linked app", flush=True)
+    return {"image": image, "mime": PICTURE_MIME, "target": WHOLE_SCREEN, "window": title, "note": note}
 
 
 def _locate(target):
@@ -1107,6 +1257,15 @@ def computer_open(app="", url="", new_document=False):
 
 
 # --- what the app shows and asks ----------------------------------------------
+
+STEP_TITLES = {
+    "computer_look": "look at the screen", "computer_apps": "list the open windows", "computer_open": "open an app",
+    "computer_click": "click", "computer_type": "type text", "computer_key": "press keys", "computer_scroll": "scroll",
+    "computer_run_command": "run a command", "computer_read_file": "read a file", "computer_write_file": "write a file",
+    "computer_edit_file": "change part of a file", "computer_list_files": "list files", "computer_search": "search inside files",
+    "computer_find_files": "find files",
+}
+
 
 def describe(name, args):
     label = _described(name, args)

@@ -117,5 +117,5 @@ test('the tray opens the Chrome sites screen, which uses the service routes', ()
   assert.ok(page.indexOf('src="sites.js"') >= 0 && page.indexOf('src="sites.js"') < page.indexOf('src="app.js"'));
   const renderer = read('renderer/app.js');
   for (const route of ['/browser/sites', '/browser/sites/forget', '/browser/pairing']) assert.ok(renderer.includes(`'${route}'`), route);
-  assert.match(renderer, /window\.arty\?\.onChromeSites\(showChromeSites\)/);
+  assert.match(renderer, /window\.arty\?\.onChromeSites\(whenNotPresenting\(showChromeSites\)\)/);
 });

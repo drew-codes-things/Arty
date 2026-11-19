@@ -31,19 +31,27 @@ def request(text):
 def answer(ask_id, ok):
     with _lock:
         ask = _pending.pop(ask_id, None)
-    if ask is None:
-        return False
-    ask.ok = bool(ok)
-    ask._answered.set()
+        if ask is None:
+            return False
+        ask.ok = bool(ok)
+        ask._answered.set()
     return True
 
 
 def wait(ask, timeout=TIMEOUT):
     """True only if they said yes in time."""
-    answered = ask._answered.wait(timeout)
+    ask._answered.wait(timeout)
+    return withdraw(ask)
+
+
+def answered_within(ask, seconds):
+    return ask._answered.wait(seconds)
+
+
+def withdraw(ask):
     with _lock:
         _pending.pop(ask.id, None)
-    return answered and ask.ok
+        return ask._answered.is_set() and ask.ok
 
 
 def was_answered(ask):

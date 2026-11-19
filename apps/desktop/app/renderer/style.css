@@ -337,6 +337,7 @@ h2 { letter-spacing: -.015em; font-weight: 600; }
   transition: opacity var(--dur) var(--ease);
 }
 .ask p { margin: 0 0 var(--s-3); font-weight: 600; overflow-wrap: anywhere; }
+.ask.link-ask p { white-space: pre-wrap; }
 .ask .actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .ask button {
   height: var(--control-h);
@@ -478,10 +479,11 @@ h2 { letter-spacing: -.015em; font-weight: 600; }
 .panel.connecting .bar-actions, .panel.connecting .model-picker { visibility: hidden; }
 .panel.showing-code > :not(.bar):not(.phone-code) { display: none; }
 .panel.showing-sites > :not(.bar):not(.chrome-sites) { display: none; }
-.connect, .phone-code, .chrome-sites { flex: 1; overflow-y: auto; padding: var(--s-1) var(--s-4) var(--s-4); animation: fade-in var(--dur) var(--ease); }
-.phone-code, .chrome-sites { display: flex; flex-direction: column; gap: var(--s-3); }
-.phone-code[hidden], .chrome-sites[hidden] { display: none; }
-.connect-form h2, .phone-code h2, .chrome-sites h2 { margin: var(--s-1) 0 0; font-size: var(--fs-xl); }
+.panel.showing-link > :not(.bar):not(.starfire-link) { display: none; }
+.connect, .phone-code, .chrome-sites, .starfire-link { flex: 1; overflow-y: auto; padding: var(--s-1) var(--s-4) var(--s-4); animation: fade-in var(--dur) var(--ease); }
+.phone-code, .chrome-sites, .starfire-link { display: flex; flex-direction: column; gap: var(--s-3); }
+.phone-code[hidden], .chrome-sites[hidden], .starfire-link[hidden] { display: none; }
+.connect-form h2, .phone-code h2, .chrome-sites h2, .starfire-link h2 { margin: var(--s-1) 0 0; font-size: var(--fs-xl); }
 .phone-code-image { width: 100%; max-width: 320px; align-self: center; image-rendering: pixelated; border-radius: var(--r-lg); }
 .phone-code-image:not([src]) { display: none; }
 .site-list { display: flex; flex-direction: column; gap: var(--s-2); }
@@ -597,3 +599,23 @@ h2 { letter-spacing: -.015em; font-weight: 600; }
   .chip:active, .icon-button:active, .orb:active, .call-button:active, .ask button:active,
   .event-form .add:active, .site .cancel:active, .connect-actions button:active, .round:active { transform: none !important; }
 }
+
+.hero { position: relative; }
+.present-chip { position: absolute; top: var(--s-2); right: var(--s-3); }
+.presenting-badge {
+  display: none;
+  margin-top: var(--s-2);
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+html.presenting { font-size: 125%; }
+.presenting .presenting-badge { display: inline-flex; }
+.presenting #mem, .presenting #upd, .presenting #read, .presenting #memory, .presenting #updates, .presenting .past { display: none !important; }

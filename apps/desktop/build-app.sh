@@ -50,9 +50,13 @@ strip_hf_agent_tooling() {
   fi
 }
 
-if [ ! -d models/kokoro ] || [ ! -s models/kokoro/kokoro-v1.0.onnx ]; then
-  echo "No Kokoro voice model. Run ./download-kokoro.sh first." >&2
+if [ ! -s models/kokoro/voices-v1.0.bin ] || { [ ! -s models/kokoro/kokoro-v1.0.onnx ] && [ ! -s models/kokoro/kokoro-v1.0.int8.onnx ]; }; then
+  echo "No Kokoro voice model. Run ./download-kokoro.sh (or ./download-kokoro.sh light) first." >&2
   exit 1
+fi
+KOKORO_EXCLUDES=()
+if [ -s models/kokoro/kokoro-v1.0.int8.onnx ]; then
+  KOKORO_EXCLUDES=(--exclude 'kokoro-v1.0.onnx')
 fi
 
 mkdir -p "$CACHE"
@@ -96,7 +100,7 @@ strip_hf_agent_tooling
 
 echo "==> Copying the backend and its assets"
 rsync -a --exclude '__pycache__' --exclude 'tests' --exclude '.pytest_cache' --exclude '.mypy_cache' --exclude '.ruff_cache' server "$STAGE/"
-rsync -a models/kokoro "$STAGE/models/"
+rsync -a "${KOKORO_EXCLUDES[@]}" models/kokoro "$STAGE/models/"
 cp arty_config.example.yaml "$STAGE/arty_config.example.yaml"
 
 echo "==> Packing the app"

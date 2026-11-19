@@ -39,9 +39,19 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
 
 ## Features
 
-- **Voice** - speech recognition (Faster-Whisper) and Arty's voice (Kokoro), both on this PC. Click the orb or press
-  **Ctrl+Shift+Space** to talk; tap the orb or press Esc to stop it talking. **WAKE** listens for "Arty, ..."
-  hands-free.
+- **Voice** - speech recognition (Faster-Whisper) on this PC. Arty's voice comes from your voice server when
+  `tts.server.host` in `arty_config.yaml` is set and the server answers (it speaks to this PC through the Wyoming speech
+  port, 10300, so `SATELLITE_ALLOW` on the voice server must list this PC; see [voice](../../voice/README.md)), and from
+  Kokoro on this PC when it doesn't. Kokoro loads the first time it has to speak and is let go after 10 minutes without
+  speaking (`tts.kokoro.idle_unload_seconds`), which gives about 600 MB back. If `models/kokoro/kokoro-v1.0.int8.onnx`
+  (about 90 MB, fetched with `./download-kokoro.sh light`) is there it is used instead of the 325 MB model. Click the
+  orb or press **Ctrl+Shift+Space** to talk; tap the orb or press Esc to stop it talking. **WAKE** listens for
+  "Arty, ..." hands-free.
+- **Presentation mode** - for showing Arty to other people. The screen chip beside the orb, or **Ctrl+Shift+P** while
+  the window is in front, hides the Memory and Updates views, the chat history on screen, the read-aloud chip, desktop
+  notifications and spoken updates, models from the private add-on, addresses in error messages and tooltips, and the
+  tray's connect, phone code and Chrome sites screens; the text is bigger and a **Presenting** badge shows. Arty answers
+  as normal. It is remembered between runs and off by default.
 - **Hands** - off until you turn **HANDS** on. Then Arty can look at the screen, open apps, click, type, press keys,
   scroll, run commands and read or write files. The first click or key press in each reply, programs that aren't
   installed apps, changes to startup files (`~/.bashrc`, autostart, `~/.local/bin`) and anything risky - deleting,
@@ -72,6 +82,23 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
   Windows reads the time since your last key press or mouse move. On Linux it uses the desktop's idle time, or
   where the desktop won't give that (KDE on Wayland), how long the screen has been locked. Spotting long stretches
   in one app needs the app in front, which KDE on Wayland only gives with `kdotool` installed. Nothing is stored.
+- **Link to starfire Desktop** - starfire Desktop on the same PC can pair with Arty and ask for computer steps.
+  **Link starfire…** in the tray menu shows a 6 digit code (one use, two minutes, five tries and it is gone). The code
+  is never sent: both apps prove they know it with SPAKE2 (`/link/pair/start`, `/link/pair/finish`) and each works out
+  the same token, which only opens `/link/*` on 127.0.0.1, is kept as a hash here, and is refused from any web page
+  (Origin, Fetch Metadata and Host are checked). `/link/proof` answers a challenge with an HMAC keyed by that hash, so
+  starfire Desktop can check it is talking to this Arty before it sends the token. Each step a linked app asks for
+  shows an Allow / Not now card first, whatever Arty would have done on its own, and needs **HANDS** on. The card shows
+  the whole step, every argument in full; a step that cannot be shown exactly (more than one line, over 1,000
+  characters, control, direction or invisible characters, or arguments the tool does not take) is refused before
+  anything is asked. After three refusals or unanswered cards in a row, new steps are turned away for a minute. If the
+  app stops waiting, the card is withdrawn and a late Allow does nothing (the card says it was too late). **Unlink** in
+  the same screen, or in starfire Desktop, ends it. A linked app can also ask for a picture (`/link/screenshot`, with
+  an app name when it wants one app): where Arty can find the window (X11, or X11 windows under Wayland, with `xprop`,
+  `xwininfo` and `xwd` installed) that window is captured by itself, so nothing on top of it is sent, and the card says
+  so. On plain X11 a window with another one over it is not captured (the cover could show through). Otherwise the
+  card says plainly that the whole screen would be sent. An
+  app with no window is reported as not found and nothing is captured, and a password manager is never looked at.
 - **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) (it also loads in Edge, Brave,
   Chromium and Firefox) and it can open, read, scroll, look at, click and type in your own tabs too.
   Pair it once with the code under **Chrome sites…** in the tray menu; the same screen lists the sites Arty may

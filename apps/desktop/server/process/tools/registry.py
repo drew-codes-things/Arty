@@ -119,6 +119,15 @@ SPECS += [(name, fn, _computer_allowed, spec) for name, fn, spec in computer.SPE
 _COMPUTER_TOOLS = {name for name, *_ in computer.SPECS}
 
 
+def is_computer_tool(name):
+    return name in _COMPUTER_TOOLS
+
+
+def parameter_names(name):
+    spec = next((spec for tool, _fn, _on, spec in SPECS if tool == name), None)
+    return set(spec["parameters"].get("properties", {})) if spec else set()
+
+
 def _desktop_allowed():
     return desktop.available() and computer.available() and _allowed("computer")
 

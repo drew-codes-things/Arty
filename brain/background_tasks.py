@@ -12,7 +12,7 @@ from reply_rules import trim_offers, TOOL_FAILED
 from steering import on_my_desktop, task_links
 from replies import tidy_answer
 from native_calls import run_native_safely
-from agent_loop import AgentRun, run_agent
+from agent_loop import AgentRun, MessageTooLong, run_agent
 from archive import archive_turn
 
 log = logging.getLogger("brain")
@@ -143,6 +143,9 @@ def worker_step() -> bool:
     log.info("task %s started: %s", task["id"], task["title"])
     try:
         process_task(task)
+    except MessageTooLong as too_long:
+        log.info("task %s failed: it did not fit the model's window", task["id"])
+        fail_task(task, too_long)
     except Exception as error:
         log.exception("task %s failed", task["id"])
         fail_task(task, error)

@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import namedtuple
 
 from process.tools import shell, win_desktop
 
@@ -55,6 +56,9 @@ def spawn(command):
 
 
 _WINDOW_ID = re.compile(r"0x[0-9a-fA-F]+")
+_PLACE_LINE = re.compile(r"^\s*(Absolute upper-left X|Absolute upper-left Y|Width|Height):\s*(-?\d+)\s*$", re.M)
+_PLACE_NAMES = {"Absolute upper-left X": "x", "Absolute upper-left Y": "y", "Width": "width", "Height": "height"}
+LocatedWindow = namedtuple("LocatedWindow", "app title x y width height window_id")
 _QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
@@ -107,6 +111,10 @@ def window_titles():
         return win_desktop.window_titles()
     if kind() != "x11":
         return {}
+    return _x11_client_titles()
+
+
+def _x11_client_titles():
     listing = run(["xprop", "-root", "_NET_CLIENT_LIST"])
     out = {}
     for window_id in _WINDOW_ID.findall(listing or ""):
@@ -114,3 +122,39 @@ def window_titles():
         if window and window[1]:
             out.setdefault(window[0], []).append(window[1])
     return out
+
+
+def window_listing():
+    if kind() == "windows":
+        return win_desktop.window_titles(), True
+    if kind() == "x11":
+        return _x11_client_titles(), True
+    if kind() == "wayland" and os.environ.get("DISPLAY"):
+        return _x11_client_titles(), False
+    return {}, False
+
+
+def _place(xwininfo_text):
+    return {_PLACE_NAMES[name]: int(value) for name, value in _PLACE_LINE.findall(xwininfo_text or "")}
+
+
+def window_place(window_id):
+    place = _place(run(["xwininfo", "-id", window_id]))
+    if len(place) != len(_PLACE_NAMES):
+        return None
+    return place["x"], place["y"], place["width"], place["height"]
+
+
+def located_windows():
+    listing = run(["xprop", "-root", "_NET_CLIENT_LIST"])
+    found = []
+    for window_id in _WINDOW_ID.findall(listing or ""):
+        window = _x11_window(window_id)
+        place = window_place(window_id) if window and window[1] else None
+        if place is not None:
+            found.append(LocatedWindow(window[0], window[1], *place, window_id))
+    return found
+
+
+def stacked_window_ids():
+    return _WINDOW_ID.findall(run(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"]) or "")

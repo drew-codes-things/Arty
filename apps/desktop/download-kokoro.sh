@@ -6,7 +6,12 @@ BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-
 DIR="models/kokoro"
 mkdir -p "$DIR"
 
-for f in kokoro-v1.0.onnx voices-v1.0.bin; do
+MODEL="kokoro-v1.0.onnx"
+if [ "${1:-}" = "light" ]; then
+  MODEL="kokoro-v1.0.int8.onnx"
+fi
+
+for f in "$MODEL" voices-v1.0.bin; do
   if [ -s "$DIR/$f" ]; then
     echo "==> $f already present, skipping"
   else

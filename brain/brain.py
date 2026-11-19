@@ -72,7 +72,8 @@ from model_choice import (MODEL_ID, ENGINE_DOWN, VISION_KEEP_ALIVE, VISION_MAIN_
     session_keep_alive, use_requested_model, arty_description, chat_model, main_model_return)
 from native_calls import NATIVE_TOOL_ERRORS, look_up_first, declined_reply, run_native, convert_attachment
 from attachments import vision_model, expand_attachments, has_new_picture, to_engine_messages
-from agent_loop import know_the_page, private_upload, turn_rounds, WindowOverflow, AgentRun, run_agent, ROUNDS_KEY
+from agent_loop import (know_the_page, private_upload, turn_rounds, WindowOverflow, MessageTooLong, AgentRun, run_agent,
+                        ROUNDS_KEY)
 from honesty import client_tool_runs, empty_reply, be_honest
 from shortcuts import (addressed_to_arty, TALKED_ABOUT, recap_conversations, phone_action, asks_for_something_else,
     quick_action, judge_answer, researched_answer, solo_turn)
@@ -142,12 +143,15 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
     client names the calling app when it says ("phone": the Arty phone app, which can open calls and texts)."""
     if solo := models.solo_choice(requested_model):
         return solo_turn(solo["name"], messages, client)
-    if local_addon and (handled := local_addon.turn(messages, requested_model, client_tools, skip_groups, on_text)) is not None:
-        return handled
-    private = private_text_of_turn(messages, client_tools)
-    stream = private_text.GuardedStream(on_text, private) if on_text else None
-    answer, tools_used, raw, client_calls = arty_turn(messages, requested_model, client_tools, skip_groups, stream, client,
-                                                      any_installed, agent, on_thinking, on_model)
+    try:
+        if local_addon and (handled := local_addon.turn(messages, requested_model, client_tools, skip_groups, on_text)) is not None:
+            return handled
+        private = private_text_of_turn(messages, client_tools)
+        stream = private_text.GuardedStream(on_text, private) if on_text else None
+        answer, tools_used, raw, client_calls = arty_turn(messages, requested_model, client_tools, skip_groups, stream, client,
+                                                          any_installed, agent, on_thinking, on_model)
+    except MessageTooLong as too_long:
+        return str(too_long), [], {}, None
     kept = stream.kept(answer or "") if stream else 0
     return private_text.without_hidden_text(answer, private, kept), tools_used, raw, client_calls
 

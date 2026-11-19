@@ -5,6 +5,10 @@ const NEW_QUESTION = 'New question';
 const ANSWER_WAITING_CLASS = 'answer-waiting';
 const STEP_ANSWERS = [['Allow', true], ['Not now', false]];
 const TASK_LABELS = { approve: 'Approve', deny: 'Deny', done: 'Done', cancel: 'Cancel task' };
+const ALLOWED_NOTE = '  (allowed)';
+const NOT_ALLOWED_NOTE = '  (not allowed)';
+const TOO_LATE_NOTE = '  (too late, nothing was done)';
+const LINK_CARD_CLASS = 'link-ask';
 
 function answerGuard(clock = () => Date.now()) {
   let seenAt = null;
@@ -59,7 +63,11 @@ function answerButton(label, guard, onPress) {
   return button;
 }
 
-function stepQuestionCard(text, onAnswer) {
+function answeredNote(ok) {
+  return ok ? ALLOWED_NOTE : NOT_ALLOWED_NOTE;
+}
+
+function questionCard(text, onPress) {
   const card = document.createElement('div');
   card.className = 'ask';
   const question = document.createElement('p');
@@ -71,8 +79,7 @@ function stepQuestionCard(text, onAnswer) {
     const button = answerButton(label, guard, () => {
       card.classList.add('done');
       actions.remove();
-      question.textContent += ok ? '  (allowed)' : '  (not allowed)';
-      onAnswer(ok);
+      onPress(ok, question);
     });
     if (ok) button.className = 'allow';
     return button;
@@ -80,6 +87,22 @@ function stepQuestionCard(text, onAnswer) {
   actions.append(...buttons);
   card.append(question, actions);
   return flashNewQuestion(card, buttons, guard);
+}
+
+function stepQuestionCard(text, onAnswer) {
+  return questionCard(text, (ok, question) => {
+    question.textContent += answeredNote(ok);
+    onAnswer(ok);
+  });
+}
+
+function linkQuestionCard(text, onAnswer) {
+  const card = questionCard(text, async (ok, question) => {
+    const isTaken = await onAnswer(ok);
+    question.textContent += isTaken ? answeredNote(ok) : TOO_LATE_NOTE;
+  });
+  card.classList.add(LINK_CARD_CLASS);
+  return card;
 }
 
 function taskAnswerCard(actions, onAction) {

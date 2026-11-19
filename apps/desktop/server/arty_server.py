@@ -24,10 +24,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "server"))
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
 from process import brain
@@ -36,6 +37,8 @@ from process import call as phone_call
 from process import config as cfg
 from process import confirm
 from process import connection
+from process import link
+from process import spake2
 from process.notice import Noticer
 from process import notifications
 from process import phone_setup
@@ -48,6 +51,7 @@ from process.text_func.speech import SentenceSplitter, split_reply
 from process.tools import computer
 from process.tools import context
 from process.tools import idle
+from process.tools import registry as tools
 from process.tts_func.engine import TTSError, describe as describe_tts, synthesize
 from process.tts_func.engine import warmup as warmup_tts
 
@@ -63,7 +67,17 @@ FIREFOX_EXTENSION_ORIGIN = r"moz-extension://[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 EXTENSION_ORIGINS = re.compile(rf"{re.escape(EXTENSION_ORIGIN)}|{FIREFOX_EXTENSION_ORIGIN}")
 EXTENSION_ROUTES = {("POST", "/browser/next"), ("POST", "/browser/result")}
 EXTENSION_HELLO_ROUTE = ("POST", "/browser/hello")
-OPEN_ROUTES = {("GET", "/whoami")}
+OPEN_ROUTES = {("GET", "/whoami"), ("GET", "/link/proof"), ("POST", "/link/pair/start"), ("POST", "/link/pair/finish")}
+MAX_OPEN_BODY_BYTES = 4096
+LINK_ROUTES = {("GET", "/link/status"), ("POST", "/link/computer"), ("POST", "/link/screenshot"), ("POST", "/link/unlink")}
+LINK_TOKEN_HEADER = "x-arty-link"
+LINK_ASK_SECONDS = confirm.TIMEOUT
+CALLER_CHECK_SECONDS = 1.0
+CALLER_POLL_SECONDS = 0.05
+MAX_LINK_ARGUMENT_CHARS = link.MAX_ARGUMENT_CHARS
+starfire_link = link.Link(link.LINK_FILE)
+link_refusals = link.RefusalPause()
+_link_computer_busy = threading.Lock()
 PAIRING_FILE = cfg.DATA_ROOT / ".arty_browser_pairing"
 PAIRING_CODE = re.compile(r"[0-9a-f]{32}")
 PAIRING_BYTES = 16
@@ -72,6 +86,7 @@ _pairing_lock = threading.Lock()
 SERVICE_PROOF_CONTEXT = "arty-service:"
 BROWSER_PROOF_CONTEXT = "arty-browser-service:"
 NONCE = re.compile(r"[0-9a-f]{32}")
+PROOF_HEX_CHARS = 64
 
 
 def _write_token():
@@ -105,31 +120,53 @@ def _new_pairing_code():
     return code
 
 
+def _route(request):
+    return request.method, request.scope["path"]
+
+
 def _is_arty_extension(request):
-    is_extension_route = (request.method, request.url.path) in EXTENSION_ROUTES
+    is_extension_route = _route(request) in EXTENSION_ROUTES
     if not is_extension_route or not EXTENSION_ORIGINS.fullmatch(request.headers.get("origin") or ""):
         return False
     return hmac.compare_digest(request.headers.get("x-arty-pairing", "").encode(), pairing_code().encode())
 
 
 def _is_extension_saying_hello(request):
-    return (request.method, request.url.path) == EXTENSION_HELLO_ROUTE and bool(EXTENSION_ORIGINS.fullmatch(request.headers.get("origin") or ""))
+    return _route(request) == EXTENSION_HELLO_ROUTE and bool(EXTENSION_ORIGINS.fullmatch(request.headers.get("origin") or ""))
 
 
 def _is_from_a_web_page(request):
     return "origin" in request.headers or "sec-fetch-site" in request.headers
 
 
+def _is_linked_app(request):
+    return not _is_from_a_web_page(request) and starfire_link.verify(request.headers.get(LINK_TOKEN_HEADER, ""))
+
+
+def _open_body_problem(request):
+    if request.method != "POST":
+        return None
+    length = request.headers.get("content-length", "")
+    if not length.isdigit():
+        return JSONResponse({"error": "A request to this route must say how long it is."}, status_code=411)
+    if int(length) > MAX_OPEN_BODY_BYTES:
+        return JSONResponse({"error": "That request is too large."}, status_code=413)
+    return None
+
+
 @app.middleware("http")
 async def only_local_callers(request, call_next):
     host = (request.headers.get("host") or "").rsplit(":", 1)[0]
     origin = request.headers.get("origin") or ""
-    is_open_route = (request.method, request.url.path) in OPEN_ROUTES and not _is_from_a_web_page(request)
-    known_caller = is_open_route or _has_token(request) or _is_arty_extension(request) or _is_extension_saying_hello(request)
+    is_open_route = _route(request) in OPEN_ROUTES and not _is_from_a_web_page(request)
+    is_link_route = _route(request) in LINK_ROUTES and _is_linked_app(request)
+    known_caller = (is_open_route or _has_token(request) or is_link_route or _is_arty_extension(request)
+                    or _is_extension_saying_hello(request))
     if request.method == "OPTIONS" or (host in ALLOWED_HOSTS and known_caller):
-        return await call_next(request)
+        body_problem = _open_body_problem(request) if is_open_route else None
+        return body_problem or await call_next(request)
     fetch_from = "/".join(request.headers.get(h, "-") for h in ("sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"))
-    print(f"[security] refused {request.method} {request.url.path} (origin {origin or 'none'}, host {host or 'none'}, fetch {fetch_from})", flush=True)
+    print(f"[security] refused {request.method} {request.scope['path']} (origin {origin or 'none'}, host {host or 'none'}, fetch {fetch_from})", flush=True)
     return JSONResponse({"error": "not allowed"}, status_code=403)
 
 
@@ -843,6 +880,233 @@ def phone_setup_code(request: Request):
         return phone_setup.phone_code()
     except phone_setup.NothingToShare as problem:
         return JSONResponse({"error": str(problem)}, status_code=400)
+
+
+class LinkPairStartIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field("", max_length=link.MAX_SENT_NAME_CHARS)
+    share: str = Field(max_length=spake2.SHARE_HEX_CHARS)
+
+
+class LinkPairFinishIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session: str = Field(max_length=link.SESSION_BYTES * 2)
+    proof: str = Field(max_length=PROOF_HEX_CHARS)
+
+
+class LinkComputerIn(BaseModel):
+    tool: str
+    arguments: dict
+
+
+class LinkScreenshotIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    app: str = ""
+
+
+def _refused(message, status_code=403, **extra):
+    return JSONResponse({"error": message, **extra}, status_code=status_code)
+
+
+@app.post("/link/pairing/start")
+def link_pairing_start(request: Request):
+    if not _has_token(request):
+        return _refused("Only the Arty window can make a pairing code.")
+    print("[link] a pairing code is showing", flush=True)
+    return starfire_link.start_pairing()
+
+
+@app.post("/link/pair/start")
+def link_pair_start(body: LinkPairStartIn):
+    try:
+        return starfire_link.begin_pair(body.name, body.share)
+    except link.PairingRefused as problem:
+        print(f"[link] pairing refused: {problem}", flush=True)
+        return _refused(str(problem))
+
+
+@app.post("/link/pair/finish")
+def link_pair_finish(body: LinkPairFinishIn):
+    try:
+        starfire_link.finish_pair(body.session, body.proof)
+    except link.PairingRefused as problem:
+        print(f"[link] pairing refused: {problem}", flush=True)
+        return _refused(str(problem))
+    print(f"[link] paired with {starfire_link.status()['name']}", flush=True)
+    return {"ok": True}
+
+
+@app.get("/link/proof")
+def link_proof(request: Request, nonce: str = ""):
+    if not NONCE.fullmatch(nonce):
+        return _refused("nonce must be 32 lowercase hex characters", 400)
+    server = request.scope.get("server") or (None, None)
+    proof = starfire_link.proof(server[1], nonce)
+    if proof is None:
+        return _refused("Nothing is linked to Arty Desktop.", 404, linked=False)
+    return {"proof": proof}
+
+
+@app.get("/link")
+def link_state(request: Request):
+    if not _has_token(request):
+        return _refused("Only the Arty window can see who is linked.")
+    return starfire_link.status()
+
+
+@app.get("/link/status")
+def link_status(request: Request):
+    if not _is_linked_app(request):
+        return _refused("Only the linked app can ask this.")
+    return {"ok": True, "computer": computer.available()}
+
+
+@app.post("/link/unlink")
+def link_unlink(request: Request):
+    if not (_has_token(request) or _is_linked_app(request)):
+        return _refused("Only the Arty window or the linked app can unlink.")
+    starfire_link.unlink()
+    print("[link] unlinked", flush=True)
+    return {"ok": True}
+
+
+def _linked_name():
+    return starfire_link.status().get("name", link.DEFAULT_NAME)
+
+
+def _link_question(name, arguments):
+    shown = link.shown_step(arguments, tools.parameter_names(name))
+    title = f"{computer.STEP_TITLES.get(name, name)} ({name})"
+    return link.step_card(_linked_name(), title, shown, bool(tools.needs_ok(name, arguments, set())))
+
+
+def _is_caller_gone(request):
+    async def hears_disconnect():
+        with anyio.move_on_after(CALLER_POLL_SECONDS):
+            return (await request.receive()).get("type") == "http.disconnect"
+        return False
+    try:
+        return anyio.from_thread.run(hears_disconnect)
+    except RuntimeError:
+        return False
+
+
+def _answer_while_caller_waits(ask, request):
+    deadline = time.monotonic() + LINK_ASK_SECONDS
+    gone = False
+    while not confirm.answered_within(ask, max(0.0, min(CALLER_CHECK_SECONDS, deadline - time.monotonic()))):
+        gone = _is_caller_gone(request)
+        if gone or time.monotonic() >= deadline:
+            break
+    allowed = confirm.withdraw(ask)
+    if allowed and (gone or _is_caller_gone(request)):
+        return "abandoned"
+    if allowed:
+        return "allowed"
+    if gone:
+        return "abandoned"
+    return "declined" if confirm.was_answered(ask) else "timed_out"
+
+
+def _paused_refusal():
+    seconds = link_refusals.seconds_left()
+    if seconds <= 0:
+        return None
+    return _refused(f"Several steps in a row were refused or not answered, so Arty Desktop is not asking again for {round(seconds)} seconds.",
+                    429, reason="busy")
+
+
+def _ask_the_user(question, request, what):
+    ask = confirm.request(question)
+    notifications.record_link_ask(ask.text, ask.id)
+    outcome = _answer_while_caller_waits(ask, request)
+    print(f"[link] {what}: {LINK_OUTCOME_LOG[outcome]}", flush=True)
+    if outcome != "abandoned":
+        link_refusals.note(outcome == "allowed")
+    return outcome
+
+
+LINK_OUTCOME_LOG = {"allowed": "allowed", "declined": "they said no", "timed_out": "no answer in time",
+                    "abandoned": "the app stopped waiting, so nothing was done"}
+
+
+def _not_allowed(outcome):
+    if outcome == "abandoned":
+        return _refused("The app stopped waiting, so nothing was done.", declined=False, reason="abandoned")
+    declined = outcome == "declined"
+    return _refused("You said no." if declined else "Nobody answered in time, which counts as no.",
+                    declined=declined, reason="declined" if declined else "timed_out")
+
+
+def _run_asked_step(name, arguments, question, request):
+    outcome = _ask_the_user(question, request, name)
+    if outcome != "allowed":
+        return _not_allowed(outcome)
+    return {"ok": True, "result": tools.run(name, json.dumps(arguments))}
+
+
+@app.post("/link/computer")
+def link_computer(body: LinkComputerIn, request: Request):
+    if not _is_linked_app(request):
+        return _refused("Only the linked app can ask this.")
+    if not computer.available():
+        return _refused("Computer control is turned off in Arty Desktop.")
+    if not tools.is_computer_tool(body.tool):
+        return _refused(f"{body.tool or 'That'} is not one of Arty's computer tools.", 400)
+    if len(json.dumps(body.arguments)) > MAX_LINK_ARGUMENT_CHARS:
+        return _refused("That is too much to send in one step.", 413)
+    try:
+        question = _link_question(body.tool, body.arguments)
+    except link.StepNotShown as problem:
+        return _refused(str(problem), 400, reason="bad_request")
+    if not _link_computer_busy.acquire(blocking=False):
+        return _refused("Arty Desktop is already waiting on another step.", 429, reason="busy")
+    try:
+        return _paused_refusal() or _run_asked_step(body.tool, body.arguments, question, request)
+    finally:
+        _link_computer_busy.release()
+
+
+LOOK_REFUSAL_STATUS = {"not_found": 404, "cannot_see": 503, "off_limits": 403, "bad_request": 400, "failed": 500}
+
+
+def _screenshot_question(app, only_window):
+    name = _linked_name()
+    if not app:
+        return f"{name} wants a screenshot of your whole screen. Allow it?"
+    if only_window:
+        return f'{name} wants a picture of the window "{app}", and only that window, captured by itself so nothing on top of it is sent. Allow it?'
+    return (f'{name} wants a screenshot of your whole screen, to look for the window "{app}". This desktop cannot show '
+            "Arty where that window is, so the whole screen would be sent. Allow it?")
+
+
+def _take_asked_picture(app, request):
+    only_window = bool(app) and computer.can_picture_one_window()
+    outcome = _ask_the_user(_screenshot_question(app, only_window), request, "screenshot")
+    if outcome != "allowed":
+        return _not_allowed(outcome)
+    try:
+        picture = computer.window_picture(app, only_window=only_window)
+    except computer.CannotLook as refusal:
+        print(f"[link] screenshot: {refusal.reason}", flush=True)
+        return _refused(str(refusal), LOOK_REFUSAL_STATUS.get(refusal.reason, 500), reason=refusal.reason)
+    return {"ok": True, **picture}
+
+
+@app.post("/link/screenshot")
+def link_screenshot(body: LinkScreenshotIn, request: Request):
+    if not _is_linked_app(request):
+        return _refused("Only the linked app can ask this.")
+    if not computer.available():
+        return _refused("Computer control is turned off in Arty Desktop.", reason="unavailable")
+    if not computer.is_plain_app_name(body.app.strip()):
+        return _refused("That app name is too long or has characters that cannot be shown on the card.", 400, reason="bad_request")
+    if not _link_computer_busy.acquire(blocking=False):
+        return _refused("Arty Desktop is already waiting on another step.", 429, reason="busy")
+    try:
+        return _paused_refusal() or _take_asked_picture(body.app.strip(), request)
+    finally:
+        _link_computer_busy.release()
 
 
 @app.get("/whoami")

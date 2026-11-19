@@ -25,6 +25,12 @@ let thinkingTimer = null;
 const speech = { queue: [], playing: null, played: 0 };
 const CALL_TURN_GAP_MS = 400;
 const callState = { on: false, muted: false, startedAt: 0, timer: null };
+const presentation = createPresentation({
+  initial: readSetting(PRESENTING_STORAGE_KEY, false),
+  save: (value) => saveSetting(PRESENTING_STORAGE_KEY, value),
+  root: document.documentElement,
+  changed: showPresenting,
+});
 
 function readSetting(key, fallback) {
   try {
@@ -74,10 +80,55 @@ function add(kind, text) {
   log.querySelector('.empty')?.remove();
   const element = document.createElement('div');
   element.className = `msg ${kind}`;
-  element.textContent = text;
+  element.textContent = kind === 'error' ? forAudience(text) : text;
   log.append(element);
   scrollDown();
   return element;
+}
+
+function forAudience(text) {
+  return presentation.on ? scrubAddresses(text) : text;
+}
+
+function markPastMessages() {
+  for (const element of log.children) {
+    if (!element.classList.contains('empty')) element.classList.add('past');
+  }
+}
+
+function hideWhatTheAudienceMustNotSee() {
+  if (!$('memory').hidden || !$('updates').hidden) showView(null);
+  if (!$('connect-cancel').hidden) hideConnect();
+  hidePhoneCode();
+  hideChromeSites();
+  hideStarfireLink();
+  $('memory-list').replaceChildren();
+  $('update-list').replaceChildren();
+  $('memory-search').value = '';
+  memoryEntities = [];
+  markPastMessages();
+}
+
+function showPresenting(on) {
+  $('present').classList.toggle('on', on);
+  $('present').title = presentTooltip(on);
+  $('present').setAttribute('aria-pressed', String(on));
+  toggleModelMenu(false);
+  if (on) hideWhatTheAudienceMustNotSee();
+  else for (const element of log.querySelectorAll('.past')) element.classList.remove('past');
+  if (!on && log.querySelector('.msg')) log.querySelector('.empty')?.remove();
+  showEmpty();
+  modelsLoaded = false;
+  loadModels();
+  refreshHealth();
+}
+
+function whenNotPresenting(handler) {
+  return (...args) => {
+    if (!presentation.on) return handler(...args);
+    addActivity('Turn off presentation mode first', 'Presenting');
+    return undefined;
+  };
 }
 
 const MEDIA_LINK = /(!?)\[([^\]]*)\]\((https?:\/\/[^)\s]+\/arty-files\/[^)\s]+)\)/g;
@@ -273,7 +324,7 @@ function handle(event, stream) {
       break;
     case 'cancelled':
       stream.replying = false;
-      if (stream.kind !== 'wake' && event.message) stateLabel.textContent = event.message;
+      if (stream.kind !== 'wake' && event.message) stateLabel.textContent = forAudience(event.message);
       break;
     case 'error':
       stream.replying = false;
@@ -314,13 +365,33 @@ let replyNotification = null;
 
 /** "Arty has replied" on the desktop when the window isn't in front; clicking it brings the window up. */
 function notifyIfAway(reply) {
-  if (document.hasFocus() && !document.hidden) return;
+  if (presentation.on || (document.hasFocus() && !document.hidden)) return;
   replyNotification?.close(); // one at a time: the newest reply replaces it
   replyNotification = new Notification('Arty has replied', { body: replyPreview(reply), silent: true });
   replyNotification.onclick = () => window.arty?.show();
 }
 
 window.addEventListener('focus', () => replyNotification?.close());
+
+function showLinkQuestion(note) {
+  log.append(linkQuestionCard(note.summary, async (ok) => {
+    try {
+      const reply = await (await api('/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: note.ask, ok }) })).json();
+      return reply.ok === true;
+    } catch (error) {
+      add('error', 'Couldn’t send your answer to the local service.');
+      return false;
+    }
+  }));
+  scrollDown();
+  notifyLinkQuestion();
+}
+
+function notifyLinkQuestion() {
+  if (document.hasFocus() && !document.hidden) return;
+  const asking = new Notification('Arty needs your OK', { body: 'A linked app is asking to use this computer.', silent: true });
+  asking.onclick = () => window.arty?.show();
+}
 
 /** Runs one stream from the local service. Only one at a time; a waiting wake-word stream gives way. */
 async function run(kind, path, options = {}) {
@@ -529,15 +600,17 @@ function modelOption(model, current) {
 const AUTO_MODEL_ID = 'auto';
 
 function showModel(model, id) {
-  $('model-name').textContent = model ? model.name : (id === AUTO_MODEL_ID ? AUTO_MODEL_NAME : id || AUTO_MODEL_NAME);
+  const name = modelNameForAudience(model, presentation.on);
+  $('model-name').textContent = name ?? (id === AUTO_MODEL_ID ? AUTO_MODEL_NAME : id || AUTO_MODEL_NAME);
 }
 
 async function loadModels() {
   try {
     const { models, current } = await (await api(`/models`)).json();
     showModel(models.find((model) => model.id === current), current);
-    if (!models.length) return;
-    $('model-menu').replaceChildren(...models.map((model) => modelOption(model, current)));
+    const shown = modelsForAudience(models, presentation.on);
+    if (!shown.length) return;
+    $('model-menu').replaceChildren(...shown.map((model) => modelOption(model, current)));
     modelsLoaded = true;
   } catch { /* shown as offline by refreshHealth */ }
 }
@@ -569,7 +642,7 @@ async function refreshHealth() {
   try {
     const health = await (await api(`/health`)).json();
     picker.classList.remove('offline');
-    picker.title = `Which model Arty thinks with (brain at ${new URL(health.brain).host})`;
+    picker.title = presentation.on ? 'Which model Arty thinks with' : `Which model Arty thinks with (brain at ${new URL(health.brain).host})`;
     if (!modelsLoaded) loadModels();
     $('hands').classList.toggle('on', !!health.computer?.enabled);
     $('hands').title = health.computer?.enabled ? 'Arty can use this computer (click to stop)' : 'Let Arty use this computer';
@@ -631,7 +704,10 @@ async function watchNotifications() {
       const isFirstPoll = lastNotification === null;
       lastNotification = last;
       if (isFirstPoll) continue; // older ones are history, not news
+      notifications.filter((note) => note.kind === 'link_ask').forEach(showLinkQuestion);
+      if (presentation.on) continue;
       for (const note of notifications) {
+        if (note.kind === 'link_ask') continue;
         if (note.kind === 'notice') {
           if (!callState.on && !speech.playing && !(current && current.engaged)) {
             run('chat', '/notice/reply', {
@@ -725,6 +801,7 @@ async function showCalendar() {
 
 /** One view at a time: the conversation (null), 'updates' or 'calendar'. */
 function showView(view) {
+  if (!audienceMaySee(view, presentation.on)) return;
   $('updates').hidden = view !== 'updates';
   $('calendar').hidden = view !== 'calendar';
   $('memory').hidden = view !== 'memory';
@@ -930,6 +1007,7 @@ async function showUpdates() {
 
 /** Something new from Arty: into Updates (refreshed if open, counted if not), and a desktop notification when the window isn't in front. */
 function newUpdate(note) {
+  if (presentation.on) return;
   if (!$('updates').hidden) showUpdates();
   else setUnseen(unseenUpdates + 1);
   if (document.hasFocus()) return;
@@ -994,7 +1072,12 @@ $('look').addEventListener('click', askAboutScreen);
 orb.addEventListener('click', talk);
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && speech.playing) stopSpeaking();
+  if (isPresentShortcut(event)) {
+    event.preventDefault();
+    presentation.toggle();
+  }
 });
+$('present').addEventListener('click', () => presentation.toggle());
 window.arty?.onListen(talk);
 window.arty?.onLook(askAboutScreen);
 window.arty?.onExplain(explainCopied);
@@ -1035,7 +1118,7 @@ async function refreshStatus() {
 // ---------- start ----------
 
 function showEmpty() {
-  if (log.querySelector('.empty, .msg')) return;
+  if (log.querySelector('.empty, .msg:not(.past)')) return;
   const empty = document.createElement('div');
   empty.className = 'empty';
   empty.textContent = 'Ask anything, or tell Arty to do something on this computer.';
@@ -1052,6 +1135,8 @@ async function loadHistory() {
       if (message.role !== 'user') labelReply(element, message.arty);
     }
     showStatus(messages);
+    if (presentation.on) markPastMessages();
+    showEmpty();
     return true;
   } catch {
     return false;
@@ -1158,6 +1243,7 @@ function hidePhoneCode() {
 async function showPhoneCode() {
   hidePhoneCode();
   hideChromeSites();
+  hideStarfireLink();
   $('panel').classList.add('showing-code');
   $('phone-code').hidden = false;
   phoneCodeStatus('Making the code…');
@@ -1177,7 +1263,7 @@ async function showPhoneCode() {
 }
 
 $('phone-code-close').addEventListener('click', hidePhoneCode);
-window.arty?.onPhoneCode(showPhoneCode);
+window.arty?.onPhoneCode(whenNotPresenting(showPhoneCode));
 
 function chromeSitesStatus(text, problem = false) {
   const status = $('chrome-sites-status');
@@ -1211,6 +1297,7 @@ async function forgetChromeSite(site) {
 
 async function showChromeSites() {
   hidePhoneCode();
+  hideStarfireLink();
   $('panel').classList.add('showing-sites');
   $('chrome-sites').hidden = false;
   chromeSitesStatus('Loading…');
@@ -1225,12 +1312,13 @@ async function showChromeSites() {
 }
 
 $('chrome-sites-close').addEventListener('click', hideChromeSites);
-window.arty?.onChromeSites(showChromeSites);
+window.arty?.onChromeSites(whenNotPresenting(showChromeSites));
 $('connect-form').addEventListener('submit', saveConnection);
 $('connect-cancel').addEventListener('click', hideConnect);
-window.arty?.onConnect(async () => showConnect(await readConnection(), true));
+window.arty?.onConnect(whenNotPresenting(async () => showConnect(await readConnection(), true)));
 
 async function start() {
+  presentation.start();
   $('wake').classList.toggle('on', wakeOn);
   $('read').classList.toggle('on', readOn);
   settle();
@@ -1244,7 +1332,7 @@ async function start() {
   for (let attempt = 0; attempt < SERVICE_WAIT_ATTEMPTS && !(await loadHistory()); attempt += 1) {
     await pause(SERVICE_RETRY_MS);
   }
-  if (!log.querySelector('.msg')) showEmpty();
+  showEmpty();
   if (await staleCallCheck) addActivity('A call was still open from before the window reloaded, so it was ended', 'Call');
   refreshHealth();
   setInterval(refreshHealth, HEALTH_EVERY_MS);
@@ -1253,3 +1341,69 @@ async function start() {
 }
 
 start();
+
+let linkCodeTimer = null;
+
+function linkStatus(text, problem = false) {
+  const status = $('link-state');
+  status.textContent = text;
+  status.classList.toggle('problem', problem);
+}
+
+function hideStarfireLink() {
+  clearTimeout(linkCodeTimer);
+  $('panel').classList.remove('showing-link');
+  $('starfire-link').hidden = true;
+  $('link-code').textContent = '';
+}
+
+function groupedCode(code) {
+  const half = Math.ceil(code.length / 2);
+  return `${code.slice(0, half)} ${code.slice(half)}`;
+}
+
+async function refreshLink() {
+  const state = await answerOf(await api('/link'));
+  $('link-unlink').hidden = !state.linked;
+  linkStatus(state.linked ? `Linked with ${state.name}.` : 'Not linked yet.');
+}
+
+async function showStarfireLink() {
+  hidePhoneCode();
+  hideChromeSites();
+  $('panel').classList.add('showing-link');
+  $('starfire-link').hidden = false;
+  $('link-code').textContent = '';
+  linkStatus('Loading…');
+  try {
+    await refreshLink();
+  } catch (error) {
+    linkStatus(`Couldn't reach Arty's local service: ${error.message}`, true);
+  }
+}
+
+async function makeLinkCode() {
+  try {
+    const { code, expires_in } = await answerOf(await api('/link/pairing/start', { method: 'POST' }));
+    $('link-code').textContent = groupedCode(code);
+    clearTimeout(linkCodeTimer);
+    linkCodeTimer = setTimeout(() => { $('link-code').textContent = ''; linkStatus('The code ran out. Make a new one.'); }, expires_in * MILLISECONDS_PER_SECOND);
+    linkStatus(`Type this into starfire Desktop within ${Math.round(expires_in / SECONDS_PER_MINUTE)} minutes. It works once.`);
+  } catch (error) {
+    linkStatus(`Couldn't make a code: ${error.message}`, true);
+  }
+}
+
+async function unlinkStarfire() {
+  try {
+    await answerOf(await api('/link/unlink', { method: 'POST' }));
+    await refreshLink();
+  } catch (error) {
+    linkStatus(`Couldn't unlink: ${error.message}`, true);
+  }
+}
+
+$('link-make').addEventListener('click', makeLinkCode);
+$('link-unlink').addEventListener('click', unlinkStarfire);
+$('link-close').addEventListener('click', hideStarfireLink);
+window.arty?.onStarfireLink(whenNotPresenting(showStarfireLink));
