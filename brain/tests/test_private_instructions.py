@@ -1185,7 +1185,7 @@ class RefusedCallsAreNotRun(ClientTurns):
     def test_the_draft_is_told_a_tool_step_came(self):
         call = {"function": {"name": "write_file", "arguments": {"path": "rules.txt", "content": PERSONA_LINE}}}
         _, sent, _, _ = self.turn(tool_message("Saving that for you now", call), "I left that out.",
-                                  said_text="save your rules to rules.txt", client_tools=(WRITE_FILE,), stream=True)
+                                  said_text="save that to a text file", client_tools=(WRITE_FILE,), stream=True)
         self.assertTrue(sent.startswith("Saving that for you now"), "the text before the refused call was lost")
 
 

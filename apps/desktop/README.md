@@ -1,3 +1,5 @@
+[Arty](../../README.md) / Arty Desktop
+
 <div align="center">
 
 # Arty Desktop
@@ -33,7 +35,7 @@ app/ (Electron window)  ──HTTP──▶  server/arty_server.py (127.0.0.1:87
 The brain gets this PC's tools as OpenAI "client tools" (header `X-Arty-Client-Tools: 1`); when it calls one,
 `server/process/brain.py` runs it locally and sends back the result. Screen reading asks the brain's vision model
 directly (`X-Arty-Direct-Vision: 1`). The local service only listens on this computer, and only answers the app
-itself and [Arty for Chrome](../../extensions/browser/README.md).
+itself and [Arty for your browser](../../extensions/browser/README.md).
 
 ---
 
@@ -83,28 +85,16 @@ itself and [Arty for Chrome](../../extensions/browser/README.md).
   where the desktop won't give that (KDE on Wayland), how long the screen has been locked. Spotting long stretches
   in one app needs the app in front, which KDE on Wayland only gives with `kdotool` installed. Nothing is stored.
 - **Link to starfire Desktop** - starfire Desktop on the same PC can pair with Arty and ask for computer steps.
-  **Link starfire…** in the tray menu shows a 6 digit code (one use, two minutes, five tries and it is gone). The code
-  is never sent: both apps prove they know it with SPAKE2 (`/link/pair/start`, `/link/pair/finish`) and each works out
-  the same token, which only opens `/link/*` on 127.0.0.1, is kept as a hash here, and is refused from any web page
-  (Origin, Fetch Metadata and Host are checked). `/link/proof` answers a challenge with an HMAC keyed by that hash, so
-  starfire Desktop can check it is talking to this Arty before it sends the token. Each step a linked app asks for
-  shows an Allow / Not now card first, whatever Arty would have done on its own, and needs **HANDS** on. The card shows
-  the whole step, every argument in full; a step that cannot be shown exactly (more than one line, over 1,000
-  characters, control, direction, invisible or blank-looking characters such as fillers and combining marks, a run of
-  more than three spaces, or arguments the tool does not take) is refused before anything is asked. After three
-  refusals, unanswered cards or cards the app stopped waiting for in a row, new steps are turned away for a minute. If
-  the app stops waiting, the card is withdrawn and a late Allow does nothing (the card says it was too late).
-  **Unlink** in the same screen, or in starfire Desktop, ends it. A linked app can also ask for a picture
-  (`/link/screenshot`, with an app name when it wants one app): where Arty can find the window (X11, or X11 windows
-  under Wayland, with `xprop`, `xwininfo` and `xwd` installed) it finds it before asking, and the card names that
-  window's real title and app; only that window is captured, by itself, so nothing on top of it is sent. The name has
-  to match the app, the whole title, or the title up to a " - " or " | "; when more than one window matches, nothing
-  is asked and the app is told to use the full title. If the window closes or changes its title before the Allow,
-  nothing is captured. On plain X11 a window with anything over it, a menu or tooltip included, is not captured (the
-  cover could show through). Otherwise the card says plainly that the whole screen would be sent. An app with no
-  window is reported as not found and nothing is captured, and a password manager is never looked at.
-- **Your browser** - add [Arty for Chrome](../../extensions/browser/README.md) (it also loads in Edge, Brave,
-  Chromium and Firefox) and it can open, read, scroll, look at, click and type in your own tabs too.
+  **Link starfire…** in the tray menu shows a 6 digit code (one use, two minutes, five tries and it is gone). Each step
+  a linked app asks for shows an Allow / Not now card first, whatever Arty would have done on its own, and needs
+  **HANDS** on. **Unlink** in the same screen, or in starfire Desktop, ends it. How the pairing, the cards and window
+  screenshots work: [Linking Arty Desktop to starfire Desktop](../../docs/desktop-starfire-link.md).
+- **Your browser** - add [Arty for your browser](../../extensions/browser/README.md) (Chrome, Edge, Brave, Chromium
+  and Firefox) and it can open, read, scroll, look at, click and type in your own tabs too. Not released yet, coming
+  in Arty Desktop 1.5.9 with extension 1.6: Opera and Vivaldi, and choosing a browser by name. With it paired in
+  several browsers, ask for one by name ("open the BBC in Firefox"); Arty is told which are connected, and asking for
+  one that isn't gets an answer naming those that are, never another browser instead. Choosing by name needs
+  extension 1.6 or newer.
   Pair it once with the code under **Chrome sites…** in the tray menu; the same screen lists the sites Arty may
   use, each with a **Forget** button. Once Arty has read a page in your browser, any command, file change or link it
   opens in that same reply asks first.
@@ -123,8 +113,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.5.2-x86_64.AppImage
-./Arty-1.5.2-x86_64.AppImage
+chmod +x Arty-1.5.8-x86_64.AppImage
+./Arty-1.5.8-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -135,7 +125,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.5.2.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.5.8.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.
@@ -176,7 +166,7 @@ then copy `app/dist/Arty-*.AppImage` to `release/`. On Windows, `.\build-install
 Microsoft Visual C++ runtime on the build machine; it downloads Python 3.12 and the models) writes
 `app\dist\Arty-Setup-*.exe`.
 
-## Running the Tests
+## Tests
 
 ```bash
 .venv/bin/pip install -r server/requirements-dev.txt

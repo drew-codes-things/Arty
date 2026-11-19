@@ -27,6 +27,13 @@ PAGE_CHARS = 6000
 MARKED_CHARS = 5200
 DEFAULT_BROWSER = "default"
 BROWSER_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+FIREFOX = "Firefox"
+NAMED_BROWSERS = ("Chrome", "Edge", "Brave", "Opera", "Vivaldi", "Chromium", FIREFOX)
+BROWSER_ALIASES = {"google chrome": "Chrome", "microsoft edge": "Edge", "brave browser": "Brave", "opera gx": "Opera",
+                   "mozilla firefox": FIREFOX, "firefox esr": FIREFOX}
+CHOSEN_BROWSER = re.compile(r"(?P<name>.+?)(?: (?P<number>[2-9]))?")
+NAMING_EXTENSION_VERSION = "1.6"
+MAX_ASKED_BROWSER_CHARS = 40
 
 _browsers = {}
 _browsers_lock = threading.Lock()
@@ -35,6 +42,7 @@ _results = {}
 _waiting_for = set()
 _results_ready = threading.Condition()
 _ids = itertools.count(1)
+_pairing_order = itertools.count(1)
 _last_page = {}
 _asked = {}
 _sites_lock = threading.Lock()
@@ -93,15 +101,33 @@ class NoSuchTab(BrowserError):
     pass
 
 
+class NoSuchBrowser(BrowserError):
+    pass
+
+
 # ---------- the extension's side ----------
 
 def _browser(browser_id):
     with _browsers_lock:
-        return _browsers.setdefault(browser_id, {"commands": queue.Queue(), "seen": 0.0})
+        if browser_id not in _browsers:
+            _browsers[browser_id] = {"commands": queue.Queue(), "seen": 0.0, "name": None, "order": next(_pairing_order)}
+        return _browsers[browser_id]
 
 
 def _valid_browser_id(browser_id):
     return browser_id if isinstance(browser_id, str) and BROWSER_ID.fullmatch(browser_id) else DEFAULT_BROWSER
+
+
+def _trusted_name(reported, from_firefox):
+    if reported not in NAMED_BROWSERS:
+        return None
+    return reported if (reported == FIREFOX) == bool(from_firefox) else None
+
+
+def report_name(browser_id, reported, from_firefox):
+    entry = _browser(_valid_browser_id(browser_id))
+    with _browsers_lock:
+        entry["name"] = _trusted_name(reported, from_firefox)
 
 
 def next_command(timeout, browser_id=DEFAULT_BROWSER):
@@ -143,20 +169,91 @@ def connected():
     return bool(_live_browsers())
 
 
+def _shown_names():
+    now = time.time()
+    with _browsers_lock:
+        live = sorted((entry.get("order", 0), browser_id, entry.get("name")) for browser_id, entry in _browsers.items()
+                      if now - entry["seen"] < EXTENSION_SEEN_SECONDS)
+    shown, uses = {}, {}
+    for _order, browser_id, name in live:
+        if name is None:
+            shown[browser_id] = None
+            continue
+        uses[name] = uses.get(name, 0) + 1
+        shown[browser_id] = name if uses[name] == 1 else f"{name} {uses[name]}"
+    return shown
+
+
+def connected_names():
+    return [name for name in _shown_names().values() if name]
+
+
+def _listed(items):
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def connected_list(shown=None):
+    shown = _shown_names() if shown is None else shown
+    names = [name for name in shown.values() if name]
+    unnamed = len(shown) - len(names)
+    if unnamed == 1:
+        names.append(f"a browser with an extension older than {NAMING_EXTENSION_VERSION}, which doesn't say which browser it is")
+    elif unnamed:
+        names.append(f"{unnamed} browsers with an extension older than {NAMING_EXTENSION_VERSION}, "
+                     "which don't say which browsers they are")
+    return _listed(names) if names else "none"
+
+
+def canonical_browser(wanted):
+    match = CHOSEN_BROWSER.fullmatch(" ".join(str(wanted or "").split()).casefold())
+    if match is None:
+        return None
+    base = BROWSER_ALIASES.get(match["name"]) or next((name for name in NAMED_BROWSERS if name.casefold() == match["name"]), None)
+    if base is None:
+        return None
+    return base if match["number"] is None else f"{base} {match['number']}"
+
+
+def _is_named(wanted):
+    return wanted is not None and bool(str(wanted).strip())
+
+
+def _browser_called(wanted, shown):
+    name = canonical_browser(wanted)
+    chosen = next((browser_id for browser_id, shown_name in shown.items() if name is not None and shown_name == name), None)
+    if chosen is None:
+        asked = name or " ".join(str(wanted).split())[:MAX_ASKED_BROWSER_CHARS]
+        raise NoSuchBrowser(f"{asked} isn't connected to Arty. Connected now: {connected_list(shown)}. To use {asked}, "
+                            "the Arty extension has to be installed and paired in it, and it has to be open")
+    return chosen
+
+
+def _name_in_use():
+    with _browsers_lock:
+        last = _route["last"]
+    return _shown_names().get(last)
+
+
 def start_turn():
     with _browsers_lock:
         _route["reply"] = None
 
 
-def _chosen_browser():
+def _unnamed_choice(live):
+    pinned = _route["reply"]
+    if pinned is not None and pinned not in live:
+        raise BrowserError("the browser Arty was using in this reply stopped answering")
+    chosen = pinned or (_route["last"] if _route["last"] in live else None)
+    if chosen is None:
+        chosen = max(live, key=live.get) if live else DEFAULT_BROWSER
+    return chosen
+
+
+def _chosen_browser(wanted=None):
+    shown = _shown_names()
     live = _live_browsers()
     with _browsers_lock:
-        pinned = _route["reply"]
-        if pinned is not None and pinned not in live:
-            raise BrowserError("the browser Arty was using in this reply stopped answering")
-        chosen = pinned or (_route["last"] if _route["last"] in live else None)
-        if chosen is None:
-            chosen = max(live, key=live.get) if live else DEFAULT_BROWSER
+        chosen = _browser_called(wanted, shown) if _is_named(wanted) else _unnamed_choice(live)
         if chosen != _route["last"]:
             _last_page.clear()
         _route["reply"] = _route["last"] = chosen
@@ -165,10 +262,10 @@ def _chosen_browser():
 
 # ---------- the tools' side ----------
 
-def _ask(action, **arguments):
+def _ask(action, wanted=None, **arguments):
     if not connected():
         raise BrowserError("the Arty extension isn't connected (is your browser open, with the extension loaded and paired?)")
-    chosen = _browser(_chosen_browser())
+    chosen = _browser(_chosen_browser(wanted))
     command_id = next(_ids)
     with _results_ready:
         _waiting_for.add(command_id)
@@ -190,9 +287,9 @@ def _ask(action, **arguments):
     return result
 
 
-def _tool(action, describe_result, **arguments):
+def _tool(action, describe_result, wanted=None, **arguments):
     try:
-        result = _ask(action, **arguments)
+        result = _ask(action, wanted=wanted, **arguments)
         return _front_tab_note(result) + describe_result(result)
     except BrowserError as error:
         return f"Couldn't: {error}."
@@ -278,9 +375,9 @@ def _tab_id(tab):
                         "leave it out for the tab in front") from None
 
 
-def _tab_url(tab, front_if_missing=False):
+def _tab_url(tab, front_if_missing=False, wanted=None):
     tab = _tab_id(tab)
-    tabs = _ask("tabs").get("tabs", [])
+    tabs = _ask("tabs", wanted=wanted).get("tabs", [])
     front = next((t for t in tabs if t.get("active")), None)
     chosen = front if tab is None else next((t for t in tabs if t.get("id") == tab), None)
     if chosen is None and tab is not None:
@@ -303,8 +400,8 @@ def site_for_call(name, args):
         url = _normalised_url(args.get("url", ""))
         return "" if address_problem(url) else site_of(url)
     try:
-        return site_of(_tab_url(args.get("tab"), front_if_missing=name in LOOK_ONLY_TOOLS))
-    except NoSuchTab:
+        return site_of(_tab_url(args.get("tab"), front_if_missing=name in LOOK_ONLY_TOOLS, wanted=args.get("browser")))
+    except (NoSuchTab, NoSuchBrowser):
         raise
     except BrowserError:
         return ""
@@ -340,7 +437,7 @@ def _site_question(name, args):
         return None
     try:
         site = site_for_call(name, args)
-    except NoSuchTab:
+    except (NoSuchTab, NoSuchBrowser):
         return None
     if site_allowed(site):
         return None
@@ -473,13 +570,18 @@ def _found(words, result):
     return f"On tab {result.get('tab')}, the items matching those words:\n" + _marked("\n".join(lines)) + more
 
 
-def chrome_tabs():
+def _in_named(text):
+    name = _name_in_use()
+    return f"{text} in {name}" if name else text
+
+
+def chrome_tabs(browser=None):
     def show(result):
         tabs = result.get("tabs", [])
         if not tabs:
-            return "No browser tabs are open."
-        return "Browser tabs (* is the one in front):\n" + _marked("\n".join(_tab_line(t) for t in tabs))
-    return _tool("tabs", show)
+            return _in_named("No browser tabs are open") + "."
+        return _in_named("Browser tabs") + " (* is the one in front):\n" + _marked("\n".join(_tab_line(t) for t in tabs))
+    return _tool("tabs", show, browser)
 
 
 def _tab_line(tab):
@@ -505,11 +607,11 @@ def _checked_site(name, args):
     return site
 
 
-def _pinned(action, name, describe_result, more=dict, **arguments):
+def _pinned(action, name, describe_result, more=dict, browser=None, **arguments):
     try:
         arguments["tab"] = _tab_id(arguments.get("tab"))
-        site = _checked_site(name, {"tab": arguments["tab"]})
-        result = _ask(action, site=site, **arguments, **more())
+        site = _checked_site(name, {"tab": arguments["tab"], "browser": browser})
+        result = _ask(action, wanted=browser, site=site, **arguments, **more())
         return _front_tab_note(result) + describe_result(result)
     except BrowserError as error:
         return f"Couldn't: {error}."
@@ -522,35 +624,40 @@ def _where_now(result):
     return f"{site or 'a page'}, which they haven't allowed Arty to read (title and address hidden)"
 
 
-def chrome_open(url, new_tab=True):
+def _opened_line(tab):
+    name = _name_in_use()
+    return f"Opened it in {name}, tab {tab}." if name else f"Opened it in tab {tab}."
+
+
+def chrome_open(url, new_tab=True, browser=None):
     url = _normalised_url(url)
     problem = address_problem(url)
     if problem:
         return f"Couldn't: {problem}. Use the plain address of the site."
     try:
-        opened = _ask("open", url=url, newTab=bool(new_tab))
+        opened = _ask("open", wanted=browser, url=url, newTab=bool(new_tab))
         # Read it straight away: small models otherwise tell the user to read it themselves.
-        return f"Opened it in tab {opened.get('tab')}.\n" + _page(_ask("read", tab=opened.get("tab")))
+        return _opened_line(opened.get("tab")) + "\n" + _page(_ask("read", wanted=browser, tab=opened.get("tab")))
     except BrowserError as error:
         return f"Couldn't: {error}."
 
 
-def chrome_read(tab=None):
+def chrome_read(tab=None, browser=None):
     try:
         tab = _tab_id(tab)
     except BrowserError as error:
         return f"Couldn't: {error}."
-    return _tool("read", _page, tab=tab)
+    return _tool("read", _page, browser, tab=tab)
 
 
-def chrome_find(words, tab=None):
+def chrome_find(words, tab=None, browser=None):
     if not str(words or "").strip():
         return "Say which words to look for."
     try:
         tab = _tab_id(tab)
     except BrowserError as error:
         return f"Couldn't: {error}."
-    return _tool("read", lambda result: _found(words, result), tab=tab)
+    return _tool("read", lambda result: _found(words, result), browser, tab=tab)
 
 
 def _players_line(result):
@@ -611,16 +718,17 @@ def _click_target(item, text):
     return {"expected": str(text), "acts": matches[0].get("acts") or ""}
 
 
-def chrome_click(item=None, text="", tab=None):
-    return _pinned("click", "chrome_click", _clicked, more=lambda: _click_target(item, text), item=item, text=text, tab=tab)
+def chrome_click(item=None, text="", tab=None, browser=None):
+    return _pinned("click", "chrome_click", _clicked, more=lambda: _click_target(item, text), browser=browser, item=item,
+                   text=text, tab=tab)
 
 
-def chrome_type(text, item=None, label="", submit=False, tab=None):
+def chrome_type(text, item=None, label="", submit=False, tab=None, browser=None):
     known = _numbered_item(item) if item is not None else None
     expected = {"expected": known.get("label") or ""} if known else {}
     done = " and submitted it." if submit else "."
     return _pinned("type", "chrome_type", lambda r: f"Typed it in{done}\n" + _marked(f"Field: {r.get('field', 'the field')}"),
-                   text=text, item=item, label=label, submit=bool(submit), tab=tab, **expected)
+                   browser=browser, text=text, item=item, label=label, submit=bool(submit), tab=tab, **expected)
 
 
 def _tab_done(action, result):
@@ -628,10 +736,10 @@ def _tab_done(action, result):
     return f"Done: {action}." + (("\n" + _marked(f"Tab title: {result.get('title')}")) if shown else "")
 
 
-def chrome_tab(action, tab=None):
+def chrome_tab(action, tab=None, browser=None):
     if action not in TAB_ACTIONS:
         return "action must be switch, close, back, forward or reload."
-    return _pinned("tab", "chrome_tab", lambda r: _tab_done(action, r), tabAction=action, tab=tab)
+    return _pinned("tab", "chrome_tab", lambda r: _tab_done(action, r), browser=browser, tabAction=action, tab=tab)
 
 
 def _scrolled(direction, result):
@@ -646,10 +754,10 @@ def _scrolled(direction, result):
     return f"{heading}\n\n" + _marked((result.get("text") or "")[:PAGE_CHARS])
 
 
-def chrome_scroll(direction="down", tab=None):
+def chrome_scroll(direction="down", tab=None, browser=None):
     if direction not in SCROLL_DIRECTIONS:
         return "direction must be down, up, top or bottom."
-    return _pinned("scroll", "chrome_scroll", lambda r: _scrolled(direction, r), direction=direction, tab=tab)
+    return _pinned("scroll", "chrome_scroll", lambda r: _scrolled(direction, r), browser=browser, direction=direction, tab=tab)
 
 
 LOOK_PROMPT = """This is a picture of a web page in the user's browser ({site}). Describe what it shows plainly
@@ -693,13 +801,21 @@ def _seen(question, result):
     return f"What tab {result.get('tab')} shows:\n" + _marked(f"Title: {result.get('title', '')}\n{seen or 'Nothing could be made out.'}")
 
 
-def chrome_look(question="", tab=None):
-    return _pinned("screenshot", "chrome_look", lambda r: _seen(question, r), tab=tab)
+def chrome_look(question="", tab=None, browser=None):
+    return _pinned("screenshot", "chrome_look", lambda r: _seen(question, r), browser=browser, tab=tab)
 
 
 # ---------- what the app shows and asks ----------
 
 def describe(name, args):
+    said = _described(name, args)
+    if not _is_named(args.get("browser")):
+        return said
+    shown = canonical_browser(args.get("browser")) or "another browser"
+    return said.replace("in your browser", f"in {shown}") if "in your browser" in said else f"{said} in {shown}"
+
+
+def _described(name, args):
     if name == "chrome_open":
         return f"opening {args.get('url', '')[:60]} in your browser"
     if name == "chrome_click":
@@ -763,51 +879,55 @@ def step_target(name, args):
 
 
 _TAB = {"type": "integer", "description": "tab id from chrome_tabs; leave out for the tab in front"}
+BROWSER_CHOICE = ("which of their browsers to use, by name, when they name one (e.g. Firefox, Opera); leave out for the "
+                  "one used last. Only a connected browser works.")
+_BROWSER = {"type": "string", "description": BROWSER_CHOICE}
 SPECS = [
     ("chrome_tabs", chrome_tabs, {
         "description": "List the tabs open in the user's own browser.",
-        "parameters": {"type": "object", "properties": {}}}),
+        "parameters": {"type": "object", "properties": {"browser": _BROWSER}}}),
     ("chrome_open", chrome_open, {
         "description": "Open a web page (or search for words) in the user's own browser, logged in as them. Returns what the page says.",
         "parameters": {"type": "object", "properties": {
             "url": {"type": "string", "description": "a link, a site name, or words to search for"},
-            "new_tab": {"type": "boolean", "description": "default true"}}, "required": ["url"]}}),
+            "new_tab": {"type": "boolean", "description": "default true"}, "browser": _BROWSER}, "required": ["url"]}}),
     ("chrome_read", chrome_read, {
         "description": "Read the page in a browser tab: its main results first, then fields and other links and buttons, "
                        "numbered for chrome_click and chrome_type, then its text. Menus, sidebars, ads and short videos "
                        "are left out of the list; chrome_find finds them.",
-        "parameters": {"type": "object", "properties": {"tab": _TAB}}}),
+        "parameters": {"type": "object", "properties": {"tab": _TAB, "browser": _BROWSER}}}),
     ("chrome_find", chrome_find, {
         "description": "Find links, buttons and fields on a page in the user's browser by the words on them, from any part "
                        "of the page, with their numbers for chrome_click and chrome_type.",
         "parameters": {"type": "object", "properties": {
-            "words": {"type": "string", "description": "words on the item, e.g. sign in"}, "tab": _TAB},
+            "words": {"type": "string", "description": "words on the item, e.g. sign in"}, "tab": _TAB, "browser": _BROWSER},
             "required": ["words"]}}),
     ("chrome_click", chrome_click, {
         "description": "Click a link or button in the user's browser, by its number from chrome_read, or by its visible text.",
         "parameters": {"type": "object", "properties": {
-            "item": {"type": "integer"}, "text": {"type": "string"}, "tab": _TAB}}}),
+            "item": {"type": "integer"}, "text": {"type": "string"}, "tab": _TAB, "browser": _BROWSER}}}),
     ("chrome_type", chrome_type, {
         "description": "Type into a field in the user's browser, by its number from chrome_read or its label; submit=true presses Enter. "
                        "Never for passwords or card details.",
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string"}, "item": {"type": "integer"}, "label": {"type": "string"},
-            "submit": {"type": "boolean"}, "tab": _TAB}, "required": ["text"]}}),
+            "submit": {"type": "boolean"}, "tab": _TAB, "browser": _BROWSER}, "required": ["text"]}}),
     ("chrome_tab", chrome_tab, {
         "description": "Switch to, close, go back or forward in, or reload a browser tab.",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["switch", "close", "back", "forward", "reload"]}, "tab": _TAB},
+            "action": {"type": "string", "enum": ["switch", "close", "back", "forward", "reload"]}, "tab": _TAB,
+            "browser": _BROWSER},
             "required": ["action"]}}),
     ("chrome_scroll", chrome_scroll, {
         "description": "Scroll a page in the user's browser to see more of it: down or up by a screen, or to the top or "
                        "bottom. Returns the text now in view.",
         "parameters": {"type": "object", "properties": {
-            "direction": {"type": "string", "enum": list(SCROLL_DIRECTIONS)}, "tab": _TAB}}}),
+            "direction": {"type": "string", "enum": list(SCROLL_DIRECTIONS)}, "tab": _TAB, "browser": _BROWSER}}}),
     ("chrome_look", chrome_look, {
         "description": "Look at a tab in the user's browser as a picture, when its text isn't enough: pictures, videos "
                        "and whether one is playing, layout, pop-ups. Slower than chrome_read.",
         "parameters": {"type": "object", "properties": {
-            "question": {"type": "string", "description": "what to look for"}, "tab": _TAB}}}),
+            "question": {"type": "string", "description": "what to look for"}, "tab": _TAB, "browser": _BROWSER}}}),
     ("chrome_forget_site", chrome_forget_site, {
         "description": "Stop letting Arty read or use a site in the user's browser, when they ask: it will ask again next time.",
         "parameters": {"type": "object", "properties": {
@@ -816,7 +936,7 @@ SPECS = [
 ]
 
 PROMPT = """
-Their own browser (Chrome, Edge, Brave or Firefox, logged in as them): chrome_tabs, chrome_open,
+Their own browsers (logged in as them): chrome_tabs, chrome_open,
 chrome_read, chrome_find, chrome_click, chrome_type, chrome_tab, chrome_scroll and chrome_look drive it
 directly, much faster and more reliably than clicking on screenshots: use them for anything in their browser,
 whichever browser it is (the chrome_ names are just names). Read a page before
@@ -828,4 +948,19 @@ chrome_scroll shows more of a long page, chrome_look shows it as a picture.
 What is in their browser changes all the time: when they ask about a page or tab, check it with
 chrome_tabs or chrome_read instead of answering from earlier in the conversation.
 The first time Arty reads or uses a site the user is asked, once per site; chrome_forget_site
-undoes that when they ask."""
+undoes that when they ask.
+When they name a browser ("in Firefox", "in Opera"), pass it as browser; without one, the browser used last
+is used. Only browsers with the Arty extension installed and paired can be used: for any other, tell them that
+instead of using another browser."""
+
+
+def prompt():
+    return f"{PROMPT}\nBrowsers connected now: {connected_list()}."
+
+
+def offered_spec(spec):
+    properties = spec["parameters"].get("properties", {})
+    if "browser" not in properties:
+        return spec
+    choice = {**properties["browser"], "description": f"{BROWSER_CHOICE} Connected now: {connected_list()}."}
+    return {**spec, "parameters": {**spec["parameters"], "properties": {**properties, "browser": choice}}}

@@ -6,6 +6,7 @@
 
 **A self-hosted AI assistant that lives on your own homelab - talk to it from your PC, your phone, Telegram or Discord, and let it work on a computer of its own.**
 
+[![Release](https://img.shields.io/github/v/release/drew-codes-things/Arty?style=flat-square&label=release)](https://github.com/drew-codes-things/Arty/releases/latest)
 [![Python](https://img.shields.io/badge/python-3.13-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![ArtyEngine](https://img.shields.io/badge/ArtyEngine-local%20models-000000?style=flat-square)](https://github.com/drew-codes-things/ArtyEngine)
 [![Kotlin](https://img.shields.io/badge/kotlin-android-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
@@ -17,7 +18,20 @@
 
 ---
 
-## Overview
+## Contents
+
+- [What Arty is](#what-arty-is)
+- [The parts](#the-parts)
+- [Download](#download)
+- [Quick start](#quick-start)
+- [What it can do](#what-it-can-do)
+- [Limitations](#limitations)
+- [Documentation](#documentation)
+- [License](#license)
+
+---
+
+## What Arty is
 
 Arty is a personal assistant that runs entirely on your own hardware - the models, its memory, your chats and its
 tools all stay at home. It's calm, practical and a bit dry, and it actually does things rather than explaining how
@@ -29,80 +43,90 @@ voice assistant, the chat bots - talks to it through one API. Every app asks for
 start, so nothing is tied to anyone else's homelab.
 
 This repository is the brain, with everything that connects to it in its own folder. Each part has its own README
-covering how to install it, how to use it, and what it's been run and tested on.
+covering how to install it, how to use it, and what it's been run and tested on. How the parts fit together:
+[how Arty works](docs/how-it-works.md).
 
 ---
 
-## Requirements
+## The parts
 
-- **A Proxmox VE 9 host.** `provision.sh` and `deploy.sh` drive it over SSH with `pct` and `qm`.
-- **A Debian 13 LXC container for the brain** with nesting on (SearXNG runs in Docker inside it), about 6 GB of RAM
-  and a GPU passed through. Built and tested on an NVIDIA RTX 3060 (12 GB); `qwen3:14b` fills it. An AMD card is
-  handed over too, but that path is untested (see Provision). A smaller card runs a
-  smaller model with fewer tools per request. A bigger card can run a bigger model: any model that supports tool
-  calling works as the main model, and models over 16B are shown every tool at once (`tool_budget_by_size` in
-  `brain/brain.json`). A 27B to 32B model at 4-bit, such as `qwen3:32b`, needs roughly 20 GB of VRAM, so a 24 GB card;
-  only `qwen3:14b` has been tested. Set `vram_budget_mb` in `brain/brain.json` to a little under your card's memory
-  (11500, the default, suits 12 GB; about 23000 suits 24 GB): before a picture or a handed-off job loads a second
-  model, Arty unloads the others if together they would go over it.
-- **A Debian 13 VM with XFCE for Arty's own PC** - its browser, Gmail window, terminal and document library.
-- **SSH from the machine you deploy from** to the Proxmox host as root (the SSH host name in `PROXMOX`, `proxmox` by
-  default) and to Arty's PC (`DESKTOP`, `ai@<its address>`).
-- Optional: Uptime Kuma, Nextcloud and PufferPanel for the homelab tools, a Cloudflare tunnel for the phone apps away
-  from home, and a USB mic and speakers on the host for the voice assistant.
-
----
-
-## How It Works
-
-```
- Arty Desktop (your PC) ───────LAN─────────┐
- Arty for Android ───LAN or Cloudflare─────┤                       ┌─▶ ArtyEngine (models, GPU)
- Arty for iPhone ────LAN or Cloudflare─────┤                       │
- Arty for Quest (beta) ─▶ voice server ────┼─▶ Brain (:8081) ──────┼─▶ Tool hub: memory, web search, homelab, ...
- Voice assistant ("Hey Arty") ─────────────┤                       │
- Telegram / Discord bots ──────────────────┘                       └─▶ Arty's PC (VM): browser, Gmail window, terminal
-```
-
-Everything talks to the brain through one API ([docs/API.md](docs/API.md)) with the Arty API key. At home the apps
-use the brain's LAN address; away from home the phone apps go through a Cloudflare tunnel behind Cloudflare Access
-([docs/cloudflare.md](docs/cloudflare.md)). Notifications - reminders, briefings, task results, approvals, homelab
-alerts - only ever go to **Updates** in the phone and desktop apps.
-
-The brain and its tool servers send their model requests to the API of [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine)
-at `ARTY_ENGINE_URL` (`http://127.0.0.1:11438` unless set). ArtyEngine is Arty's own model engine: it downloads models by name or
-from Hugging Face, and its README covers installing it. It runs on an NVIDIA card; its AMD support is untested.
-ArtyEngine is a separate repository with a different licence: [PolyForm Strict 1.0.0](https://github.com/drew-codes-things/ArtyEngine/blob/main/LICENSE)
-(noncommercial use, no sharing or changed versions), not Arty's Apache 2.0.
-
----
-
-## What's In Here
-
-| Folder | What it is |
-|---|---|
-| `brain/`, `mcp/`, `bin/`, `services/`, `tests/` | The brain - persona, memory, the model and tool loop, tasks, schedules, briefings, the Arty API and its MCP tool servers (this README) |
-| [`arty-pc/`](arty-pc/) | Scripts for Arty's own computer - its browser agent, terminal, document reader and desktop look |
-| [`apps/desktop/`](apps/desktop/) | Arty Desktop - voice, a small window and hands on your Linux PC, with the AppImage in `release/` |
-| [`apps/android/`](apps/android/) | Arty for Android - chat, Updates, tasks, schedules and memory, with the APKs in `release/` |
-| [`apps/ios/`](apps/ios/) | Arty for iPhone - a Home Screen web app, served by the brain at `/ios/` |
-| [`apps/beta/quest/`](apps/beta/quest/) | **Beta.** Arty for Quest 3 and 3S, your own virtual reality AI - an orb and panels in passthrough, talking through the voice server |
-| [**Arty CLI**](https://github.com/drew-codes-things/ArtyCode) | Arty in your terminal on Linux and Windows, its own repository (ArtyCode): reads, edits and runs code in your project, asking first. Runs on your Arty; `arty` starts it |
-| [`apps/beta/code/`](apps/beta/code/) | **Beta, being replaced by Arty CLI.** Arty Code - the first terminal app |
-| [`voice/`](voice/) | The room mic and speakers hub, and the "Hey Arty" voice assistant |
-| [`extensions/gmail/`](extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
-| [`extensions/browser/`](extensions/browser/) | Browser extension (Chrome, Edge, Brave, Chromium, Firefox) that lets Arty Desktop use your own browser |
-| [`chat-bots/telegram/`](chat-bots/telegram/), [`chat-bots/discord/`](chat-bots/discord/) | Arty on Telegram and Discord, owner-only |
-| `doclib/` | The docs library: official documentation (Python, MDN, Node.js, Rust, Go, Java, C# from Microsoft's .NET docs, PostgreSQL, Docker, Git, Linux man pages, Proxmox, Debian and more) downloaded into a local search index that coding answers read first |
-| `code-runner/` | The code runner: a small container that runs the code in Arty's coding answers in a fresh sandbox (no network, capped time and memory) so Arty can fix real errors before it answers |
-| [`docs/`](docs/) | [The Arty API](docs/API.md), [linking everything through Cloudflare](docs/cloudflare.md), [connecting a phone](docs/connecting-a-phone.md) and [connecting a Quest headset](docs/connecting-a-headset.md) |
+| Part | What it is | Status |
+|---|---|---|
+| [Brain](docs/setup.md) (`brain/`, `mcp/`, `bin/`, `services/`) | Persona, memory, the model and tool loop, tasks, schedules, briefings, the Arty API and its MCP tool servers | Installed from this repository |
+| [Arty Desktop](apps/desktop/README.md) for Linux | Voice, a small window and hands on your Linux PC | Released: AppImage |
+| [Arty Desktop](apps/desktop/README.md) for Windows | The same app for Windows 10 and 11 | Released: installer |
+| [Arty for Android](apps/android/README.md) | Chat, Updates, tasks, schedules and memory | Released: APK |
+| [Arty for iPhone](apps/ios/README.md) | A Home Screen web app, served by the brain at `/ios/` | Nothing to download |
+| [Arty for your browser](extensions/browser/README.md) | Lets Arty Desktop use your own browser (Chrome, Edge, Brave, Chromium, Firefox) | Released: 1.5.1 |
+| [Arty for Quest](apps/beta/quest/README.md) | **Beta.** Your own virtual reality AI, an orb and panels in passthrough | Built from source |
+| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | Arty in your terminal on Linux and Windows, its own repository (ArtyCode) | Own repository |
+| [Arty Code](apps/beta/code/README.md) | **Beta, being replaced by Arty CLI.** The first terminal app | Built from source |
+| [Voice](voice/README.md) | The room mic and speakers hub, and the "Hey Arty" voice assistant | Installed from this repository |
+| [Telegram](chat-bots/telegram/README.md) and [Discord](chat-bots/discord/README.md) bots | Arty in chat apps, owner-only | Installed from this repository |
+| [Arty's PC](arty-pc/README.md) | Scripts for Arty's own computer: its browser agent, terminal, document reader and desktop look | Installed from this repository |
+| [Gmail Reader](extensions/gmail/README.md) | Chrome extension that lets Arty's PC read your Gmail | Installed from this repository |
+| `doclib/` and `code-runner/` | The docs library and the sandboxed code runner behind checked coding answers | Installed from this repository |
 
 The beta apps are built and unit-tested. Arty for Quest has run on a real headset (it connects and shows its panels) but not every feature has been tried.
 Arty CLI's Windows installer has been run on Windows 10 (PowerShell 5.1).
 
+Every folder, with what it holds: [what is in the repository](docs/repository-layout.md). Arty, Arty CLI and starfire.ai work
+together: [how to link them](docs/arty-cli-and-starfire.md).
+
 ---
 
-## Features
+## Download
+
+Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.5.8**
+([release notes](docs/release-notes-2026-11-19-1.5.8.md)):
+
+| Download | What it is |
+|---|---|
+| `Arty-1.5.8-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.5.8.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.5.8.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+
+The browser extension is not part of the 1.5.8 release. Its latest release is 1.5.1, attached to the
+[1.5.1 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.5.1):
+
+| Download | What it is |
+|---|---|
+| `Arty-Browser-Extension-1.5.1.zip` | [Arty for your browser](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
+| `Arty-Browser-Extension-1.5.1.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
+
+> **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
+
+The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
+in beta. The brain itself is installed from this repository (see the quick start).
+
+**Coming, not released yet:** Arty Desktop 1.5.9 and the browser extension 1.6 are in this source. Together they let
+Arty use a named browser ("open the BBC in Firefox") and add Opera and Vivaldi. The pages that describe them say so.
+
+Earlier release notes: [all releases](docs/README.md#release-notes).
+
+---
+
+## Quick start
+
+You need a Proxmox VE 9 host, a Debian 13 container for the brain with a GPU passed through (built and tested on an
+NVIDIA RTX 3060 with 12 GB) and a Debian 13 VM with XFCE for Arty's own PC. The full list is in
+[requirements](docs/setup.md#requirements). Then, in this order:
+
+1. [Install the software](docs/setup.md#1-install-the-software-in-the-brains-container) in the brain's container: Python, Node, Docker, [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine), the models and the tool hub.
+2. [Make the folders and keys](docs/setup.md#2-folders-and-keys) the brain reads its secrets from.
+3. [Make it yours](docs/setup.md#3-make-it-yours): your name, town, time zone and GPU size in `brain/brain.json`, `brain/persona.md` and `mcp/tool-hub.json`.
+4. [Provision](docs/setup.md#4-provision): copy `hosts.env.example` to `hosts.env`, put your own addresses in it, run `./provision.sh`.
+5. [Deploy](docs/setup.md#5-deploy): `CT=104 ./deploy.sh`, again after every change.
+6. [Arty's PC](docs/setup.md#6-artys-pc): sign its browser in to the sites it should use.
+7. [Your devices](docs/setup.md#7-your-devices): install the desktop, Android or iPhone app and connect it ([phone setup](docs/connecting-a-phone.md); away from home, [Cloudflare](docs/cloudflare.md)).
+8. [Optional](docs/setup.md#8-optional): voice, the chat bots, the code runner and the homelab tools.
+
+Every address is a setting and none is built in: [your own servers](docs/setup.md#your-own-servers).
+Once it runs, [using Arty](docs/using-arty.md) covers models, pictures, approvals, documents and memory.
+
+---
+
+## What it can do
 
 - **Local models** - runs on ArtyEngine on your own GPU; switch models with one command or by asking.
 - **Real actions, checked in code** - email, calendar, reminders, deadlines, dates, sums, units, currency and server
@@ -110,439 +134,39 @@ Arty CLI's Windows installer has been run on Windows 10 (PowerShell 5.1).
 - **Honesty check** - a reply that claims it did something when no tool ran (or every tool failed) is replaced with
   what really happened.
 - **Briefings** - a morning and evening summary built from your real servers, weather, calendar, reminders,
-  deadlines and email, with empty sections left out.
-- **Its own PC** - a Debian + XFCE virtual machine with a visible browser, a shared terminal you can watch, a
-  searchable `~/library` of documents, and a desktop look it picks itself.
+  deadlines and email.
+- **Its own PC** - a Debian + XFCE virtual machine with a visible browser, a shared terminal you can watch and a
+  searchable document library.
 - **Approvals** - anything that sends, buys, deletes or touches the homelab, or installs software on Arty's PC, waits
   for your Approve / Deny.
-- **Checked coding answers** - code questions read the matching section of the local docs library (or the web) first,
-  the code comes back in the reply, and with the optional code runner it is run in a sandbox and fixed before you see it.
-  For C, Arty also writes small checks from the examples in your question, runs them against the code (with the memory
-  checker on), and fixes the code when it crashes or a result the question states comes out wrong. Other languages can
-  be listed in `example_checks` in brain.json; they are off by default because the checks slowed answers without
-  making more of them right.
-- **Safe browsing** - logins, CAPTCHAs and bot checks are reported back to you, never got around.
-- **Everywhere** - desktop app, Android, iPhone and Quest (beta: your own virtual reality AI), voice, Telegram and Discord, all sharing one memory.
-- **Works with [starfire.ai](https://github.com/drew-codes-things/starfire.ai)** - add Arty to starfire as an
-  OpenAI-compatible provider and chat with it in the browser, next to the plain models on your engine.
-  starfire.ai is getting its own update too: a cleaner look with every control styled in both themes, and
-  the layout and features of the big chat apps (chat history in a sidebar, a Stop button, copy, edit and
-  regenerate on messages, code blocks with a Copy button, renaming and searching chats, tabbed settings and
-  keyboard shortcuts).
+- **Everywhere** - desktop app, Android, iPhone and Quest (beta), voice, Telegram and Discord, all sharing one memory.
 
----
-
-## Arty, Arty CLI and starfire.ai
-
-These three projects are made to work together, and each one links to the other two.
-
-| Project | What it is | What it does for the other two |
-|---|---|---|
-| [Arty](https://github.com/drew-codes-things/Arty) | The assistant: the brain and its API, tools, memory and voice, plus the desktop, Android, iPhone and Quest apps | Answers for both. Arty CLI and starfire.ai send their chats to Arty's API and use its models and tools. Arty's approve page sends a browser that has no Arty key to starfire.ai |
-| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) (ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser. With `/remote` it shares a session through Arty, so starfire.ai and the Arty phone apps can follow and steer it |
-| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (Arty CLI's browser login), lists and turns off approved devices, chooses which devices may control Arty CLI, and makes a new key with a QR code for a phone. Its admin-only **Arty CLI** page follows and steers shared Arty CLI sessions |
-
-How to link them:
-
-- **Arty to starfire.ai**: set `BRAIN_STARFIRE_URL` in the brain's `brain.env` to starfire's address, so the approve
-  page can send people there.
-- **starfire.ai to Arty**: add Arty under **Settings > Connections** with its address and API key, and set
-  `ARTY_BASE_URL` in starfire's `.env` to exactly the same address (the **Arty devices** page needs it).
-  `ARTY_PHONE_URL`, `ARTY_ACCESS_CLIENT_ID` and `ARTY_ACCESS_CLIENT_SECRET` are optional, for phone setup codes that
-  work away from home.
-- **Arty CLI to Arty**: set `ARTY_URL` (home network) or `ARTY_REMOTE_URL` (from anywhere, with
-  `ARTY_ACCESS_CLIENT_ID` and `ARTY_ACCESS_CLIENT_SECRET` if Cloudflare Access guards it), then run `arty login`.
-
-- **Controlling Arty CLI from elsewhere**: run `/remote` (or start with `arty --remote`) on the computer. Open
-  **Arty CLI** in starfire's sidebar, or **More > Computers** in the Android and iPhone apps. A phone with its own
-  device key also needs **Arty CLI** switched on for it on starfire's **Arty devices** page; Arty's own key always
-  may. Everything goes through Arty's brain (`/v1/remote/...`, see [docs/API.md](docs/API.md)).
-
-Arty works without the other two. Arty CLI needs Arty. starfire.ai works with other models on its own, but its
-**Arty devices** page needs Arty.
-
-## Download
-
-Everything to install is on the [Releases](../../releases) page:
-
-| Download | What it is |
-|---|---|
-| `Arty-1.5.2-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.5.2.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.5.2.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
-| `Arty-Browser-Extension-1.5.1.zip` | [Arty for Chrome](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
-| `Arty-Browser-Extension-1.5.1.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
-
-> **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
-
-The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
-in beta. The brain itself is installed from this repository (below).
-
-What changed lately: [release notes for 1.5.2](docs/release-notes-2026-11-13-1.5.2.md), and before that [1.5.1](docs/release-notes-2026-11-13-1.5.1.md).
-
----
-
-## Setup
-
-Set it up in this order. Steps 1 to 3 happen inside the brain's container (`pct enter <id>` on the host); the rest
-run from the machine you cloned this repository to.
-
-### 1. Install the software in the brain's container
-
-```bash
-apt update
-apt install -y python3 python3-venv python3-requests pipx nodejs npm jq curl openssl docker.io
-```
-
-Install [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine) as its README says, with its models in
-`/srv/ai/arty-engine/models`, listening on `127.0.0.1:11438`. Then download the models through it (once `deploy.sh` has
-run, `ai-pull <model>` does the same):
-
-```bash
-for model in qwen3:14b mimo-v2.6:9b nomic-embed-text; do
-  curl -fsS http://127.0.0.1:11438/api/pull -d "{\"model\": \"$model\", \"stream\": false}"
-done
-```
-
-The tool hub and its MCP servers:
-
-```bash
-export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
-pipx install mcp-server-fetch
-pipx install mcp-server-time
-npm install -g @modelcontextprotocol/server-memory @modelcontextprotocol/server-sequential-thinking
-python3 -m venv /opt/ai-mcp && /opt/ai-mcp/bin/pip install "mcp==1.30.0" cryptography
-python3 -m venv /opt/ai-hub && /opt/ai-hub/bin/pip install "mcp==2.3.0"
-```
-
-The tool hub (`hub/tool_hub.py`, run from `/opt/ai-hub`) starts every server in `mcp/tool-hub.json` with the official
-MCP Python SDK and serves each tool to the brain over HTTP on 127.0.0.1:8000, behind `MCPO_API_KEY`. A server that
-dies is started again. Tool servers get only the settings in their `env` plus a basic environment (`PATH`, `HOME`,
-`USER`), never the hub's key. The fetch server's page reader needs Node 20 or newer.
-
-### 2. Folders and keys
-
-```bash
-mkdir -p /srv/ai/brain/state /srv/ai/mcp /srv/ai/memory/conversations
-install -d -m 700 /srv/ai/secrets
-( umask 077
-  printf 'MCPO_API_KEY=%s\n' "$(openssl rand -hex 24)" > /srv/ai/secrets/mcpo.env
-  printf 'BRAIN_API_KEY=%s\n' "$(openssl rand -hex 24)" > /srv/ai/secrets/brain.env )
-```
-
-`provision.sh` adds the Arty API key (the one the apps use) and the alert token to `brain.env`, and writes them to
-`/srv/ai/secrets/arty-api.txt`. Nothing in `/srv/ai/secrets` is ever printed.
-
-### 3. Make it yours
-
-Before the first deploy, in this repository:
-
-| File | Change |
-|---|---|
-| `brain/brain.json` | `user_name` (what Arty calls you in its notes; it always talks to you as "you"), `weather` (your town and its latitude and longitude), `expiry_watch` (your domains and the sites whose certificates to watch), `vram_budget_mb` (if your GPU isn't 12 GB: a little under its memory in MB) |
-| `brain/persona.md` | Who Arty is and how it talks. Add a paragraph about yourself and one or two things you've written so it can match your style |
-| `mcp/tool-hub.json` | The time zone in `--local-timezone` |
-
-Then put your server addresses in the files listed in [Your Own Servers](#your-own-servers).
-
-### 4. Provision
-
-Nothing about your network is built in. Copy `hosts.env.example` to `hosts.env` and put your own addresses in it
-(it is read by `provision.sh` and `deploy.sh` and is never committed). The addresses in this guide are examples from
-the range reserved for documentation, 192.0.2.0/24: replace them with yours. Then, from this repository:
-
-```bash
-cp hosts.env.example hosts.env      # then edit it
-CT=104 DESKTOP_VMID=105 TIMEZONE=Europe/London ./provision.sh
-```
-
-You can also pass `AI_ADDRESS`, `DESKTOP_ADDRESS`, `HOST_ADDRESS` and `NETWORK` on the command line instead. The
-scripts stop and say which one is missing.
-
-It's safe to re-run. It installs the tools on Arty's PC, makes a Proxmox user that can read status everywhere and
-snapshot only Arty's PC, starts SearXNG and the HTTPS proxy, sets up the host's daily facts and security watch, picks
-the GPU at every boot, installs the speech-to-text tools and makes the Arty API key.
-
-**AMD cards: untested.** No real AMD card has run this path; it is written and tested against a fake host only.
-At every boot `arty-gpu-select` gives the container an NVIDIA card when one is fitted, exactly as before. With no
-NVIDIA card but an AMD one (a render node of the amdgpu driver), it passes that card's render node and card node, and
-`/dev/kfd` when the host has it, with the container's `render` and `video` group ids (992 and 44 unless
-`CT_RENDER_GID` and `CT_VIDEO_GID` say otherwise; `pct exec <ct> -- getent group render video` shows them). Set them
-in `/etc/default/arty-gpu-select` on the host (lines such as `CT_RENDER_GID=993`), which the boot run, a run by hand
-and provisioning's dry run all read; a value in the environment wins over the file, and a value that is not a number
-stops the script. `arty-gpu-select --kind` prints `nvidia`, `amd-rocm`, `amd-vulkan` or `none`, and `--gfx-target`
-prints the card's gfx target (such as `gfx1100`) from `/sys/class/kfd`. When the card is AMD, provisioning installs,
-in the container, the Vulkan loader and Mesa's Vulkan driver (the fallback when ROCm can't use the card), and with
-`/dev/kfd` also AMD's ROCm 10.0 libraries with the card's own kernel package (`rocm[libraries,device-<gfx target>]`,
-never a default one; with no readable target it skips this and says so) into `/srv/ai/arty-engine/rocm-10.0`,
-without keeping pip's cache, then prints the two library folders to list in ArtyEngine's
-`runtimes.rocm.library_path`; a failure there is a warning and the rest goes on. ArtyEngine itself still needs its ROCm or Vulkan runtime build and its config
-set by hand: its README, AMD GPUs (untested), covers both, and its `tools/amd-check.sh` checks a machine with an AMD
-card.
-
-| Setting | What it does | Leave unset to |
-|---|---|---|
-| `CT`, `DESKTOP_VMID` | The brain's container and Arty's PC | use 104 and 105 |
-| `AI_ADDRESS`, `DESKTOP_ADDRESS` | Their LAN addresses (required) | stop and ask for them |
-| `HOST_ADDRESS`, `NETWORK` | The Proxmox host and your LAN, for the security watch (required) | stop and ask for them |
-| `HEAL_GUESTS` | Guests Arty may start or restart after you tap Fix (ids, space separated) | give it none |
-| `NEXTCLOUD_CT` | The container running Nextcloud in Docker, for Arty's own account | skip it |
-| `HOST_FACTS_FILE` | The file on the Proxmox host that the brain's container sees as `/srv/ai/state/host-facts.json` (updates waiting and last backups, for the weekly report) | skip the daily host facts |
-| `BACKUP_JOB` | The id of a vzdump job in `/etc/pve/jobs.cfg` to add the brain and Arty's PC to. Nothing else in that job, and no other job, is changed | leave every backup job alone |
-| `SET_BACKUP_JOBS` | `no` skips the backup step even when `BACKUP_JOB` is set | add them to `BACKUP_JOB` |
-| `TIMEZONE` | The container's time zone | use Europe/London |
-
-Any of these can also go in `hosts.env`.
-
-### 5. Deploy
-
-```bash
-CT=104 ./deploy.sh
-```
-
-It copies the brain, the tool servers, the iPhone app and the services to the container, the scripts to Arty's PC,
-and restarts everything. It keeps whichever main model is live. If your chat bots run in PufferPanel, set
-`ARTY_DISCORD_ID` and `ARTY_TELEGRAM_ID` (their PufferPanel server ids) and `PUFFER_DIR` (PufferPanel's servers folder
-on the Proxmox host) in `hosts.env`; left empty, the bots are skipped. Run it again after every change.
-
-It also installs the docs library (`doclib/` in `/srv/ai/doclib`, the `docs-library` service on port 8889, answering
-only the container itself and its Docker network) and a timer that refreshes it every Sunday at 04:30. The library
-starts empty: build it once with `pct exec 104 -- systemctl start docs-library-refresh`, which downloads the
-documentation and builds the index in `/srv/ai/docs-library` (about 750 MB; it downloads nothing while less than 8 GB
-is free). Until then coding questions read the web as before. On a new server `provision.sh` also adds the library to
-SearXNG as the `local docs` engine; it leaves an existing `/srv/ai/searxng/settings.yml` alone.
-
-Check it's up:
-
-```bash
-pct exec 104 -- systemctl is-active arty-engine tool-hub brain docs-library
-pct exec 104 -- cat /srv/ai/secrets/arty-api.txt
-```
-
-### 6. Arty's PC
-
-Follow [arty-pc/README.md](arty-pc/README.md) to sign Arty's browser in to the sites it should use, then install the
-[Gmail extension](extensions/gmail/README.md) in it.
-
-### 7. Your devices
-
-| App | First start |
-|---|---|
-| [Arty Desktop](apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](apps/android/README.md) | Install `Arty-1.5.2.apk`; it asks for the same details and keeps them encrypted on the phone |
-| [Arty for iPhone](apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
-| [Arty for Quest](apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
-| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |
-| [Arty Code](apps/beta/code/README.md) (beta, being replaced) | `pipx install ./apps/beta/code`, then `arty-code setup` asks for the same details as Arty Desktop |
-| [Arty for Chrome](extensions/browser/README.md) | Lets Arty Desktop use your own browser: Chrome, Edge, Brave, Chromium or Firefox |
-
-Away from home, the phone apps need [the Cloudflare link](docs/cloudflare.md). To set a phone up, scan the QR code
-from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
-([docs/connecting-a-phone.md](docs/connecting-a-phone.md)).
-
-### 8. Optional
-
-- [Voice](voice/README.md): the room mic and speakers hub, "Hey Arty", and the Quest headset socket.
-- The [Telegram](chat-bots/telegram/README.md) and [Discord](chat-bots/discord/README.md) bots.
-- Code checking: make a small Debian container, put its id in `hosts.env` as `RUNNER_CT` (and the brain's as
-  `BRAIN_CT` if it isn't 104), and run `code-runner/deploy.sh setup` while it still has internet. Setup ends by putting
-  up the firewall (only `AI_ADDRESS` can reach it afterwards; take its gateway away too), and every deploy refuses to
-  start the runner without that firewall. Each deploy also makes sure the brain has a `CODE_RUNNER_TOKEN` in
-  `/srv/ai/secrets/brain.env` (it creates one the first time, and restarts a running brain whenever the brain runs
-  without the saved token) and copies it to the runner's `/etc/code-runner/runner.env`; the runner refuses any check
-  without it, and the brain logs a warning at start when `CODE_RUNNER_URL` is set without the token. Set
-  `CODE_RUNNER_URL=http://<runner address>:8790` in `/srv/ai/secrets/brain.env` and run `systemctl restart brain`.
-  Coding answers then end with a "Sandbox check:" line.
-  When an answer shows what its code prints, Arty compares that with what the code really printed in the sandbox and
-  fixes the answer if they differ (output that depends on time, randomness or input is left alone).
-  A script that reads input or command-line arguments is only fully tested when the question gives an example of that
-  input. Without one, the runner runs it with no input and then with a few made-up values, and a stop that only those
-  values cause is reported as "couldn't be tested without input" rather than as a pass or a failure. A bug that only
-  real input reaches can be missed that way, and now and then a correct script whose library rejects every made-up
-  value is failed. Put an example input in the question when you want the whole script checked.
-- Homelab tools: put the keys in `/srv/ai/secrets/homelab.env` (Uptime Kuma: `UPTIME_KUMA_API_KEY`, created under
-  Settings > API Keys) and run `systemctl restart tool-hub brain`.
-
----
-
-## Your Own Servers
-
-Every address is a setting and none is built in. The brain's own links, the chat bots and the voice assistant assume
-everything runs on the same machine (127.0.0.1) until you tell them otherwise, and a homelab service whose address
-is not set (Proxmox, Uptime Kuma, Nextcloud, PufferPanel, Arty's PC) simply says it is not set up. Set the ones you use:
-
-| Setting | Where | Used for |
-|---|---|---|
-| `BRAIN_PUBLIC_URL` | `/srv/ai/secrets/brain.env` | The brain's own address in links it hands out |
-| `BRAIN_FILES_URL` | `/srv/ai/secrets/brain.env` | The HTTPS address that serves files Arty makes for you |
-| `WORKSPACE_HOST` | `/srv/ai/secrets/workspace.env` (its own file: tool servers start with a minimal environment) | Arty's PC |
-| `PVE_URL` | `/srv/ai/secrets/homelab.env` | The Proxmox API |
-| `UPTIME_KUMA_URL`, `UPTIME_KUMA_API_KEY` | `/srv/ai/secrets/homelab.env` | Server status |
-| `NEXTCLOUD_URL` | `/srv/ai/secrets/homelab.env` | Nextcloud |
-| `PUFFERPANEL_URL`, `PUFFERPANEL_CLIENT_ID`, `PUFFERPANEL_CLIENT_SECRET` | `/srv/ai/secrets/homelab.env` | Game servers |
-| `CALENDAR_TIMEZONE` | `/srv/ai/secrets/brain.env` | Your calendar's time zone |
-| `HOMELAB_NAMES` | `/srv/ai/secrets/brain.env` | Comma-separated names of your Proxmox host and guests: a message naming one gets the server status looked up first |
-| `BRAIN_TRUSTED_PROXIES` | `/srv/ai/secrets/brain.env` | Comma-separated addresses of the proxy in front of the brain (the Cloudflare tunnel's machine), the only ones whose `Cf-Connecting-Ip` is believed |
-| `BRAIN_STARFIRE_URL` | `/srv/ai/secrets/brain.env` | starfire's address (for example `https://<STARFIRE_ADDRESS>`). When a computer asks to be approved in a browser with no Arty key, the approve page links to starfire's Arty devices page with a QR code. Leave it out and the page only offers pasting a key |
-| `BRAIN_URL`, `HUB_URL` | the voice assistant's environment | The brain and the voice hub ([voice/](voice/README.md)) |
-| `BRAIN_URL` | each chat bot's environment | The brain ([chat-bots/](chat-bots/)) |
-
-Restart with `systemctl restart tool-hub brain` after changing them.
-
----
-
-## Using It
-
-- **Chat**: any of the apps, or your own code through [the Arty API](docs/API.md).
-- **In the browser**: [starfire.ai](https://github.com/drew-codes-things/starfire.ai) works with Arty. In starfire,
-  Settings → Connections → "Add API provider" → "Other (OpenAI-compatible)", with the brain's address
-  (`http://<AI_ADDRESS>:8081/v1`) and `ARTY_API_KEY`, then pick `Arty` (the main model; the old name `assistant-core` still works).
-- **Models**: on the brain's container, `ai-pull <model>` downloads one (no arguments: suggestions), `ai-models`
-  lists them and `ai-use <model>` switches Arty's main model. Or tell Arty "switch to <model>" in any app; only models
-  in `arty_models` in `brain.json` are accepted. Only models that can use tools can run Arty, unless you run
-  `ai-toolless on`. Hugging Face GGUFs work too: `ai-pull hf.co/<user>/<repo>:Q4_K_M`, and
-  `ai-pull qwen2.5vl:7b --from hf.co/<user>/<repo>:Q4_K_M` installs that repository and quant under the short name
-  given (the same source again downloads nothing; another source replaces the model once its download is checked).
-  A download shows its progress,
-  Ctrl-C (or stopping the script with a signal) stops it in the engine too, and it gives up after
-  `AI_PULL_MAX_SECONDS` (6 hours unless set) or when nothing arrives for `AI_PULL_STALL_SECONDS` (5 minutes unless set).
-- **Pictures**: `vision_model` in `brain.json` names the model that looks at pictures (`mimo-v2.6:9b`). If it isn't
-  downloaded, the first downloaded Arty model that can see is used (never a solo model). The main model and the vision
-  model don't fit on the 12 GB card together, so with `route_picture_chats` (on by default) a chat with plain `Arty`
-  that brings a new picture is answered by the vision model too, when it can use tools, instead of swapping the main
-  model back in for the answer. A picture uploaded through the apps starts the vision model loading while you type.
-  Set it to `false` to keep picture answers on the main model.
-- **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (`qwen3:14b`, the main model). For
-  anything else the main model can hand a job to another model in `arty_models` with `ask_other_model`;
-  `model_strengths` says what each one is best at. A model that isn't downloaded is never picked: Arty falls back to
-  the coding model in agent mode, or the main model, and logs it.
-- **Coding questions in chat**: `route_coding_chats` in `brain.json` (on by default when `coding_model` is set) sends a
-  chat to `coding_model` when it picks plain `Arty` and is clearly about code: a fenced code block, a pasted traceback or
-  compiler error, or asking to write, fix, debug, refactor, review or explain code, a script, a regex, a SQL query or a
-  shell command. A short question only moves when the coding model is already loaded; a long paste, a whole app or a
-  change across a project always does, so a quick question doesn't cost two model swaps. Every app gets it with no update, the reply still comes from Arty, and the main model is loaded again
-  200 seconds later. A model picked by name, solo models and the private add-on are never moved; if the coding model
-  isn't downloaded, the main model answers and the brain logs it. Set it to `false` to keep every chat on the main model.
-  As shipped, `coding_model` is the main model, so coding chats stay on it; pictures still go to the vision model. A coding
-  question gets its code in the reply: Arty doesn't write it to a file or run it, on its PC or yours, unless you ask it
-  to run, test, save, install or build it.
-- **Models on their own**: anything listed in `solo_models` in `brain.json` shows up in the apps' model pickers as a
-  plain chat, with no Arty persona, tools or memory.
-- **Approvals**: in chat Arty asks and acts when you say yes; for background tasks, Updates in the phone and desktop
-  apps shows Approve and Deny. The rules are under `approval` in `brain.json`.
-- **Documents**: put files in `~/library` on Arty's PC (or ask Arty to) and `search_library` finds them by meaning.
-- **Changing how it behaves**: personality in `brain/persona.md`, instructions in `brain/system-prompt.md`, settings
-  in `brain/brain.json` (in `/srv/ai/brain` on the container). Changes apply on the next message.
-- **Memory**: each message gets the saved facts that match its words first, then the newest facts, up to 4,000
-  characters. Every night at 04:00 a tidy-up moves facts saved twice, and facts a later fact replaces (a new address,
-  a new job), out of memory into `/srv/ai/memory/archived-facts.jsonl`, with the reason. Nothing is deleted: say "undo
-  the memory tidy-up" to put the last night's facts back. `memory_tidy` in `brain.json` takes `"enabled": false` or
-  another `"hour"`.
-- **Where things live**: memory in `/srv/ai/memory/memory.json`, past chats in `/srv/ai/memory/conversations/`,
-  tasks and schedules in `/srv/ai/brain/state/arty.db`.
-
-### Safety
-
-- The Proxmox token reads status everywhere and can only snapshot Arty's PC. Background tasks snapshot the PC before
-  using it (the newest 3 are kept; roll back in Proxmox > the VM > Snapshots).
-- Pages with logins, CAPTCHAs or bot checks are reported as blocked and Arty asks you instead of getting around them.
-- Secrets live in `/srv/ai/secrets` (root-only) and are never printed by the scripts.
+The whole list, including checked coding answers, safe browsing and starfire.ai: [features](docs/features.md).
 
 ---
 
 ## Limitations
 
-Know these before relying on it:
+It can still be wrong outside the things handled in code, so check anything important. It writes about 33 tokens a
+second on an RTX 3060, keeps 24,576 tokens of context in a chat, runs one model on the GPU at a time, needs the home
+network for most things, and is built for a single owner. Email is read-only. The details: [limitations](docs/limitations.md).
 
-- **It can still be wrong** - outside the things handled in code, it can misunderstand a request, pick the wrong
-  tool or state something false with confidence. Check anything important, and read commands before running them.
-- **Speed** - `qwen3:14b` writes about 33 tokens a second on an RTX 3060. Replies usually start within a few
-  seconds, but the first message after the model has unloaded, or one that needs a new group of tools, can take
-  20-50 seconds.
-- **Short memory within a chat** - 24,576 tokens of context, so long chats are trimmed. Older chats and saved facts
-  are recalled by search, and it can miss details.
-- **One model on the GPU at a time** - looking at an image swaps the vision model in for that one look, then the main
-  model loads back in the background (about a minute in all).
-- **Limited actions** - email is read-only, through a signed-in Gmail window; it can't send it. It can't create VMs
-  or change the homelab on its own, and installing software on its own PC (sudo, apt, global npm or pip installs and
-  the like) waits for your approval.
-- **Home network for most things** - away from home only the phone apps work (through Cloudflare). Arty Desktop,
-  voice and the chat bots need the LAN, and nothing works while the brain's container is off. There's no cloud
-  fallback.
-- **One person** - it's built for a single owner; the bots and apps don't do multiple users.
+**Model size:** use a main model of about 7B or above. Smaller models are easier to trick into the wrong action, so
+Arty is not meant for them. Models from that size up are the recommended range; the ones it has been tested with are
+`qwen3:14b` (the main model), `mimo-v2.6:9b` (code and pictures) and `qwen2.5vl:7b` (pictures). No model is immune
+to a cleverly worded page or email, which is why Arty's approval checks stay on whichever model you use.
 
 ---
 
-## Tested On
+## Documentation
 
-| Part | Ran and tested on |
+| | |
 |---|---|
-| Brain | Proxmox VE 9.2.21 (kernel 7.0.14-25-pve), LXC container on Debian 13 (trixie), Python 3.13.5, ArtyEngine with `qwen3:14b` on an NVIDIA RTX 3060 (12 GB, CUDA), the tool hub on mcp 2.3.0 with tool servers on mcp 1.30.0, SearXNG |
-| Everything else | See each part's own README |
-
-## Test Results
-
-### Speed on the RTX 3060 (12 GB)
-
-| Model | Context | Writing speed | Placement |
-|---|---|---|---|
-| qwen2.5:3b | - | about 120 tok/s | 100% GPU |
-| qwen2.5:7b | 16k | 65 tok/s | 100% GPU, with qwen2.5vl:7b loaded too |
-| qwen3:14b | 8k | 33 tok/s | 100% GPU (10 GB) |
-| qwen3:14b | 12k | 33 tok/s | 100% GPU (11 GB) |
-| qwen3:14b | 16k | 22 tok/s | 9% spills onto the CPU (12 GB) |
-| qwen3:14b, q8_0 context cache | 12k | 29.6 tok/s | 100% GPU (9.8 GB, cache 1,020 MB instead of 1,920 MB) |
-| qwen3:14b, q8_0 context cache | 24k | 28.6 tok/s | 100% GPU (10.8 GB) |
-| qwen3:14b, q8_0 context cache | 32k | - | 11% spills onto the CPU |
-| mimo-v2.6:9b | - | 53.4 to 53.9 tok/s | 100% GPU (6.6 GB) |
-
-### qwen2.5:7b and qwen3:14b, same prompts
-
-| Test | qwen2.5:7b | qwen3:14b |
-|---|---|---|
-| Apples puzzle | Muddled: said "10 apples", then worked out 7 | 7, clean working |
-| Film end time (19:50 + 2h47) | Long, cut off before answering | 22:37, correct |
-| "How's my server?" with a tool available | Said it would check, but never called the tool | Called the tool straight away |
-| Code one-liner | Fine but wordy | Fine and tight |
-| Thinking mode on | n/a | 7, in 11 s |
-
-### qwen3:14b weak spots, and what fixed them
-
-A full run of 17 test questions passed 16; everything left over passed when re-tested after these fixes.
-
-| Weak spot | Before | After |
-|---|---|---|
-| Dates ("days until Christmas", "what day is 14 Feb 2027", Easter, "90 days from today") | 25-80 s, sometimes wrong | Under 2 s, exact: worked out in code first |
-| Currency | Web search, no number | ECB exchange rate, about 4 s |
-| Units (F to C, miles to km, pints) | Grabbed the time-zone tool | `convert_units` |
-| Sums and percentages | Did them in its head | `calculate` |
-| Clock maths (film end times) | OK | `clock_maths` for exactness |
-| "Write me a command" | Ran it instead of writing it | Gives just the code; "...and run it" runs it |
-| All 65 tools offered at once | About 10,500 tokens of tool descriptions in what was then a 12,288-token context (24,576 now) | Capped at 40 tools per message, about 5,000 tokens |
-
-### The honesty check, judged by qwen3:14b
-
-| Test | Result |
-|---|---|
-| "All sorted, the living room lights are on now" with no tool run | Corrected to say it didn't turn them on |
-| Same, in Spanish ("Tu recordatorio está listo para las 18:00") | Corrected, in Spanish |
-| "Kuma is back up and running" after the restart tool failed | Corrected, giving the permission error |
-| A desktop description after `look_at_desktop` | Left alone |
-| "I've opened the page" after the browser really opened it | Wrongly flagged, so the check now only runs when no action tool worked or one failed |
-| A plain answer ("Paris is the capital of France") | Left alone, in 0.4 s |
-
-### Running the tests
-
-```bash
-cd brain && python3 -m unittest discover -s tests
-(cd hub && /opt/ai-hub/bin/python -m unittest discover -s tests)   # needs mcp 2
-python3 -m pytest -q mcp voice/tests tests arty-pc chat-bots   # needs pytest, mcp, aiohttp, bcrypt, numpy, webrtcvad-wheels
-(cd code-runner && RUNNER_URL=http://<runner address>:8790 RUNNER_TOKEN=<the token> python3 -m unittest discover -s tests)   # live tests skip without RUNNER_URL
-ARTY_URL=http://<AI_ADDRESS>:8081/v1 ARTY_KEY=... python3 tests/e2e_battery.py   # scored eval against the live brain, see --help
-cd apps/ios && node --test tests/
-```
-
-Each app's README has its own.
+| [Setting up Arty](docs/setup.md) | Requirements, installing, provisioning, deploying, your own servers |
+| [Using Arty](docs/using-arty.md) | Models, pictures, approvals, documents, memory, safety |
+| [The Arty API](docs/API.md) | Every route for your own apps and code |
+| [Connecting a phone](docs/connecting-a-phone.md), [a Quest headset](docs/connecting-a-headset.md) and [Cloudflare](docs/cloudflare.md) | Reaching Arty from your devices, and from away from home |
+| [Everything else](docs/README.md) | How it works, features, limitations, tested on, trust boundary, release notes |
 
 ---
 

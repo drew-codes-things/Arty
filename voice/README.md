@@ -1,4 +1,18 @@
-# Voice: my-voice hub and "Hey Arty"
+[Arty](../README.md) / Voice
+
+<div align="center">
+
+# Voice
+
+**The room mic and speakers hub (my-voice) and the "Hey Arty" voice assistant.**
+
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../LICENSE)
+
+</div>
+
+---
+
+## Overview
 
 The USB mic and the speakers are plugged into the Proxmox host. Only one container can hold the mic, so:
 
@@ -151,7 +165,16 @@ chat model endpoint is the brain's `http://<brain address>:8081/v1` with model `
 The hub needs `/dev/snd` in the my-voice container (`lxc.cgroup2.devices.allow: c 116:* rwm` and a bind mount) and the host udev
 rules that make the mic and the onboard sound card mode 0666.
 
-Tests: `python -m pytest voice/tests` (needs aiohttp, bcrypt, numpy, webrtcvad-wheels). The tests that run the real Smart Turn, Silero and
+## Tests
+
+`python -m pytest voice/tests` (needs aiohttp, bcrypt, numpy, webrtcvad-wheels). The tests that run the real Smart Turn, Silero and
 Moonshine models also need onnxruntime, faster-whisper and moonshine-voice, and the folder holding the models in `ARTY_TEST_MODELS` (recorded phrases in `ARTY_TEST_PHRASES`,
 wake word samples in `ARTY_TEST_WAKE_SAMPLES`; each test skips while its folder is unset); run them on
 their own (`python -m pytest voice/tests/test_turn_end.py`, then `voice/tests/test_live_text.py`), as other test files stand in a fake faster-whisper.
+
+## License
+
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../LICENSE) and [NOTICE](../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.
+
+The models the voice assistant downloads have their own licences, listed in [NOTICE](NOTICE).

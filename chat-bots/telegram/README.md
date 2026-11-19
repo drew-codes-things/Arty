@@ -1,3 +1,5 @@
+[Arty](../../README.md) / Arty on Telegram
+
 <div align="center">
 
 # Arty on Telegram

@@ -15,6 +15,7 @@ import fresh_answer
 import hidden_notes
 import models
 import policy
+import private_check
 import private_text
 import run_requests
 import sharing
@@ -39,7 +40,7 @@ from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ON
     asks_to_install, WRITE_ONLY_UNCHECKED_NOTE, DONT_RUN_UNCHECKED_NOTE, SEARCH_RESULTS_NOTE, NOTHING_DONE_NOTE,
     PRETEND_TOOLS_NOTE, HALF_WRITTEN_CALL_NOTE, EMPTY_REPLY_NOTE)
 from connections import TOOL_RESULT_CHARS
-from prompting import system_prompt, with_tool_guide, current_context
+from prompting import system_prompt, with_persona_left_out, with_tool_guide, current_context
 from native_calls import run_native_safely
 from honesty import client_tool_runs, did_not_work
 
@@ -373,6 +374,9 @@ class AgentTurn:
     example_outcome: object = None
     private: object = private_text.NOTHING_HIDDEN
     refused_steps: int = 0
+    asked_about_set_up: bool = False
+    user_requests: str = ""
+    private_set_up: str = ""
 
     @property
     def is_chat(self) -> bool:
@@ -427,11 +431,39 @@ def run_rounds(config, state, run: AgentRun) -> dict:
 def without_private_text(turn: AgentTurn, outcome: dict) -> dict:
     for key in ("answer", "content"):
         if isinstance(outcome.get(key), str):
-            outcome[key] = private_text.without_hidden_text(outcome[key], turn.private)
+            outcome[key] = checked_for_the_set_up(turn, private_text.without_hidden_text(outcome[key], turn.private))
     waiting = outcome.get("waiting")
     if isinstance(waiting, dict) and isinstance(waiting.get("message"), str):
-        waiting["message"] = private_text.without_hidden_text(waiting["message"], turn.private)
+        waiting["message"] = checked_for_the_set_up(turn, private_text.without_hidden_text(waiting["message"], turn.private))
     return outcome
+
+
+def has_a_private_set_up(turn: AgentTurn) -> bool:
+    return run_has_a_private_set_up(turn.run)
+
+
+def run_has_a_private_set_up(run: AgentRun) -> bool:
+    return not (run.agent and run.client_system)
+
+
+def checked_for_the_set_up(turn: AgentTurn, text: str) -> str:
+    if not has_a_private_set_up(turn):
+        return text
+    return private_check.checked_reply(text, turn.user_requests, turn.private, turn.asked_about_set_up, set_up_checker(turn))
+
+
+def set_up_checker(turn: AgentTurn) -> private_check.Checker:
+    return private_check.Checker(turn.config["model"], turn.config.get("keep_alive"), turn.private_set_up)
+
+
+def call_gives_away_the_set_up(turn: AgentTurn, call: dict) -> bool:
+    if call_holds_private_text(call, turn.private):
+        return True
+    if not has_a_private_set_up(turn):
+        return False
+    texts = argument_texts((call.get("function") or {}).get("arguments"))
+    return private_check.tool_text_gives_away(texts, turn.user_requests, turn.private, turn.asked_about_set_up,
+                                              set_up_checker(turn))
 
 
 def texts_in(value) -> list[str]:
@@ -475,9 +507,13 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     requested = set(state.setdefault("groups", []))
     model_info = models.find(config["model"])
     toolless = bool(model_info) and not model_info["tools"]
-    instructions = run.client_system if run.agent and run.client_system else system_prompt(config, run.client_system,
-                                                                                           run.background, toolless)
-    history = [{"role": "system", "content": instructions}] + messages
+    user_texts = [without_app_notes(message_text(m)) for m in messages if m.get("role") == "user"]
+    asked_about_set_up = private_check.asks_about_the_set_up(user_texts)
+    instructions = system_prompt(config, run.client_system, run.background, toolless) \
+        if run_has_a_private_set_up(run) else run.client_system
+    seen = system_prompt(with_persona_left_out(config), run.client_system, run.background, toolless) \
+        if asked_about_set_up and run_has_a_private_set_up(run) else instructions
+    history = [{"role": "system", "content": seen}] + messages
     looked_up = run.looked_up or ([], "", None)
     add_turn_notes(config, run, history, messages, looked_up)
     all_tools = tools_for_turn(config, run, toolless, looked_up)
@@ -487,18 +523,18 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     policy.remember_client_results(context, steps_this_turn, rules)
     context["failed"] = []  # tools that didn't work this turn (see be_honest)
     last_request = newest_request(messages)
-    user_texts = [without_app_notes(message_text(m)) for m in messages if m.get("role") == "user"]
     private = hidden_notes.private_text_for(with_tool_guide(instructions, all_tools), all_tools, run.client_texts)
     shows_thinking = bool(run.agent and run.client_system and run.on_thinking)
     turn = AgentTurn(
         config=config, state=state, run=run, messages=messages, context=context, requested=requested, toolless=toolless,
-        instructions=instructions, history=history, all_tools=all_tools, hidden=config.get("hidden_tools") or [],
+        instructions=seen, history=history, all_tools=all_tools, hidden=config.get("hidden_tools") or [],
         request_text=request_text, rules=rules, max_rounds=max_tool_rounds(config, run.background),
         tool_log=list(looked_up[0]), steps_this_turn=steps_this_turn,
         client_names={tool["function"]["name"] for tool in run.client_tools or []}, last_request=last_request,
         think=thinking_for(config, agent_sessions.deciding_request(user_texts) if run.agent else last_request),
         shown_thinking=private_text.GuardedStream(run.on_thinking, private) if shows_thinking else None,
-        chat_approved=run.chat_approved, private=private)
+        chat_approved=run.chat_approved, private=private,
+        asked_about_set_up=asked_about_set_up, user_requests="\n\n".join(user_texts), private_set_up=instructions)
     steer_the_request(turn)
     # A plain question whose answer was looked up first: the model answers from that, with no tools to
     # wander off with (small models otherwise pick unrelated ones). Asked to do something, it keeps them.
@@ -673,14 +709,14 @@ def start_draft_round(turn: AgentTurn, tools: list):
     may_nudge = not agent and not turn.nudged and bool(tools) and turn.used_no_tools()
     may_search = not agent and turn.nudged and turn.used_no_tools() and not turn.searched_for_it \
         and "research__web_search" in connections.hub.routes
-    draft.start_round(allowed=not (may_nudge and ACTION_REQUEST.search(turn.last_request))
+    draft.start_round(allowed=not turn.asked_about_set_up and not (may_nudge and ACTION_REQUEST.search(turn.last_request))
                       and not (may_search and SEARCH_REQUEST.search(turn.last_request))
                       and not page_to_check_code_against(turn) and not sandbox_may_check(turn),
                       holds_line=code_sandbox.may_become_a_summary_line)
-    watch = private_text.Watch(turn.private)
+    watch, talk = private_text.Watch(turn.private), private_check.TalkWatch()
 
     def risky(text, may_nudge=may_nudge, may_search=may_search):
-        if watch.repeats(text) or code_sandbox.has_lookalike_summary(text):
+        if watch.repeats(text) or code_sandbox.has_lookalike_summary(text) or talk.sounds_like_set_up_talk(text):
             return True
         if agent:
             return bool(PROMPT_LEAK.search(text)) or written_calls.has_call_markup(text)
@@ -932,8 +968,9 @@ def nudge_after_an_empty_reply(turn: AgentTurn):
 
 
 def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
-    if any(call_holds_private_text(call, turn.private) for call in calls):
-        return refuse_calls_holding_private_text(turn, message, calls)
+    held = [call_gives_away_the_set_up(turn, call) for call in calls]
+    if any(held):
+        return refuse_calls_holding_private_text(turn, message, calls, held)
     written = written_calls.without_call_markup(message.get("content") or "").strip()
     if answered_before_unlocking(turn, calls, written):
         # It answered a plain question, then asked for tools it doesn't need (the next round would only
@@ -956,8 +993,7 @@ def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
     return None
 
 
-def refuse_calls_holding_private_text(turn: AgentTurn, message: dict, calls: list) -> dict | None:
-    held = [call_holds_private_text(call, turn.private) for call in calls]
+def refuse_calls_holding_private_text(turn: AgentTurn, message: dict, calls: list, held: list) -> dict | None:
     turn.refused_steps += 1
     log.info("not running %d tool call(s): %d held private text (refused step %d)", len(calls), sum(held), turn.refused_steps)
     if turn.run.draft:

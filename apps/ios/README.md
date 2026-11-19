@@ -1,3 +1,5 @@
+[Arty](../../README.md) / Arty for iPhone
+
 <div align="center">
 
 # Arty for iPhone
@@ -87,3 +89,8 @@ node --test tests/
 To click through it on a laptop, run `python3 tests/fake_brain.py 8099`, open `http://127.0.0.1:8099/ios/` and
 enter the test key `fake-brain-test-key` (it is in `fake_brain.py`). The brain's side is tested with
 `cd brain && python3 -m unittest tests.test_web_app`.
+
+## License
+
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.

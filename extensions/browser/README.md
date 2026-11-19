@@ -1,8 +1,10 @@
+[Arty](../../README.md) / Arty for your browser
+
 <div align="center">
 
-# Arty for Chrome
+# Arty for your browser
 
-**A browser extension that lets Arty Desktop use your own browser for you - open pages, read them, scroll, look at them, click and type in your tabs. It loads in Google Chrome, Microsoft Edge, Brave, Chromium and Firefox.**
+**A browser extension that lets Arty Desktop use your own browser for you - open pages, read them, scroll, look at them, click and type in your tabs. It loads in Google Chrome, Microsoft Edge, Brave, Opera, Vivaldi, Chromium and Firefox, and Arty can use each one by name.**
 
 [![Chrome](https://img.shields.io/badge/chrome-manifest%20v3-4285F4?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions)
 [![JavaScript](https://img.shields.io/badge/javascript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
@@ -10,13 +12,18 @@
 
 </div>
 
+> **Released and coming.** The latest released version is 1.5.1, attached to the
+> [1.5.1 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.5.1). Version 1.6 is in this source and not
+> released yet: it tells Arty Desktop which browser it is in so Arty can use a browser by name, and adds the Opera and
+> Vivaldi steps below. It needs Arty Desktop 1.5.9 for that, which is not released yet either.
+
 ---
 
 ## Overview
 
 The companion to [Arty Desktop](../../apps/desktop/README.md). It takes browser commands from the desktop app's
 local service on `127.0.0.1:8765` and runs them in your browser. That service only listens on your computer, and
-only accepts the app itself and this extension (recognised by its fixed id in Chrome, Edge and Brave or its
+only accepts the app itself and this extension (recognised by its fixed id in Chrome, Edge, Brave, Opera, Vivaldi and Chromium or its
 `moz-extension://` address in Firefox, plus a pairing code you paste once, and only for its own browser queue), so
 nothing else can drive your browser or your computer through it. The extension in turn sends its pairing code, and
 takes commands, only after the service has proved it holds the same code, so another program listening on that port
@@ -41,7 +48,22 @@ What Arty can do in your browser:
 | `chrome_tab` | switches to, closes, reloads or goes back or forward in a tab |
 | `chrome_forget_site` | forgets a site you allowed |
 
-The names start with `chrome_` whichever browser you use.
+The names start with `chrome_` whichever browser you use. Each of them except `chrome_forget_site` also takes an
+optional `browser`, so "open the BBC in Firefox" or "read my tab in Opera" goes to that browser.
+
+### More than one browser
+
+Install and pair the extension in each browser you want Arty to use. The extension tells Arty Desktop which browser
+it is in (Chrome, Edge, Brave, Opera, Vivaldi, Chromium or Firefox), and Arty is told which of them are connected
+right now, so it only offers those. Ask for a browser by name and that browser is used; ask for one that isn't
+paired or isn't open and Arty says so, names the browsers that are connected and says the extension has to be
+installed there: it never quietly uses another browser instead. Without a name, a reply uses the browser Arty used
+last, while it is still open, as before. Two paired copies of the same browser (two profiles, say) are told apart as
+"Chrome" and "Chrome 2", the first one to check in keeping the plain name.
+
+The name is only used to pick a browser and to show it. It decides nothing about what is allowed: each browser
+still needs the pairing code, keeps its own random id and its own queue of commands, and a name that isn't on the
+list above, or a Chromium browser calling itself Firefox (or the other way round), is ignored.
 
 ---
 
@@ -75,13 +97,17 @@ on it.
    - **Google Chrome, Chromium, Brave**: go to `chrome://extensions` (Brave: `brave://extensions`), turn on
      **Developer mode** (top right), click **Load unpacked** and choose this folder (`extensions/browser`).
    - **Microsoft Edge**: the same from `edge://extensions` (**Developer mode** is on the left).
+   - **Opera** (and Opera GX): go to `opera://extensions`, turn on **Developer mode** (top right), click
+     **Load unpacked** and choose this folder.
+   - **Vivaldi**: go to `vivaldi://extensions`, turn on **Developer mode** (top right), click **Load unpacked** and
+     choose this folder.
    - **Firefox**: go to `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on...** and choose
      `manifest.json` in this folder. Firefox removes temporary add-ons when it closes, so load it again after a
      restart. To keep it, Firefox needs it signed by Mozilla; Firefox ESR, Developer Edition and Nightly can
      instead install it unsigned once `xpinstall.signatures.required` is set to `false` in `about:config`: zip the
      files in this folder (not the folder itself, and without `tests/`) into `arty-browser.xpi` and choose
      **Install Add-on From File...** in `about:addons`.
-2. In Arty Desktop, open the tray menu and choose **Chrome sites…**. Click the Arty for Chrome icon in your
+2. In Arty Desktop, open the tray menu and choose **Chrome sites…**. Click the Arty icon in your
    browser's toolbar (in Firefox and Edge it may be under the puzzle-piece extensions button) and paste the pairing
    code shown there. Until it is paired the icon shows a red **!** and the extension does nothing.
    The same screen lists the sites Arty may use, each with a **Forget** button.
@@ -91,14 +117,17 @@ Desktop checks, so when updating from 1.1 remove the old card and choose **Load 
 ignores any other extension. Version 1.3 also needs the pairing code (step 2) once after updating. Version 1.4 adds
 scrolling, looking at a tab and Firefox; Arty Desktop needs the matching update for those. Version 1.5 checks that
 Arty Desktop holds the pairing code before using it, so it needs Arty Desktop 1.5.1 or newer; with an older Arty
-Desktop its icon shows the red **!**. With more than one browser paired, each reply uses one of them: the one Arty
-used last, while it is still open.
+Desktop its icon shows the red **!**. Version 1.6 tells Arty Desktop which browser it is in, so Arty can use a
+browser by name; it is now called Arty for your browser, with the same extension id, so updating is a reload. It
+needs Arty Desktop 1.5.9 or newer for choosing by name; with an older Arty Desktop it works as 1.5 did. A browser
+still on 1.5 or older stays usable but can't be chosen by name, and Arty lists it as one that doesn't say which
+browser it is.
 
 ## Usage
 
 With Arty Desktop open and **HANDS** on, ask for something in your browser - "open the BBC weather page", "what's
 on the tab I've got open?", "search YouTube for homelab tours", "scroll down and tell me what's next", "what does
-this page look like?". The browser tools are only offered while the extension has checked in during the last
+this page look like?", "open the BBC in Firefox", "what's open in Opera?". The browser tools are only offered while the extension has checked in during the last
 minute, and only with **HANDS** on.
 
 ---
@@ -111,7 +140,10 @@ from source. Edge and Brave load the same Chromium manifest but were not tried. 
 Debian 13 under Xvfb against Arty Desktop's local service from source and the live brain, on a local test page: each
 of the clicks it should ask about (an item number given with another item's words, a submit button labelled Go,
 Allow, Add to basket, an authorise link, a download link) showed the Allow / Not now card, and a click on part of a
-label was refused. Its page code was also run in headless Google Chrome on local test pages.
+label was refused. Its page code was also run in headless Google Chrome on local test pages. Version 1.6's browser
+naming was checked with the extension's tests (the brands and user agents of Chrome, Edge, Brave, Opera, Opera GX,
+Vivaldi, Chromium and Firefox) and in headless Google Chrome 158, whose brands named it Chrome; Opera, Vivaldi, Edge,
+Brave and Firefox themselves were not tried.
 
 ## License
 

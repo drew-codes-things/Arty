@@ -91,7 +91,7 @@ class VramBudget(unittest.TestCase):
     def test_the_setting_is_in_brain_json_and_documented(self):
         config = json.loads((REPO / "brain" / "brain.json").read_text())
         self.assertEqual(config["vram_budget_mb"], models.VRAM_BUDGET_MB)
-        self.assertTrue("`vram_budget_mb`" in (REPO / "README.md").read_text(), "README.md does not document vram_budget_mb")
+        self.assertTrue("`vram_budget_mb`" in (REPO / "docs" / "setup.md").read_text(), "docs/setup.md does not document vram_budget_mb")
 
 
 if __name__ == "__main__":

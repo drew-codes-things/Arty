@@ -1,5 +1,4 @@
 'use strict';
-// Arty for Chrome: takes browser commands from Arty Desktop's local service and runs them here.
 // The service only listens on this computer; see server/process/browser.py for the commands.
 
 const SERVICE = 'http://127.0.0.1:8765';
@@ -15,8 +14,11 @@ const QUIET_MS = 400;
 const SETTLE_LIMIT_MS = 3000;
 const PRIVATE_FIELD_HINTS = 'pass|pwd|\\bpin\\b|pin.?code|one.?time|\\botp\\b|2fa|mfa|verif\\w*.?(code|number)|auth\\w*.?code|security.?(code|answer|question)|memorable|\\bcards?\\b|card.?(num|no\\b|holder|code|cvc|cvv|exp)|cc-|\\bcc.?(num|csc|cvc|exp)|cvv|cvc|\\bcsc\\b|iban|sort.?code|account.?(num|no\\b)|routing|\\bssn\\b|social.?security|national.?insurance|\\bnino?\\b|tax.?id|secret|token|api.?key|private.?key';
 const PRIVATE_FIELD_REFUSAL = 'a password or payment field on this page has something typed in it, so Arty will not take a picture of it. Ask the user to look, or read the page instead';
-const UNPAIRED_TITLE = 'Arty for Chrome: not paired yet. Click here and paste the pairing code from Arty Desktop (tray menu, Chrome sites).';
-const PAIRED_TITLE = 'Arty for Chrome';
+const EXTENSION_NAME = 'Arty for your browser';
+const UNPAIRED_TITLE = `${EXTENSION_NAME}: not paired yet. Click here and paste the pairing code from Arty Desktop (tray menu, Chrome sites).`;
+const PAIRED_TITLE = EXTENSION_NAME;
+const NAMED_BRANDS = [['Opera', 'Opera'], ['Microsoft Edge', 'Edge'], ['Brave', 'Brave'], ['Vivaldi', 'Vivaldi'], ['Google Chrome', 'Chrome'], ['Chromium', 'Chromium']];
+const NAMED_USER_AGENTS = [[/\bVivaldi\//, 'Vivaldi'], [/\bOPR\//, 'Opera'], [/\bEdg\//, 'Edge'], [/\bFirefox\//, 'Firefox'], [/\bChrome\//, 'Chrome']];
 
 const SERVICE_PROOF_CONTEXT = 'arty-browser-service:';
 const RANDOM_ID_BYTES = 16;
@@ -29,6 +31,7 @@ const ITEM_NUMBER_LIMIT = 100000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let polling = false;
 let nextItemNumber = FIRST_ITEM_NUMBER;
+let detectedName = null;
 
 async function poll() {
   if (polling) return;
@@ -51,7 +54,8 @@ async function poll() {
           continue;
         }
         const browser = await browserId();
-        const response = await fetch(`${SERVICE}/browser/next?timeout=${POLL_SECONDS}&browser_id=${browser}`, { method: 'POST', headers: { 'X-Arty-Pairing': pairing } });
+        const name = encodeURIComponent(await browserName());
+        const response = await fetch(`${SERVICE}/browser/next?timeout=${POLL_SECONDS}&browser_id=${browser}&browser_name=${name}`, { method: 'POST', headers: { 'X-Arty-Pairing': pairing } });
         await showPaired(response.status !== 403);
         if (!response.ok) throw new Error(`HTTP ${response.status}`); // refused or failing: don't spin
         command = await response.json();
@@ -114,6 +118,42 @@ async function browserId() {
   const made = randomId();
   await chrome.storage.local.set({ browserId: made });
   return made;
+}
+
+async function firefoxName() {
+  const getBrowserInfo = globalThis.browser?.runtime?.getBrowserInfo;
+  if (typeof getBrowserInfo !== 'function') return '';
+  const info = await getBrowserInfo();
+  return info?.name === 'Firefox' ? 'Firefox' : '';
+}
+
+async function isVivaldi() {
+  const tabs = await chrome.tabs.query({});
+  return tabs.some((tab) => tab && 'vivExtData' in tab);
+}
+
+function brandName(brands) {
+  const named = NAMED_BRANDS.find(([brand]) => brands.some((given) => given === brand || given.startsWith(`${brand} `)));
+  return named ? named[1] : '';
+}
+
+function userAgentName(userAgent) {
+  const named = NAMED_USER_AGENTS.find(([mark]) => mark.test(userAgent));
+  return named ? named[1] : '';
+}
+
+async function detectBrowserName() {
+  const firefox = await firefoxName();
+  if (firefox) return firefox;
+  if (await isVivaldi()) return 'Vivaldi';
+  const agent = globalThis.navigator;
+  const brands = (agent?.userAgentData?.brands || []).map((entry) => String(entry?.brand || ''));
+  return brandName(brands) || userAgentName(String(agent?.userAgent || ''));
+}
+
+async function browserName() {
+  if (detectedName === null) detectedName = await detectBrowserName();
+  return detectedName;
 }
 
 async function pairingCode() {

@@ -1,3 +1,5 @@
+[Arty](../../../README.md) / Arty Code
+
 <div align="center">
 
 # Arty Code
@@ -109,3 +111,8 @@ Ctrl-C stops the current request (what it already changed or ran stays noted in 
 ```bash
 cd apps/beta/code && python -m pytest -q tests
 ```
+
+## License
+
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../../../LICENSE) and [NOTICE](../../../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.

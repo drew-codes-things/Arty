@@ -712,8 +712,10 @@ def say(body: SayIn):
 
 
 @app.post("/browser/next")
-def browser_next(timeout: float = 25.0, browser_id: str = browser.DEFAULT_BROWSER):
+def browser_next(request: Request, timeout: float = 25.0, browser_id: str = browser.DEFAULT_BROWSER, browser_name: str = ""):
     """For the Chrome extension: the next thing to do in the browser, or {} after `timeout`."""
+    from_firefox = bool(re.fullmatch(FIREFOX_EXTENSION_ORIGIN, request.headers.get("origin") or ""))
+    browser.report_name(browser_id, browser_name, from_firefox)
     return browser.next_command(min(timeout, 55.0), browser_id) or {}
 
 

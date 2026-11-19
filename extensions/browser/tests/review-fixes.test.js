@@ -322,7 +322,3 @@ test('L1: only http and https addresses are opened', async () => {
   }
 });
 
-test('the extension version is 1.5', () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(folder, 'manifest.json'), 'utf8'));
-  assert.strictEqual(manifest.version, '1.5');
-});

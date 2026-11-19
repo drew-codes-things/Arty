@@ -102,8 +102,8 @@ SPECS = [
         }),
     ("open_url", open_url, _open_url_available, {
         "description": "Open a web link in their default browser. Only http and https. "
-                       "If they name a browser, use computer_open with that app and the url "
-                       "instead.",
+                       "If they name a browser, use chrome_open with that browser when it is listed "
+                       "as connected there, else computer_open with that app and the url.",
         "parameters": {
             "type": "object",
             "properties": {"url": {"type": "string"}},
@@ -237,7 +237,7 @@ def prompt_addition():
     if not _allowed("enabled"):
         return ""
     machines = ((computer.PROMPT if _computer_allowed() else "") + (desktop.PROMPT if _desktop_allowed() else "")
-                + (browser.PROMPT if _browser_allowed() else ""))
+                + (browser.prompt() if _browser_allowed() else ""))
     return machines + (WORKING if machines else "")
 
 
@@ -269,7 +269,7 @@ WORK_TOOLS = {"computer_run_command", "computer_read_file", "computer_write_file
 STICKY_SECONDS = 1800
 _last_used = {}
 TOOL_GROUPS = [
-    (re.compile(r"chrome|firefox|\bedge\b|\bbrave\b|homepage|browser|\btabs?\b|website|\bsite\b|web ?page|\bpage\b|https?://|www\.|\.(com|co\.uk|org|net|io)\b|"
+    (re.compile(r"chrome|firefox|\bedge\b|\bbrave\b|\bopera\b|vivaldi|chromium|homepage|browser|\btabs?\b|website|\bsite\b|web ?page|\bpage\b|https?://|www\.|\.(com|co\.uk|org|net|io)\b|"
                 r"google|youtube|search (for|online|the web)|online|log ?in|sign ?in|link", re.I),
      {"chrome_tabs", "chrome_open", "chrome_read", "chrome_find", "chrome_click", "chrome_type", "chrome_tab", "chrome_scroll",
       "chrome_look"}),
@@ -310,7 +310,7 @@ def definitions(request_text=None):
     wanted = wanted_tools(request_text) if request_text is not None else None
     tools = [
         {"type": "function",
-         "function": {"name": name, **spec}}
+         "function": {"name": name, **(browser.offered_spec(spec) if name in _BROWSER_TOOLS else spec)}}
         for name, _fn, on, spec in SPECS if on() and (wanted is None or name in wanted)
     ]
     # The core tools first: they're offered every time, so the brain's cached prompt stays valid past them.

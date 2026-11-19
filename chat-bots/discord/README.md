@@ -1,3 +1,5 @@
+[Arty](../../README.md) / Arty on Discord
+
 <div align="center">
 
 # Arty on Discord

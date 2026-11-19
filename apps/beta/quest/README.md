@@ -1,3 +1,5 @@
+[Arty](../../../README.md) / Arty for Quest
+
 <div align="center">
 
 # Arty for Quest
@@ -110,3 +112,8 @@ adb devices. The app is in the library under "Unknown sources".
 mapping, reconnect backoff and when it gives up, the setup rules (which addresses and keys are accepted, when the form
 reopens, the home Wi-Fi pairing warning), reading a damaged saved connection, the microphone frame size (it must
 match the server's 30 ms frames) and that the shareable build carries no address or key.
+
+## License
+
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](../../../LICENSE) and [NOTICE](../../../NOTICE). You can use, change and share Arty,
+including commercially; if you share it or anything built from it, keep the LICENSE and NOTICE files, which credit Arty's author, and say what you changed.

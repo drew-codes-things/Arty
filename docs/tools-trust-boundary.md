@@ -1,3 +1,5 @@
+[Arty](../README.md) / [Docs](README.md)
+
 # Who Can Run Arty's Tools
 
 This page says who the brain trusts, what a caller can make it do, and what it checks anyway. It describes the code in

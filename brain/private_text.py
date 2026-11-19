@@ -42,6 +42,24 @@ TABLE_ROW = re.compile(r"[ \t]*\|")
 NUMBERED_ITEM = re.compile(r"[ \t]*\d+[.)][ \t]+")
 CELL_PADDING = " \t"
 QUOTE_OPENERS = (":", "\"", "“")
+ACROSTIC_LETTERS = 20
+DERIVED_RUN_WORDS = 8
+MOST_INITIALS_READ = 2000
+LEET_WORDS_TO_READ = 3
+SHIFT_STRIDE = 20
+ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+SHIFTS = tuple(shift for shift in range(1, len(ALPHABET)) if shift != len(ALPHABET) // 2)
+MORSE = dict(zip(
+    ".- -... -.-. -.. . ..-. --. .... .. .--- -.- .-.. -- -. --- .--. --.- .-. ... - ..- ...- .-- -..- -.-- --.. "
+    "----- .---- ..--- ...-- ....- ..... -.... --... ---.. ----.".split(), ALPHABET + "0123456789"))
+MORSE_RUN = re.compile(r"(?:[.\-·•−–]{1,6}(?:[ \t]+/?[ \t]*|[ \t]*/[ \t]*|\n)){8,}[.\-·•−–]{1,6}")
+MORSE_DOTS = str.maketrans("·•−–", "..--")
+NATO = {word: word[0] for word in (
+    "alfa alpha bravo charlie delta echo foxtrot golf hotel india juliet juliett kilo lima mike november oscar papa "
+    "quebec romeo sierra tango uniform victor whiskey whisky xray yankee zulu").split()}
+LEET = str.maketrans("4@3105$7", "aaeiosst")
+LEET_WORD = re.compile(r"\b(?=\w*[a-zA-Z])(?=\w*[4@3105$7])[\w@$]+")
+LINE = re.compile(r"[^\n]+")
 
 
 @dataclass(frozen=True)
@@ -51,6 +69,23 @@ class RunTable:
     shingle_blocks: dict
     block_sizes: tuple
     block_labels: tuple
+    words_text: str = ""
+    letters_text: str = ""
+    word_ends: tuple = ()
+    letter_ends: tuple = ()
+    labels: tuple = ()
+
+    def label_at(self, ends: tuple, position: int) -> str:
+        return self.labels[min(bisect.bisect_right(ends, position), len(self.labels) - 1)]
+
+
+def joined_with_ends(lines: list[str], lead: str = "") -> tuple[str, tuple]:
+    ends, length = [], len(lead)
+    for line in lines:
+        length += len(line)
+        ends.append(length)
+        length += len(TEXT_SEPARATOR)
+    return lead + TEXT_SEPARATOR.join(lines) + lead, tuple(ends)
 
 
 @dataclass(frozen=True)
@@ -141,8 +176,12 @@ def blocks_of(text: str) -> list[str]:
 @lru_cache(maxsize=CACHED_TABLES)
 def run_table(labelled_texts: tuple[tuple[str, str], ...]) -> RunTable:
     word_runs, letter_runs, shingle_blocks, sizes, labels = {}, {}, {}, [], []
+    word_lines, letter_lines, text_labels = [], [], []
     for label, text in labelled_texts:
         words = words_in(text)
+        word_lines.append(" ".join(words))
+        letter_lines.append("".join(words))
+        text_labels.append(label)
         for start in range(len(words) - RUN_WORDS + 1):
             word_runs.setdefault(tuple(words[start:start + RUN_WORDS]), label)
         letters = "".join(words)
@@ -156,7 +195,10 @@ def run_table(labelled_texts: tuple[tuple[str, str], ...]) -> RunTable:
                 shingle_blocks.setdefault(shingle, []).append(len(sizes))
             sizes.append(len(shingles))
             labels.append(label)
-    return RunTable(word_runs, letter_runs, shingle_blocks, tuple(sizes), tuple(labels))
+    words_text, word_ends = joined_with_ends(word_lines, " ")
+    letters_text, letter_ends = joined_with_ends(letter_lines)
+    return RunTable(word_runs, letter_runs, shingle_blocks, tuple(sizes), tuple(labels), words_text, letters_text,
+                    word_ends, letter_ends, tuple(text_labels))
 
 
 def hidden_text(*groups: tuple[tuple[str, str], ...], known: KnownText = NOTHING_KNOWN) -> HiddenText:
@@ -359,8 +401,106 @@ def decoded_leaks(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
     return [(blob.start(), blob.end(), label) for blob in encoded_blobs(text) if (label := blob_leak(blob.group(), hidden))]
 
 
+def shared_pieces(text: str, hidden: HiddenText) -> int:
+    words = words_in(text)
+    pieces = {tuple(words[start:start + SHINGLE_WORDS]) for start in range(len(words) - SHINGLE_WORDS + 1)}
+    return sum(1 for piece in pieces if any(piece in table.shingle_blocks for table in hidden.tables)
+               and not hidden.known.has_words(piece))
+
+
+def letters_found(letters: str, hidden: HiddenText) -> str | None:
+    if hidden.known.has_letters(letters):
+        return None
+    for table in hidden.tables:
+        if (position := table.letters_text.find(letters)) >= 0:
+            return table.label_at(table.letter_ends, position)
+    return None
+
+
+def words_found(words: tuple, hidden: HiddenText) -> str | None:
+    if hidden.known.has_words(words):
+        return None
+    wanted = f" {' '.join(words)} "
+    for table in hidden.tables:
+        if (position := table.words_text.find(wanted)) >= 0:
+            return table.label_at(table.word_ends, position)
+    return None
+
+
+def first_letter(text: str) -> str:
+    return next(iter(words_in(text)), "")[:1]
+
+
+def letters_of_parts(letters: tuple, hidden: HiddenText) -> str | None:
+    return letters_found("".join(letters), hidden)
+
+
+def initials_leak(parts: list[tuple[int, int, str]], hidden: HiddenText, size: int, find) -> tuple[int, int, str] | None:
+    for start in range(len(parts) - size + 1):
+        window = parts[start:start + size]
+        if label := find(tuple(part for _, _, part in window), hidden):
+            return window[0][0], window[-1][1], label
+    return None
+
+
+def acrostic_leaks(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
+    lines = [(found.start(), found.end(), found.group()) for found in LINE.finditer(text) if words_in(found.group())]
+    words = [(found.start(), found.end(), found.group()) for found in WORD.finditer(text)][:MOST_INITIALS_READ]
+    readings = (
+        ([(start, end, first_letter(line)) for start, end, line in lines], ACROSTIC_LETTERS, letters_of_parts),
+        ([(start, end, first_letter(word)) for start, end, word in words], ACROSTIC_LETTERS, letters_of_parts),
+        ([(start, end, words_in(line)[0]) for start, end, line in lines], DERIVED_RUN_WORDS, words_found),
+    )
+    return [found for parts, size, find in readings if (found := initials_leak(parts, hidden, size, find))]
+
+
+def shifted_leaks(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
+    reading = Normalised()
+    reading.read(text)
+    letters = "".join(reading.letters)
+    if len(letters) < RUN_LETTERS + SHIFT_STRIDE:
+        return []
+    for shift in SHIFTS:
+        shifted = letters.translate(str.maketrans(ALPHABET, ALPHABET[shift:] + ALPHABET[:shift]))
+        for start in range(0, len(shifted) - RUN_LETTERS + 1, SHIFT_STRIDE):
+            window = shifted[start:start + RUN_LETTERS]
+            if (label := next((table.letter_runs[window] for table in hidden.tables if window in table.letter_runs), None)) \
+                    and not hidden.known.has_letters(window):
+                return [(*reading.span_of_letters(0, len(letters) - 1), label)]
+    return []
+
+
+def morse_decoded(code: str) -> str:
+    words = re.split(r"[ \t]*/[ \t]*|[ \t]{3,}|\n", code.translate(MORSE_DOTS).strip())
+    return " ".join("".join(MORSE.get(sign, "") for sign in word.split()) for word in words)
+
+
+def spelled_alphabet(text: str) -> list[tuple[int, int, str]]:
+    return [(found.start(), found.end(), NATO[found.group().casefold()]) for found in WORD.finditer(text)
+            if found.group().casefold() in NATO]
+
+
+def read_back_leaks(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
+    found = []
+    for code in MORSE_RUN.finditer(text):
+        if inside := Watch(hidden).read(morse_decoded(code.group())).finish().found:
+            found.append((code.start(), code.end(), inside[0][2]))
+    letters = spelled_alphabet(text)
+    if spelled := initials_leak(letters, hidden, ACROSTIC_LETTERS, letters_of_parts):
+        found.append(spelled)
+    if len(LEET_WORD.findall(text)) >= LEET_WORDS_TO_READ and (inside := Watch(hidden).read(text.translate(LEET)).finish().found):
+        found.append((min(start for start, _, _ in inside), max(end for _, end, _ in inside), inside[0][2]))
+    return found
+
+
+def derived_leaks(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
+    if not text or not hidden:
+        return []
+    return acrostic_leaks(text, hidden) + shifted_leaks(text, hidden) + read_back_leaks(text, hidden)
+
+
 def leaked_spans(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
-    return Watch(hidden).read(text).finish().found + decoded_leaks(text, hidden)
+    return Watch(hidden).read(text).finish().found + decoded_leaks(text, hidden) + derived_leaks(text, hidden)
 
 
 def repeats_hidden_text(text: str, hidden: HiddenText) -> bool:
@@ -501,7 +641,8 @@ def without_hidden_text(text: str, hidden: HiddenText, keep: int = 0) -> str:
 
 def with_hidden_parts_left_out(text: str, hidden: HiddenText, keep: int, may_cut_quietly: bool) -> tuple[str, bool]:
     plain = [(start, end, label) for start, end, label in Watch(hidden).read(text).finish().found if end > keep]
-    blobs = [(start, end, label) for start, end, label in decoded_leaks(text, hidden) if end > keep]
+    blobs = [(start, end, label) for start, end, label in decoded_leaks(text, hidden) + derived_leaks(text, hidden)
+             if end > keep]
     if not plain and not blobs:
         return text, False
     layout = Layout.of(text)

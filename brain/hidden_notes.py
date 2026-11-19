@@ -11,6 +11,7 @@ import honesty
 import lectures
 import memory_facts
 import memory_tidy
+import private_check
 import prompting
 import reply_rules
 import research
@@ -50,7 +51,7 @@ SIDE_PROMPT_TEMPLATES = (
     research.ANSWER_PROMPT, shortcuts.RECAP_PROMPT, shortcuts.QUIZ_JUDGE_PROMPT, style.PROFILE_PROMPT, style.DRAFT_PROMPT,
     style.CHECK_PROMPT, lectures.SECTION_PROMPT, lectures.COMBINE_PROMPT, lectures.CARDS_PROMPT,
     memory_tidy.REPLACED_PROMPT, memory_facts.EXTRACT_PROMPT, email_watch.JUDGE_PROMPT, desktop_look.PICK_PROMPT,
-    example_checks.WRITER_PROMPT,
+    example_checks.WRITER_PROMPT, private_check.CHECK_PROMPT, private_check.CHECK_SYSTEM,
 )
 TOOL_GUIDE_TEMPLATES = (tool_guide.HEADING, *(rule.template for rule in tool_guide.GUIDE), *tool_guide.BROWSER_CONDUCT)
 
