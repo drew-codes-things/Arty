@@ -12,10 +12,10 @@
 
 </div>
 
-> **Released and coming.** The latest released version is 1.5.1, attached to the
-> [1.5.1 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.5.1). Version 1.6 is in this source and not
-> released yet: it tells Arty Desktop which browser it is in so Arty can use a browser by name, and adds the Opera and
-> Vivaldi steps below. It needs Arty Desktop 1.5.9 for that, which is not released yet either.
+> **Latest release.** Version 1.6 is attached to the
+> [1.5.9 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.5.9). It tells Arty Desktop which browser
+> it is in so Arty can use a browser by name, and adds the Opera and Vivaldi steps below. Choosing a browser by name
+> needs Arty Desktop 1.5.9.
 
 ---
 
