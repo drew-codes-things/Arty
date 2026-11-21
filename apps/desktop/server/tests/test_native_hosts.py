@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from conftest import HAS_POSIX_MODES
 from process import browsers_found, native_host, native_hosts
 
 PYTHON = "/usr/bin/python3"
+COARSE_TIMESTAMP_NS = 1_000_000_000
 
 
 class FakeRegistry:
@@ -52,7 +54,7 @@ def test_register_installs_the_host_launcher_and_one_manifest_per_browser(tmp_pa
     files = native_hosts.host_files(data, "linux")
     assert set(done) == {"Chrome", "Firefox"}
     assert files.script.read_text() == Path(native_host.__file__).read_text()
-    assert files.launcher.read_text() == f"#!/bin/sh\nexec {PYTHON} -I {files.script} \"$@\"\n"
+    assert files.launcher.read_text() == f"#!/bin/sh\nexec {shlex.quote(PYTHON)} -I {shlex.quote(str(files.script))} \"$@\"\n"
     assert not HAS_POSIX_MODES or stat.S_IMODE(files.launcher.stat().st_mode) == native_hosts.LAUNCHER_MODE
     chrome = json.loads((tmp_path / "chrome" / "NativeMessagingHosts" / "app.arty.desktop.json").read_text())
     assert chrome == {"name": "app.arty.desktop", "description": native_hosts.HOST_DESCRIPTION, "path": str(files.launcher),
@@ -67,9 +69,9 @@ def test_register_twice_changes_nothing(tmp_path, linux_found):
     written = sorted(path for path in tmp_path.rglob("*") if path.is_file())
     stamps = {path: path.stat().st_mtime_ns for path in written}
     for path in written:
-        os.utime(path, ns=(1, 1))
+        os.utime(path, ns=(COARSE_TIMESTAMP_NS, COARSE_TIMESTAMP_NS))
     native_hosts.register(linux_found, data, PYTHON, platform="linux")
-    assert all(path.stat().st_mtime_ns == 1 for path in written), stamps
+    assert all(path.stat().st_mtime_ns == COARSE_TIMESTAMP_NS for path in written), stamps
 
 
 def test_paths_with_spaces_and_quotes_are_quoted_for_the_shell(tmp_path):

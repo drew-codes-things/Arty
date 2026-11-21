@@ -49,7 +49,13 @@ data class Lecture(
 }
 
 /** A model Arty can run on. [id] is what the API expects; [name] is for people. */
-data class ModelOption(val id: String, val name: String, val model: String = "", val description: String = "")
+data class ModelOption(
+    val id: String,
+    val name: String,
+    val model: String = "",
+    val description: String = "",
+    val available: Boolean = true,
+)
 
 /** A background task. When [status] is "waiting", [waitingKind] is "approval" or "user". */
 data class ArtyTask(

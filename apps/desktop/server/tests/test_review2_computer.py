@@ -59,6 +59,13 @@ def test_reaching_a_secret_through_cd_braces_or_variables_is_refused(home):
                     "d=~/.config/Ar; cat ${d}ty/arty_config.yaml", "cat ~/.config/Art{y,}/arty_config.yaml",
                     "cat ~/.config/Art*/arty_config.yaml"]:
         assert "off limits" in computer.computer_run_command(command), command
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the command through /bin/bash, which Windows does not have")
+def test_listing_the_config_folder_does_not_show_what_is_inside_the_secret(home):
+    config = home / ".config" / "Arty"
+    config.mkdir(parents=True)
+    (config / "arty_config.yaml").write_text("api_key: hunter2\n")
     assert "hunter2" not in computer.computer_run_command("ls ~/.config")
 
 

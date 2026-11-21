@@ -1,4 +1,4 @@
-const CACHE = "arty-ios-v16";
+const CACHE = "arty-ios-v17";
 const SHELL = [
   "./", "index.html", "app.css", "manifest.webmanifest",
   "js/app.js", "js/answerguard.js", "js/api.js", "js/authorise.js", "js/chat.js", "js/computers.js", "js/conversations.js", "js/dom.js", "js/links.js", "js/manage.js",

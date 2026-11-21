@@ -34,7 +34,10 @@ class ArtyClient(
         val reply = request("GET", "/v1/models")
         val listed = listOfNotNull(reply.optJSONObject("auto")) + reply.getJSONArray("data").objects()
         return listed.map {
-            ModelOption(it.getString("id"), it.optString("name", it.getString("id")), it.optString("model"), it.optString("description"))
+            ModelOption(
+                it.getString("id"), it.optString("name", it.getString("id")), it.optString("model"), it.optString("description"),
+                it.optBoolean("available", true),
+            )
         }
     }
 

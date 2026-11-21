@@ -34,6 +34,7 @@ WRITE_ONLY_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please |can 
                                 r"what'?s|what is|how do i)\b.*\b(?:one-?liner|command|script|function|code|regex|snippet|query|alias)\b", re.I)
 RUN_TOOLS = {"workspace__run_command", "workspace__open_app", "workspace__read_terminal", "workspace__list_files", "workspace__read_file",
              "workspace__write_file", "workspace__edit_file"}
+STUDY_TOOLS = frozenset({"card_add", "quiz_next", "quiz_mark", "quiz_progress"})
 DESKTOP_RUN_TOOLS = {"computer_run_command", "computer_read_file", "computer_write_file", "computer_edit_file",
                      "computer_list_files", "computer_search", "computer_find_files"}
 WRITE_ONLY_NOTE = "\n\n(Reply with the code itself. Don't run anything or look around your computer for this.)"

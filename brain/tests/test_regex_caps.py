@@ -43,6 +43,12 @@ class LongTextsStayQuick(unittest.TestCase):
                 self.assertQuick(reply_rules.is_only_a_deflection, text)
                 self.assertQuick(reply_rules.without_deflection, text)
 
+    def test_refusal_and_quiz_question_on_long_replies(self):
+        for text in ("a" * LONG, "I " * (LONG // 2), "Q: " + "x" * LONG, "Q: " * (LONG // 3), "I can " * (LONG // 6)):
+            with self.subTest(text=text[:20]):
+                self.assertQuick(reply_rules.is_a_refusal, text)
+                self.assertQuick(reply_rules.is_only_a_quiz_question, text)
+
     def test_checker_rewrite_request_on_long_text(self):
         for text in ("spin " * (LONG // 5), "similarity " * (LONG // 11), "rewrite " + "x " * LONG + " turnitin"):
             with self.subTest(text=text[:20]):

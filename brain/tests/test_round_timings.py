@@ -14,11 +14,13 @@ import brain  # noqa: E402
 import agent_turns  # noqa: E402
 import connections  # noqa: E402
 import models  # noqa: E402
+import weather  # noqa: E402
 
 WARM = {"load_duration": 4_000_000, "prompt_eval_count": 9000, "prompt_eval_duration": 3_000_000_000,
         "eval_count": 120, "eval_duration": 2_500_000_000}
 COLD = {**WARM, "load_duration": 6_000_000_000}
 CACHED = {**WARM, "prompt_eval_cached_count": 8500}
+NO_NETWORK_IN_TESTS = "the tests never reach the weather service"
 QWEN = {"name": "qwen3:14b", "billions": 14.8, "tools": True, "vision": False, "embedding": False, "thinking": True}
 
 
@@ -64,6 +66,7 @@ def offline_turns(case):
         unittest.mock.patch.object(brain, "be_honest", side_effect=lambda text, *_: text),
         unittest.mock.patch.object(agent_turns, "be_honest", side_effect=lambda text, *_: text),
         unittest.mock.patch.object(models, "find", return_value=QWEN),
+        unittest.mock.patch.object(weather, "get_json", side_effect=OSError(NO_NETWORK_IN_TESTS)),
     ]
     for patch in patches:
         patch.start()

@@ -241,3 +241,9 @@ test("Cloudflare's origin errors, a busy brain and a 500 while polling are ridde
     assert.deepEqual(result, { failed: false, text: "ok", toolsUsed: [] }, String(status));
   }
 });
+
+test("models say whether they are available, and are available unless the brain says not", async () => {
+  const { fetchImpl } = fakeFetch(reply(200, { data: [{ id: "arty/remote/x", model: "remote/x", available: false }, { id: "Arty" }] }));
+  const models = await new ArtyApi(KEYS, { fetchImpl }).models();
+  assert.deepEqual(models.map((m) => m.available), [false, true]);
+});

@@ -35,6 +35,15 @@ class TurnStatusTest {
     }
 
     @Test
+    fun `an offline model is marked offline in the picker`() {
+        val listed = TurnStatus.pickerModels(listOf(
+            ModelOption("arty/remote/friend/big-model", "Arty (remote/friend/big-model, offline)", "remote/friend/big-model", available = false),
+            ModelOption("arty/qwen3:14b", "Arty (qwen3:14b)", "qwen3:14b"),
+        ))
+        assertEquals(listOf("remote/friend/big-model (offline)", "qwen3:14b"), listed.drop(1).map { it.name })
+    }
+
+    @Test
     fun `an older brain that lists no Auto still gets the entry first`() {
         val listed = TurnStatus.pickerModels(listOf(ModelOption("Arty", "Arty", "qwen3:14b")))
         assertEquals(listOf(ModelOption("auto", "Arty Auto", "", TurnStatus.AUTO_HINT)), listed)

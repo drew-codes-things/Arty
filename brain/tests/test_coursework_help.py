@@ -844,5 +844,107 @@ class ABareRefusalOfCourseworkIsSentBackOnce(unittest.TestCase):
                 self.assertFalse(reply_rules.declines_without_a_reason(refusal))
 
 
+ESSAY_FOR_COURSEWORK = "Write my 500-word history essay on the causes of the First World War for my coursework"
+STUDY_TOOLS = {"card_add", "quiz_next", "quiz_mark", "quiz_progress"}
+WRITING_TOOLS = {"make_document", "workspace__write_file"}
+LIVE_MODEL_BILLIONS = 14.8
+LIVE_TOOLS = json.loads((BRAIN_FOLDER / "tests" / "fixtures" / "live_offered_tools.json").read_text(encoding="utf-8"))
+COURSEWORK_WRITING_ASKS = (*COURSEWORK_REQUESTS, ESSAY_FOR_COURSEWORK)
+REVISION_ASKS = (
+    "Make me flashcards on the causes of the First World War for my history exam",
+    "Help me revise for my biology exam on Friday",
+    "Can you test me on my history coursework topics?",
+    "Quiz me on the key dates for my history homework",
+    "Add a card to my coursework revision: the Treaty of Versailles was signed in 1919",
+    "I'm studying for my chemistry test, make some revision cards",
+)
+MORE_REVISION_ASKS = ("Can you test my knowledge of the French Revolution for my history exam?",
+                      "Test my memory of the periodic table for my chemistry homework")
+OTHER_ASKS = ("Add a flashcard: the capital of Peru is Lima", "How is my revision going?", "What's the weather tomorrow?")
+
+
+class LiveToolHub(FakeHub):
+    def __init__(self, names):
+        self.tools = [{"type": "function", "function": {"name": name, "description": "",
+                                                        "parameters": {"type": "object", "properties": {}}}}
+                      for name in names]
+        self.routes = {name: f"http://hub.invalid/{name}" for name in names}
+
+
+def live_turn(request):
+    engine = FakeEngine([said(HELPED)] * 4)
+    state = {"messages": [{"role": "user", "content": request}], "context": {}}
+    config = {**SHIPPED_CONFIG, "model": "m", "persona": "", "system_prompt": SHIPPED_PROMPT}
+    with unittest.mock.patch.object(connections, "hub", LiveToolHub(LIVE_TOOLS["hub_tools"])), \
+            unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
+            unittest.mock.patch.object(brain.models, "budget_for", return_value=LIVE_TOOLS["tool_budget"]), \
+            unittest.mock.patch.object(brain.models, "find", return_value=None), \
+            unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
+        return agent_loop.start_turn(config, state, brain.AgentRun())
+
+
+def offered_under_the_live_budget(request):
+    return {tool["function"]["name"] for tool in agent_loop.offered_tools(live_turn(request), 0)}
+
+
+class WritingCourseworkIsNotTurnedIntoFlashcards(unittest.TestCase):
+    def test_the_turn_sees_the_live_tool_list_and_budget(self):
+        names = [tool["function"]["name"] for tool in live_turn(OTHER_ASKS[2]).all_tools]
+        self.assertEqual(names, LIVE_TOOLS["all_tools"])
+        live_model = {"name": "m", "billions": LIVE_MODEL_BILLIONS, "tools": True}
+        with unittest.mock.patch.object(brain.models, "find", return_value=live_model):
+            self.assertEqual(brain.models.budget_for(SHIPPED_CONFIG, "m"), LIVE_TOOLS["tool_budget"])
+        self.assertLess(LIVE_TOOLS["tool_budget"], len(LIVE_TOOLS["all_tools"]))
+
+    def test_every_ask_has_its_live_offered_set_recorded(self):
+        for request in (*COURSEWORK_WRITING_ASKS, *REVISION_ASKS, *OTHER_ASKS):
+            with self.subTest(request=request[:50]):
+                self.assertIn(request, LIVE_TOOLS["offered"])
+
+    def test_the_live_essay_ask_was_offered_card_and_quiz_tools_but_no_document_maker(self):
+        before = set(LIVE_TOOLS["offered"][ESSAY_FOR_COURSEWORK])
+        self.assertEqual(before & STUDY_TOOLS, STUDY_TOOLS)
+        self.assertNotIn("make_document", before)
+
+    def test_coursework_asks_lose_only_the_card_and_quiz_tools(self):
+        for request in COURSEWORK_WRITING_ASKS:
+            with self.subTest(request=request[:50]):
+                before = set(LIVE_TOOLS["offered"][request])
+                offered = offered_under_the_live_budget(request)
+                self.assertFalse(offered & STUDY_TOOLS, sorted(offered & STUDY_TOOLS))
+                self.assertEqual(offered, before - STUDY_TOOLS)
+                self.assertEqual(offered & WRITING_TOOLS, before & WRITING_TOOLS)
+
+    def test_revision_and_other_asks_are_offered_what_they_were(self):
+        for request in (*REVISION_ASKS, *OTHER_ASKS):
+            with self.subTest(request=request[:50]):
+                self.assertEqual(offered_under_the_live_budget(request), set(LIVE_TOOLS["offered"][request]))
+
+    def test_revision_asks_keep_every_card_and_quiz_tool(self):
+        for request in REVISION_ASKS:
+            with self.subTest(request=request):
+                self.assertTrue(reply_rules.asks_for_revision(request))
+                self.assertEqual(offered_under_the_live_budget(request) & STUDY_TOOLS, STUDY_TOOLS)
+
+    def test_asks_to_test_my_knowledge_keep_every_card_and_quiz_tool(self):
+        for request in MORE_REVISION_ASKS:
+            with self.subTest(request=request):
+                self.assertTrue(reply_rules.is_coursework_request(request))
+                self.assertTrue(reply_rules.asks_for_revision(request))
+                self.assertEqual(offered_under_the_live_budget(request) & STUDY_TOOLS, STUDY_TOOLS)
+
+    def test_the_coursework_asks_are_not_revision_asks(self):
+        for request in COURSEWORK_WRITING_ASKS:
+            with self.subTest(request=request[:50]):
+                self.assertFalse(reply_rules.asks_for_revision(request))
+
+    def test_a_card_or_quiz_call_on_the_essay_ask_is_not_run(self):
+        turn = live_turn(ESSAY_FOR_COURSEWORK)
+        for name in STUDY_TOOLS:
+            with self.subTest(name=name):
+                self.assertFalse(agent_loop.was_offered(turn, name))
+        self.assertTrue(agent_loop.was_offered(turn, "deadline_add"))
+
+
 if __name__ == "__main__":
     unittest.main()

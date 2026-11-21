@@ -82,3 +82,11 @@ test("unknown numbers are hidden rather than shown as zero", () => {
   assert.deepEqual(chatStats(noCache), { turns: 1, steps: 0, tokens: 12 });
   assert.deepEqual(chatStats([]), { turns: 0 });
 });
+
+test("an offline model is marked offline in the picker", () => {
+  const listed = pickerModels([
+    { id: "arty/remote/friend/big-model", name: "Arty (remote/friend/big-model, offline)", model: "remote/friend/big-model", available: false },
+    { id: "arty/qwen3:14b", name: "Arty (qwen3:14b)", model: "qwen3:14b", available: true },
+  ]);
+  assert.deepEqual(listed.slice(1).map((model) => model.name), ["remote/friend/big-model (offline)", "qwen3:14b"]);
+});

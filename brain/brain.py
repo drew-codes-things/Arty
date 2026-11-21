@@ -594,8 +594,8 @@ class Handler(BaseHTTPRequestHandler):
             if method != "POST" or segments not in (["v1", "chat", "completions"], ["chat", "completions"]):
                 raise ApiError(403, room.NOT_A_ROOM_PATH)
             messages = valid_messages(self.body(room.MAX_ROOM_BODY_BYTES).get("messages"))
-            with room_gate.turn():
-                answer, tools_used = room.room_turn(messages, room_gate.owner)
+            with room_gate.turn() as seconds:
+                answer, tools_used = room.room_turn(messages, room_gate.owner, seconds)
             log.info("answered the room after %s", ", ".join(tools_used) or "no steps")
             return self.send_json(200, room.completion(answer))
         except ApiError as error:
@@ -640,7 +640,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"object": "list", "data": [
                 {"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "object": "model", "owned_by": "home", "model": m["name"],
                  "description": models.summary(m), "coding": models.is_for_coding(m["name"], coding_name),
-                 "context_tokens": models.context_tokens(config, m["name"]), "reply_tokens": reply_size, "agent_sampling": models.agent_sampling(config, m["name"])}
+                 "context_tokens": models.context_tokens(config, m["name"]), "reply_tokens": reply_size, "agent_sampling": models.agent_sampling(config, m["name"]),
+                 "available": models.is_available(m)}
                 for m in downloaded]})
         if segments in (["v1", "models"], ["models"]):
             listed = [{"id": MODEL_ID, "object": "model", "owned_by": "home"}]
@@ -648,8 +649,10 @@ class Handler(BaseHTTPRequestHandler):
                 config = connections.load_config()
                 main = models.find(config.get("model", ""))
                 listed[0].update(model=main["name"] if main else "", description=arty_description(config, main))
-                listed += [{"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "name": f"Arty ({m['name']}{'' if m['tools'] else ', no tools'})", "object": "model", "owned_by": "home",
-                            "model": m["name"], "description": models.summary(m)}
+                listed += [{"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "name": f"Arty ({m['name']}{'' if m['tools'] else ', no tools'}"
+                                                                                f"{'' if models.is_available(m) else ', ' + models.OFFLINE_MARK})",
+                            "object": "model", "owned_by": "home", "model": m["name"], "description": models.summary(m),
+                            "available": models.is_available(m)}
                            for m in models.chat_models()]
                 listed += models.solo_entries()
                 listed += local_addon.listed_models() if local_addon else []

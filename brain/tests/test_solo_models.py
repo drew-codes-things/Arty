@@ -45,6 +45,16 @@ class SoloChoice(unittest.TestCase):
             self.assertIsNone(models.solo_choice("solo/side-model:12b"))
 
 
+    def test_every_id_the_solo_listing_offers_is_accepted(self):
+        installed = [{"name": "side-model:latest", "embedding": False, "tools": True},
+                     {"name": "other:7b", "embedding": False, "tools": True}]
+        with unittest.mock.patch.object(models, "solo_models", return_value=["side-model", "other:7b"]), \
+                unittest.mock.patch.object(models, "installed", return_value=installed):
+            offered = [entry["id"] for entry in models.solo_entries()]
+            chosen = {offered_id: models.solo_choice(offered_id) for offered_id in offered}
+        self.assertEqual(offered, ["solo/side-model:latest", "solo/other:7b"])
+        self.assertEqual(chosen, {"solo/side-model:latest": installed[0], "solo/other:7b": installed[1]})
+
 class SoloTurn(unittest.TestCase):
     def setUp(self):
         listed, found = solo_setup()

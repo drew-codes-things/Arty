@@ -78,9 +78,15 @@ object TurnStatus {
     private const val ONE_DECIMAL = 10.0
 
     private val NAMED_BY_MODEL = listOf("arty/", "solo/")
+    private const val OFFLINE_SUFFIX = " (offline)"
 
     private fun ownLabel(option: ModelOption): String =
         if (NAMED_BY_MODEL.any { option.id.startsWith(it) }) option.model.ifBlank { option.name } else option.name
+
+    private fun pickerLabel(option: ModelOption): String {
+        val label = ownLabel(option)
+        return if (option.available || label.endsWith(OFFLINE_SUFFIX)) label else label + OFFLINE_SUFFIX
+    }
 
     fun pickerModels(models: List<ModelOption>): List<ModelOption> {
         val listed = models.firstOrNull { it.id == AUTO_ID }
@@ -89,7 +95,7 @@ object TurnStatus {
         val singles = mutableListOf<ModelOption>()
         for (option in models) {
             if (option.id == AUTO_ID || option.id == MainModel.ID) continue
-            val name = ownLabel(option)
+            val name = pickerLabel(option)
             if (name in seen || option.model in seen) continue
             seen += name
             if (option.model.isNotBlank()) seen += option.model

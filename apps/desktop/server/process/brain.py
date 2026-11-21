@@ -30,6 +30,7 @@ AUTO_NAME = "Arty Auto"
 AUTO_HINT = "Picks the best model for each message"
 NOW_AUTO = {MAIN_MODEL, RETIRED_MAIN_MODEL, ""}
 NAMED_BY_MODEL = ("arty/", "solo/")
+OFFLINE_SUFFIX = " (offline)"
 MEMORY_ACTIONS = {"add", "edit", "delete"}
 
 
@@ -368,6 +369,11 @@ def _own_label(entry):
     return (model or name) if entry["id"].startswith(NAMED_BY_MODEL) else name
 
 
+def _picker_label(entry):
+    label = _own_label(entry)
+    return label if entry.get("available") is not False or label.endswith(OFFLINE_SUFFIX) else label + OFFLINE_SUFFIX
+
+
 def picker_models(listed, auto=None):
     hint = (auto or {}).get("description") or AUTO_HINT
     picked = [{"id": AUTO_MODEL, "name": AUTO_NAME, "model": "", "description": hint}]
@@ -375,7 +381,7 @@ def picker_models(listed, auto=None):
     for entry in listed:
         if entry.get("id") in (AUTO_MODEL, MAIN_MODEL, None):
             continue
-        name, model = _own_label(entry), str(entry.get("model") or "")
+        name, model = _picker_label(entry), str(entry.get("model") or "")
         if name in seen or model in seen:
             continue
         seen.update(label for label in (name, model) if label)

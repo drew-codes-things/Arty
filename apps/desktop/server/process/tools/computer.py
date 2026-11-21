@@ -74,6 +74,7 @@ _EDITOR_TASK_FILES = {("vscode", "tasks.json"), ("vscode", "launch.json"), ("vsc
 _EMPTY, _ANY_START = "", object()
 _TYPED_LITERALLY = re.compile(r"[A-Za-z]:\\|\\\\|^\s*(?:echo|printf)\b")
 _SHELL_PUNCTUATION = re.compile(r"\$\(|[\s()`;|&<>\"'=]+")
+_VARIABLE_START = re.compile(r"\$(?=[\w{@*#?!$-])")
 SEARCH_MATCHES = 200
 SEARCH_FILE_BYTES = 2_000_000
 FOUND_FILES = 300
@@ -260,8 +261,9 @@ def _candidate_paths(command, where):
             candidate = os.path.expandvars(os.path.expanduser(choice))
             if not candidate or candidate.startswith("-"):
                 continue
-            if "$" in candidate:
-                candidate = candidate.split("$", 1)[0] + "*"
+            variable = _VARIABLE_START.search(candidate)
+            if variable:
+                candidate = candidate[:variable.start()] + "*"
             for folder in _working_folders(command, where):
                 yield os.path.normpath(candidate if os.path.isabs(candidate) else os.path.join(folder, candidate))
 
@@ -331,6 +333,11 @@ def computer_read_file(path, start_line=1, end_line=None):
     return _clip(f"({len(lines)} lines)\n{body}")
 
 
+def _read_text_exactly(path, errors="strict"):
+    with path.open(encoding="utf-8", errors=errors, newline="") as handle:
+        return handle.read()
+
+
 def _line_ending_of(text):
     return "\r\n" if "\r\n" in text else "\n"
 
@@ -345,7 +352,7 @@ def computer_write_file(path, content):
     try:
         p = _path(path)
         if p.is_file():
-            text = _with_line_ending(text, _line_ending_of(p.read_text(encoding="utf-8", errors="replace", newline="")))
+            text = _with_line_ending(text, _line_ending_of(_read_text_exactly(p, errors="replace")))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8", newline="")
     except (ValueError, OSError) as e:
@@ -357,7 +364,7 @@ def computer_write_file(path, content):
 def computer_edit_file(path, old_text, new_text):
     try:
         p = _path(path, must_exist=True)
-        current = p.read_text(encoding="utf-8", newline="")
+        current = _read_text_exactly(p)
     except UnicodeDecodeError:
         return f"{path} isn't UTF-8 text, so it can't be edited safely here."
     except (ValueError, OSError) as e:

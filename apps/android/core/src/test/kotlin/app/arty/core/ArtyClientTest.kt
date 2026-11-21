@@ -104,6 +104,14 @@ class ArtyClientTest {
     }
 
     @Test
+    fun `a model the brain marks unavailable is read as unavailable`() {
+        routes["GET /v1/models"] = 200 to """{"data":[{"id":"arty/remote/x","model":"remote/x","available":false},{"id":"Arty"}]}"""
+        val models = client.models()
+        assertEquals(false, models[0].available)
+        assertEquals(true, models[1].available)
+    }
+
+    @Test
     fun `memory facts are added, edited and deleted through the brain's memory routes`() {
         routes["POST /v1/memory/add"] = 201 to """{"entity":"Rowan","fact":"Likes tea"}"""
         routes["POST /v1/memory/edit"] = 200 to """{"entity":"Rowan","fact":"Likes coffee"}"""

@@ -142,6 +142,7 @@ export class ArtyApi {
     const listed = reply.auto ? [reply.auto, ...(reply.data ?? [])] : (reply.data ?? []);
     return listed.map((model) => ({
       id: model.id, name: model.name || model.id, model: model.model || "", description: model.description || "",
+      available: model.available !== false,
     }));
   }
 

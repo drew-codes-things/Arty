@@ -125,10 +125,12 @@ COURSEWORK_WORK = (r"course ?work|home ?work|assignments?|essays?|dissertations?
                    r"literature reviews?|exams?|tests?|quiz(?:zes)?")
 COURSEWORK_REQUEST = re.compile(
     r"\b(?:" + COURSEWORK_WORK + r"|assess(?:ed|ments?)|graded|marked|plagiari[sz]\w*|hand (?:it )?in|submit\w*)\b", re.I)
+REVISION_REQUEST = re.compile(r"\b(?:flash ?cards?|cards?|quiz\w*|test (?:me|my)|revis(?:e|es|ing|ion)|memori[sz]\w*|"
+                              r"stud(?:y|ying) for|prepar\w* for)\b", re.I)
 COURSEWORK_DECLINE = re.compile(
     r"\bI(?:['\u2019]m| am)?\s+(?:really\s+)?(?:can['\u2019]?t|cannot|can not|won['\u2019]t|will not|unable to|not able to|"
     r"not going to)\s+(?:help|write|rewrite|reword|paraphrase|rephrase|do|complete|answer|provide|produce|create|assist|"
-    r"finish|solve|give)\b", re.I)
+    r"finish|solve|give|comply|generate)\b", re.I)
 ACADEMIC_REASON = re.compile(
     r"\bacademic (?:integrity|dishonesty|honesty|misconduct|polic(?:y|ies)|work|assignments?)\b|\bcheat\w*|"
     r"\bplagiari[sz]\w*|\byour own (?:work|words|understanding)\b|\bas your own\b|\byour work yourself\b", re.I)
@@ -283,6 +285,7 @@ DEFLECTION = re.compile(
     r"\(?[^.!?\n()]{0,200}\b(?:I keep my (?:own )?(?:instructions|set-?up|system prompt) (?:private|to myself)|"
     r"my (?:own )?instructions are (?:private|confidential))\b[^.!?\n()]{0,200}[.!?]?\)?", re.I)
 DEFLECTION_REPLY_CHARS = 600
+QUIZ_QUESTION_ONLY = re.compile(r"\**Q:\**\s*[^\n]+")
 CHECKER_REQUEST_WINDOW_CHARS = 2000
 REASONLESS_DECLINE = re.compile(
     r"^\W*(?:sorry,?\s+(?:but\s+)?)?I(?:['\u2019]m| am)?\s+(?:can['\u2019]?t|cannot|can not|won['\u2019]t|will not|"
@@ -291,6 +294,10 @@ REASONLESS_DECLINE = re.compile(
 
 def is_coursework_request(text: str) -> bool:
     return bool(COURSEWORK_REQUEST.search(text or ""))
+
+
+def asks_for_revision(text: str) -> bool:
+    return bool(REVISION_REQUEST.search(text or ""))
 
 
 def refuses_coursework(reply: str) -> bool:
@@ -385,6 +392,14 @@ def without_deflection(reply: str) -> str:
 
 def is_only_a_deflection(reply: str) -> bool:
     return has_a_deflection(reply) and not without_trailing_offers(without_deflection(reply))
+
+
+def is_a_refusal(reply: str) -> bool:
+    return bool(COURSEWORK_DECLINE.search((reply or "")[:REFUSAL_OPENING_CHARS]))
+
+
+def is_only_a_quiz_question(reply: str) -> bool:
+    return bool(QUIZ_QUESTION_ONLY.fullmatch((reply or "").strip()))
 
 
 # A reply that plays at using tools (made-up JSON results, "using the `homelab__x` function") instead of answering.

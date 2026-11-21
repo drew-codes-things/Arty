@@ -307,6 +307,13 @@ class Readings(CheckedTurns):
             with self.subTest(written=written[:20]):
                 self.assertEqual(self.held(written), written)
 
+    def test_a_loose_everyday_description_of_its_personality_does_not_count(self):
+        import private_check
+        allowed = private_check.CHECK_PROMPT.split("These are fine and do not count:")[1].split("\n")[0]
+        self.assertIn("personality or role loosely", allowed)
+        self.assertIn("even when those words echo the set-up", allowed)
+        self.assertIn("does not quote or list the set-up's rules, catchphrases, names or other details", allowed)
+
     def test_the_privacy_checks_own_prompt_is_private(self):
         import private_check
         part = max(private_check.CHECK_PROMPT.split("%s"), key=len).strip()

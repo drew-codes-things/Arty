@@ -18,6 +18,7 @@ def asks_before_mouse_and_keyboard(monkeypatch, on=True):
 
 def test_opening_an_app_with_a_new_document_asks_like_any_key_press(monkeypatch):
     asks_before_mouse_and_keyboard(monkeypatch)
+    monkeypatch.setattr(computer, "_find_app", lambda name: {"id": "org.kde.kate", "name": "Kate", "exec": "kate", "path": Path("k")})
     assert computer.needs_ok("computer_open", {"app": "kate", "new_document": True}, set())
     assert computer.needs_ok("computer_open", {"app": "kate", "new_document": True}, {"gui"}) is None
     assert computer.needs_ok("computer_open", {"app": "kate"}, set()) is None

@@ -104,6 +104,13 @@ class RoomGate(unittest.TestCase):
         self.clock.now += 3600
         self.take_turn()
 
+    def test_a_turn_gets_no_more_time_than_the_hour_has_left(self):
+        with self.gate.turn() as seconds:
+            self.assertEqual(seconds, room.ROOM_TURN_SECONDS)
+            self.clock.now += room.ROOM_SECONDS_PER_HOUR - 50
+        with self.gate.turn() as seconds:
+            self.assertEqual(seconds, 50)
+
     def test_requests_are_limited_per_minute(self):
         for _ in range(room.REQUESTS_PER_MINUTE):
             self.gate.admit(ROOM_HOST, frozenset({ROOM_HOST}))
@@ -309,12 +316,15 @@ class RoomTurn(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-    def run_with(self, outcome):
+    def run_with(self, outcome, seconds=None):
         def fake_run(config, state, run):
             self.runs.append((config, state, run))
             return {"tools_used": [], "raw": {}, **outcome}
         with unittest.mock.patch.object(room.agent_loop, "run_agent", side_effect=fake_run):
-            return room.room_turn([{"role": "system", "content": "be Bob"}, {"role": "user", "content": "yes, go ahead"}])
+            conversation = [{"role": "system", "content": "be Bob"}, {"role": "user", "content": "yes, go ahead"}]
+            if seconds is None:
+                return room.room_turn(conversation)
+            return room.room_turn(conversation, seconds=seconds)
 
     def test_the_turn_is_restricted_and_untrusted(self):
         started = time.monotonic()
@@ -331,6 +341,18 @@ class RoomTurn(unittest.TestCase):
         self.assertIs(state["context"].get("untrusted"), True)
         self.assertNotIn("Sam Owner", config["persona"])
         self.assertEqual(config["own_memories"], "")
+
+    def test_a_turn_outlasts_a_cold_model_load_and_ends_before_the_room_app_gives_up(self):
+        cold_load_and_reply_seconds = 180
+        last_step_and_honesty_check_seconds = 100
+        self.assertGreaterEqual(room.ROOM_TURN_SECONDS, cold_load_and_reply_seconds)
+        self.assertLessEqual(room.ROOM_TURN_SECONDS + last_step_and_honesty_check_seconds, room.ROOM_APP_WAIT_SECONDS)
+
+    def test_a_shorter_turn_time_from_the_gate_sets_the_deadline(self):
+        started = time.monotonic()
+        self.run_with({"status": "done", "answer": "Hello from Arty."}, seconds=30)
+        self.assertLessEqual(self.runs[0][2].deadline, time.monotonic() + 30)
+        self.assertGreaterEqual(self.runs[0][2].deadline, started + 30)
 
     def test_nothing_is_archived_or_remembered(self):
         self.run_with({"status": "done", "answer": "Hello from Arty."})

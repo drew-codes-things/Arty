@@ -39,14 +39,14 @@ from reply_rules import (PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLA
     TOOL_TALK, DO_REQUEST, PRETEND_TOOLS, TOOL_FAILED, FAILED_NOTE, ANSWERED_ALREADY_CHARS, NOT_ACTIONS, without_app_notes,
     PRIVATE_CALL_NOT_RUN, SIBLING_CALL_NOT_RUN, HELD_CALL_RESULTS, ACTION_CLAIM, SCHEDULE_REQUEST, OFFERED_A_SCHEDULE,
     SCHEDULE_NOT_ASKED, is_client_refusal, has_a_deflection, is_only_a_deflection, without_deflection, is_plain_identity_question,
-    is_needless_coursework_refusal, asks_to_disguise_harm)
+    is_needless_coursework_refusal, asks_to_disguise_harm, is_coursework_request, asks_for_revision)
 from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ONLY_NOTE, asks_for_code, asks_for_the_computer,
     WRITE_AND_RUN_NOTE, READ_LINK_NOTE, asks_to_read_a_link, thinking_for, HOW_TO_NOTE, asks_how_to,
     steer_last_request, steer_away_from_repeats, with_thinking, with_context, parse_arguments, DESKTOP_TOOLS,
     NOTHING_TO_SIGN_IN, question_for_user, RUN_COMMAND_TOOLS, DESKTOP_RUN_COMMAND_TOOLS, RUN_THE_CODE_NOTE, DONT_RUN_NOTE,
     asks_to_install, WRITE_ONLY_UNCHECKED_NOTE, DONT_RUN_UNCHECKED_NOTE, SEARCH_RESULTS_NOTE, NOTHING_DONE_NOTE,
     PRETEND_TOOLS_NOTE, HALF_WRITTEN_CALL_NOTE, EMPTY_REPLY_NOTE, COURSEWORK_NOTE, UNASKED_PRIVACY_NOTE,
-    HARMFUL_REWRITE_NOTE)
+    HARMFUL_REWRITE_NOTE, STUDY_TOOLS)
 from connections import TOOL_RESULT_CHARS
 from prompting import system_prompt, with_persona_left_out, with_tool_guide, current_context
 from native_calls import run_native_safely
@@ -406,6 +406,7 @@ class AgentTurn:
     user_requests: str = ""
     private_set_up: str = ""
     approval_key: str | None = None
+    withheld: frozenset = frozenset()
 
     @property
     def is_chat(self) -> bool:
@@ -641,6 +642,8 @@ def steer_the_request(turn: AgentTurn):
     last_request = turn.last_request
     if turn.is_chat and asks_to_disguise_harm(last_request):
         steer_last_request(turn.history, HARMFUL_REWRITE_NOTE)
+    if turn.is_chat and is_coursework_request(last_request) and not asks_for_revision(last_request):
+        turn.withheld = turn.withheld | STUDY_TOOLS
     if turn.is_chat and asks_how_to(last_request):
         withhold_run_tools(turn)
         steer_last_request(turn.history, HOW_TO_NOTE)
@@ -735,6 +738,7 @@ def offered_tools(turn: AgentTurn, round_number: int) -> list:
     tools = policy.select_tools(turn.all_tools, turn.config, turn.request_text, turn.requested)
     if len(tools) < len(turn.all_tools):
         tools = [policy.use_tools_definition(turn.config)] + tools  # first: it never changes, so it stays cached
+    tools = [tool for tool in tools if tool["function"]["name"] not in turn.withheld]
     if turn.run.client_tools and not turn.toolless:
         tools = tools + [tool for tool in turn.run.client_tools if tool["function"]["name"] in turn.client_names]
     if turn.answer_from_lookups and (round_number == 0 or turn.code_checked):
@@ -1224,7 +1228,7 @@ def asked_to_schedule(turn: AgentTurn) -> bool:
 
 
 def offered_names(turn: AgentTurn) -> list[str]:
-    return [tool["function"]["name"] for tool in turn.all_tools]
+    return [tool["function"]["name"] for tool in turn.all_tools if tool["function"]["name"] not in turn.withheld]
 
 
 def was_offered(turn: AgentTurn, name: str) -> bool:

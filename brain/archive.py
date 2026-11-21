@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from api_support import optional_int
-from reply_rules import NOT_FOR_ME, is_only_a_deflection
+from reply_rules import NOT_FOR_ME, is_a_refusal, is_only_a_deflection, is_only_a_quiz_question
 
 
 RECENT_CHARS = 300
@@ -59,13 +59,17 @@ def archive_records(config):
                 yield record
 
 
+def is_left_out_of_recent(reply: str) -> bool:
+    return is_only_a_deflection(reply) or is_a_refusal(reply) or is_only_a_quiz_question(reply)
+
+
 def recent_exchanges(config):
     wanted = int(config.get("recent_exchanges", 6))
     if wanted <= 0:
         return ""
     records = []
     for record in archive_records(config):
-        if is_only_a_deflection(record["assistant"]):
+        if is_left_out_of_recent(record["assistant"]):
             continue
         records.append(record)
         if len(records) >= wanted:

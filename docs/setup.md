@@ -177,7 +177,7 @@ Follow [arty-pc/README.md](../arty-pc/README.md) to sign Arty's browser in to th
 | App | First start |
 |---|---|
 | [Arty Desktop](../apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](../apps/android/README.md) | Install `Arty-1.6.0.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](../apps/android/README.md) | Install `Arty-1.6.1.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](../apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](../apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |

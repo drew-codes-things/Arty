@@ -157,3 +157,15 @@ def test_the_window_reads_and_changes_memory_through_the_local_service(monkeypat
     assert client.post("/memory/rename", json={}, headers=headers).status_code == 404
     assert client.get("/memory").status_code == 403
     assert changes == [("edit", {"entity": "Rowan", "old": "Likes tea", "new": "my pin is 1"})]
+
+
+def test_an_offline_model_is_marked_offline_in_the_picker():
+    listed = [
+        {"id": "arty/remote/friend/big-model", "name": "Arty (remote/friend/big-model, offline)", "model": "remote/friend/big-model",
+         "available": False},
+        {"id": "arty/qwen3:14b", "name": "Arty (qwen3:14b)", "model": "qwen3:14b", "available": True},
+    ]
+    picked = brain.picker_models(listed)
+    assert [(entry["id"], entry["name"]) for entry in picked[1:]] == [
+        ("arty/remote/friend/big-model", "remote/friend/big-model (offline)"), ("arty/qwen3:14b", "qwen3:14b"),
+    ]

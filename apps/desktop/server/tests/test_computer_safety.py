@@ -12,12 +12,32 @@ from process.tools import computer, session
 pytestmark = pytest.mark.usefixtures("linux")
 
 
+def use_as_home(folder, monkeypatch):
+    monkeypatch.setattr(computer, "HOME", folder)
+    monkeypatch.setattr(computer, "_SECRET_PATHS", computer.secret_paths(folder))
+    monkeypatch.setattr(computer.os.path, "expanduser", lambda path: str(folder) + path[1:] if path.startswith("~") else path)
+    return folder
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    monkeypatch.setattr(computer, "HOME", tmp_path)
-    monkeypatch.setattr(computer, "_SECRET_PATHS", computer.secret_paths(tmp_path))
-    monkeypatch.setattr(computer.os.path, "expanduser", lambda path: str(tmp_path) + path[1:] if path.startswith("~") else path)
-    return tmp_path
+    return use_as_home(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def home_named_with_a_trailing_dollar(tmp_path, monkeypatch):
+    folder = tmp_path / "SERVER$"
+    folder.mkdir()
+    return use_as_home(folder, monkeypatch)
+
+
+@pytest.fixture
+def path_read_text_before_python_313(monkeypatch):
+    real = Path.read_text
+
+    def read_text(self, encoding=None, errors=None):
+        return real(self, encoding=encoding, errors=errors)
+    monkeypatch.setattr(Path, "read_text", read_text)
 
 
 def test_opening_a_program_that_is_not_an_installed_app_asks_first(monkeypatch):
@@ -100,6 +120,22 @@ def test_a_command_that_reaches_a_secret_by_wildcard_is_refused(home):
     assert "off limits" in computer.computer_run_command('cat "$(echo ~/.netrc)"')
 
 
+def test_a_secret_is_still_named_when_a_folder_above_it_ends_in_a_dollar_sign(home_named_with_a_trailing_dollar):
+    home = home_named_with_a_trailing_dollar
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "id_ed25519").write_text("key\n")
+    assert computer._names_a_secret_path("cat ~/.ssh/id_ed25519", str(home))
+    assert computer._names_a_secret_path("cat ~/.s*h/id_*", str(home))
+    assert not computer._names_a_secret_path("cat ~/notes.txt", str(home))
+
+
+def test_a_variable_in_a_path_still_counts_as_a_wildcard(home):
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "id_ed25519").write_text("key\n")
+    assert computer._names_a_secret_path("cat ~/.ssh/id_$KIND", str(home))
+    assert computer._names_a_secret_path("cat ~/.ssh/${KIND}", str(home))
+
+
 def test_a_regex_that_could_run_for_ever_is_refused(home):
     (home / "a.txt").write_text("a" * 40 + "!\n")
     started = time.monotonic()
@@ -141,6 +177,15 @@ def test_writing_a_file_keeps_exactly_what_was_given_or_the_files_endings(home):
     old.write_bytes(b"x\r\ny\r\n")
     computer.computer_write_file(str(old), "p\nq\n")
     assert old.read_bytes() == b"p\r\nq\r\n"
+
+
+def test_line_endings_are_kept_on_pythons_without_the_newline_argument_to_read_text(home, path_read_text_before_python_313):
+    target = home / "run.bat"
+    target.write_bytes(b"one\r\ntwo\r\n")
+    assert computer.computer_edit_file(str(target), "one", "uno").startswith("Edited")
+    assert target.read_bytes() == b"uno\r\ntwo\r\n"
+    assert computer.computer_write_file(str(target), "x\ny\n").startswith("Wrote")
+    assert target.read_bytes() == b"x\r\ny\r\n"
 
 
 def test_code_and_markup_are_typed_exactly_as_given(monkeypatch):

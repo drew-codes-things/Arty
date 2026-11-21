@@ -16,6 +16,8 @@ PULL_TIMEOUT_SECONDS = 6 * 3600
 MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9._/-]*(:[a-z0-9._-]+)?$")
 DROPDOWN_PREFIX = "arty/"
 SOLO_PREFIX = "solo/"
+REMOTE_PREFIX = "remote/"
+OFFLINE_MARK = "offline"
 CODER_MARK = "coder"
 VRAM_BUDGET_MB = 11500
 LOAD_OVERHEAD = 1.2
@@ -86,6 +88,7 @@ def _refresh_installed() -> list[dict]:
             "embedding": "embedding" in capabilities,
             "thinking": "thinking" in capabilities,
             "context_length": trained_context(shown.get("model_info") or {}),
+            "available": entry.get("available") is not False,
         })
     with _cache_lock:
         _cache.update(at=time.time(), models=models)
@@ -108,22 +111,22 @@ def solo_models() -> list[str]:
         return list(json.load(handle).get("solo_models") or [])
 
 
+def solo_installed() -> list[tuple[str, dict]]:
+    return [(name, model) for name in solo_models() if (model := find(name))]
+
+
 def solo_choice(requested: str) -> dict | None:
     if not requested.startswith(SOLO_PREFIX):
         return None
-    name = requested.removeprefix(SOLO_PREFIX)
-    if name not in solo_models():
-        return None
-    return find(name)
+    wanted = requested.removeprefix(SOLO_PREFIX)
+    return next((model for name, model in solo_installed() if wanted in (name, model["name"])), None)
 
 
 def solo_entries() -> list[dict]:
     entries = []
-    for name in solo_models():
-        model = find(name)
-        if model:
-            entries.append({"id": f"{SOLO_PREFIX}{model['name']}", "name": SOLO_LABEL.format(name=model["name"]),
-                            "object": "model", "owned_by": "home", "model": model["name"], "description": SOLO_DESCRIPTION})
+    for _name, model in solo_installed():
+        entries.append({"id": f"{SOLO_PREFIX}{model['name']}", "name": SOLO_LABEL.format(name=model["name"]),
+                        "object": "model", "owned_by": "home", "model": model["name"], "description": SOLO_DESCRIPTION})
     return entries
 
 
@@ -169,12 +172,17 @@ TOOLLESS_REFUSAL = ("{name} can't use tools, so I'd lose memory saving, my compu
                     "You can allow it anyway with `ai-toolless on` on the AI server.")
 
 
+def is_available(model: dict) -> bool:
+    return model.get("available") is not False
+
+
 def summary(model: dict) -> str:
-    size = f"{model['billions']:g}B" if model.get("billions") else ""
-    traits = ["thinks when needed" if model.get("thinking") else "",
-              "all tools" if model.get("tools") else "chat only, no tools",
-              "sees images" if model.get("vision") else ""]
-    return " · ".join(part for part in [size, *traits] if part)
+    parts = ["" if is_available(model) else OFFLINE_MARK,
+             f"{model['billions']:g}B" if model.get("billions") else "",
+             "thinks when needed" if model.get("thinking") else "",
+             "all tools" if model.get("tools") else "chat only, no tools",
+             "sees images" if model.get("vision") else ""]
+    return " · ".join(part for part in parts if part)
 
 
 DEFAULT_CONTEXT_TOKENS = 12288
@@ -387,7 +395,13 @@ def _wait_until_gone(names: list[str]) -> None:
     log.warning("the engine still holds %s %s s after being asked to unload it", ", ".join(names), UNLOAD_WAIT_SECONDS)
 
 
+def is_remote(name: str) -> bool:
+    return name.startswith(REMOTE_PREFIX)
+
+
 def make_room(name: str, budget_bytes: int) -> list[str]:
+    if is_remote(name):
+        return []
     try:
         running = _engine("/api/ps").get("models", [])
         if any(m["name"] == name for m in running):

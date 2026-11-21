@@ -8,9 +8,15 @@ const ONE_DECIMAL = 10;
 
 export const MAIN_MODEL_ID = "Arty";
 const NAMED_BY_MODEL = ["arty/", "solo/"];
+const OFFLINE_SUFFIX = " (offline)";
 
 function ownLabel(model) {
   return NAMED_BY_MODEL.some((prefix) => model.id.startsWith(prefix)) ? model.model || model.name : model.name;
+}
+
+function pickerLabel(model) {
+  const label = ownLabel(model);
+  return model.available === false && !label.endsWith(OFFLINE_SUFFIX) ? label + OFFLINE_SUFFIX : label;
 }
 
 export function pickerModels(models) {
@@ -20,7 +26,7 @@ export function pickerModels(models) {
   const singles = [];
   for (const model of models) {
     if (model.id === AUTO_MODEL_ID || model.id === MAIN_MODEL_ID) continue;
-    const name = ownLabel(model);
+    const name = pickerLabel(model);
     if (seen.has(name) || seen.has(model.model)) continue;
     seen.add(name);
     if (model.model) seen.add(model.model);

@@ -39,7 +39,8 @@ MINUTE_SECONDS = 60
 HOUR_SECONDS = 3600
 ROOM_TOOL_ROUNDS = 3
 ROOM_REPLY_TOKENS = 500
-ROOM_TURN_SECONDS = 90
+ROOM_APP_WAIT_SECONDS = 300
+ROOM_TURN_SECONDS = 200
 ROOM_SECONDS_PER_HOUR = 600
 OWNER_QUIET_SECONDS = 300
 ROOM_TIME_ZONE = "UTC"
@@ -90,10 +91,13 @@ class Spending:
         self.clock = clock
         self.spent: collections.deque = collections.deque()
 
-    def is_full(self) -> bool:
+    def seconds_left(self) -> float:
         while self.spent and self.clock() - self.spent[0][0] >= self.seconds:
             self.spent.popleft()
-        return sum(amount for _, amount in self.spent) >= self.most_seconds
+        return max(0.0, self.most_seconds - sum(amount for _, amount in self.spent))
+
+    def is_full(self) -> bool:
+        return self.seconds_left() <= 0
 
     def add(self, amount: float) -> None:
         self.spent.append((self.clock(), amount))
@@ -170,9 +174,10 @@ class Gate:
                 raise ApiError(429, BUSY)
             for window in self.turns:
                 window.add()
+            seconds = min(ROOM_TURN_SECONDS, self.spent.seconds_left())
         started = self.clock()
         try:
-            yield
+            yield seconds
         finally:
             with self.lock:
                 self.spent.add(self.clock() - started)
@@ -264,8 +269,9 @@ def finished_answer(config: dict, conversation: list, state: dict, outcome: dict
                              config["model"], config.get("keep_alive"), state.get("prefix"), outcome.get("sandbox_line", ""))
 
 
-def room_turn(messages: list, owner: OwnerActivity | None = None) -> tuple[str, list[str]]:
-    deadline = time.monotonic() + ROOM_TURN_SECONDS
+def room_turn(messages: list, owner: OwnerActivity | None = None,
+              seconds: float = ROOM_TURN_SECONDS) -> tuple[str, list[str]]:
+    deadline = time.monotonic() + seconds
     config = room_config(connections.load_config())
     conversation, said = room_conversation(messages)
     if declined := safety.check(text_to_screen(joined_messages(messages)), config.get("crisis_help")):
