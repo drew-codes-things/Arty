@@ -1,7 +1,13 @@
+import app_actions
+import job_tools
+import media_tools
 import personal
+import reading_tools
 import reckon
 import sharing
+import shopping
 import timing
+import working
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -116,5 +122,11 @@ NATIVE_TOOLS = {
 NATIVE_TOOLS.update({name: definition for name, (_, definition) in personal.TOOLS.items()})
 NATIVE_TOOLS.update({name: definition for name, (_, definition) in reckon.TOOLS.items()})
 NATIVE_TOOLS.update({name: definition for name, (_, definition) in sharing.TOOLS.items()})
-BACKGROUND_ONLY_EXCLUDED = {"start_background_task", "schedule_task", "cancel_scheduled", "switch_model"}
-API_CALLABLE_NATIVE = {*personal.TOOLS, *sharing.TOOLS, "weather", "week_recap", "calendar_events", "calendar_add", "calendar_change", "calendar_remove", "convert_file", "recall_conversations", "notify_user", "start_background_task", "schedule_task", "list_scheduled", "cancel_scheduled", "list_tasks", "list_models", "switch_model", "ask_other_model"}
+NATIVE_TOOLS.update({name: definition for name, (_, definition) in working.TOOLS.items()})
+NATIVE_TOOLS.update({name: definition for name, (_, definition) in shopping.TOOLS.items()})
+NATIVE_TOOLS.update({name: definition for name, (_, definition) in job_tools.TOOLS.items()})
+NATIVE_TOOLS.update({name: definition for name, (_, definition) in reading_tools.TOOLS.items()})
+NATIVE_TOOLS.update({name: definition for name, (_, definition) in media_tools.TOOLS.items()})
+NATIVE_TOOLS.update(app_actions.TOOLS)
+BACKGROUND_ONLY_EXCLUDED = {"start_background_task", "schedule_task", "cancel_scheduled", "switch_model", "email_draft", *job_tools.CHANGING, *app_actions.ASKS_FIRST}
+API_CALLABLE_NATIVE = {*personal.TOOLS, *sharing.TOOLS, *reading_tools.TOOLS, *media_tools.TOOLS, "email_inbox", "calendar_app_events", "weather", "week_recap", "calendar_events", "calendar_add", "calendar_change", "calendar_remove", "convert_file", "recall_conversations", "notify_user", "start_background_task", "schedule_task", "list_scheduled", "cancel_scheduled", "list_tasks", "list_models", "switch_model", "ask_other_model"}

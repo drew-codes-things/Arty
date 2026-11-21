@@ -5,15 +5,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import abilities
+import app_actions
 import calendar_feed
 import connections
 import greetings
 import models
 import personal
 import phone
+import policy
 import quick
 import research
 import safety
+import shopping
+import said_to_them
 import undo
 import weather
 
@@ -21,7 +25,7 @@ from archive import message_text, archive_records
 from settings import ARTY_ENGINE_URL
 from native_tools import NATIVE_TOOLS
 from reply_rules import (REMIND_REQUEST, CHAT_APP, reminder_from, DO_REQUEST, ADDRESSED_PROMPT, APP_NOTES,
-    without_app_notes, user_words)
+    without_app_notes, user_words, VOICE_MODE, ON_A_PHONE_CALL)
 from schedules import cancel_by_name, set_reminder
 from connections import complete_text, classify_text
 
@@ -105,18 +109,43 @@ def undo_last_turn(config) -> str:
         finished = datetime.fromisoformat(last["time"]).timestamp() if last else None
     except (KeyError, ValueError, OSError):
         last, finished = None, None
+    if last is not None and app_actions.ASKS_FIRST & set(last.get("tools") or []):
+        card, nothing = app_actions.undo_card()
+        return policy.approval_question(card) if card else nothing
     if last is None or finished is None or not MAKING_TOOLS & set(last.get("tools") or []):
         return NOTHING_TO_UNDO
     return undo.undo_last(made_between=(finished - TURN_SECONDS, finished + TURN_SLACK_SECONDS))
 
 
-def phone_action(said: str) -> dict | None:
-    return None if quick.refers_back(said) else phone.from_request(said)
+def text_for(told: dict) -> dict:
+    action = {"kind": "text", "who": told["people"][0], "body": said_to_them.text_body(told)}
+    return {**action, "others": told["people"][1:]} if len(told["people"]) > 1 else action
+
+
+def phone_action(said: str, client: str = "") -> dict | None:
+    if told := said_to_them.tell_request(said):
+        return text_for(told) if told["by_text"] else None
+    return None if quick.refers_back(said) else phone.from_request(said) or phone.device_request(said, client)
+
+
+def is_spoken(client_system: str) -> bool:
+    return VOICE_MODE in client_system or ON_A_PHONE_CALL in client_system
+
+
+def said_aloud(told: dict, client: str, client_system: str, user_name: str) -> str:
+    reply = said_to_them.addressed(told, user_name)
+    if is_spoken(client_system) or client not in phone.PHONE_CLIENTS:
+        return reply
+    return f"{reply}\n\n{said_to_them.text_offer(told)}"
+
+
+def camera_action(said: str) -> dict | None:
+    return None if quick.refers_back(said) else phone.camera_request(said)
 
 
 def asks_for_something_else(said: str) -> bool:
-    return bool(ASKED_TO_DO.search(said) or REMIND_REQUEST.search(said) or phone.from_request(said) or undo.is_request(said)
-                or quick.calendar_add(said) or quick.list_add(said) or TALKED_ABOUT.search(said))
+    return bool(ASKED_TO_DO.search(said) or REMIND_REQUEST.search(said) or phone.from_request(said) or said_to_them.tell_request(said)
+                or undo.is_request(said) or quick.calendar_add(said) or quick.list_add(said) or TALKED_ABOUT.search(said))
 
 
 def quick_action(said: str, after_a_question: bool = False) -> tuple[str, str] | None:
@@ -173,8 +202,9 @@ def judge_answer(config, question: str, expected: str, given: str) -> tuple[bool
 
 def researched_answer(said: str, quick: bool) -> tuple[str, list[str]]:
     if quick:
-        return research.run(said, connections.hub.call, complete_text, pages=research.QUICK_PAGES, browser=False, classify=classify_text)
-    return research.run(said, connections.hub.call, complete_text, classify=classify_text)
+        return research.run(said, shopping.with_pinned_fetch(connections.hub.call), complete_text, pages=research.QUICK_PAGES,
+                            browser=False, classify=classify_text)
+    return research.run(said, shopping.with_pinned_fetch(connections.hub.call), complete_text, classify=classify_text)
 
 
 def solo_conversation(messages):

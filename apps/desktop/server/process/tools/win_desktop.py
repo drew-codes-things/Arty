@@ -297,6 +297,19 @@ def front_window():
     return _process_name(hwnd), _title(hwnd)
 
 
+def front_window_id():
+    hwnd = _user().GetForegroundWindow()
+    return str(hwnd) if hwnd else None
+
+
+def activate_window(window_id):
+    try:
+        focus_window(int(window_id))
+    except (RuntimeError, ValueError, OSError):
+        return False
+    return True
+
+
 def _is_cloaked(hwnd):
     cloaked = wintypes.DWORD()
     dwm = ctypes.WinDLL("dwmapi")
@@ -322,6 +335,10 @@ def _enumerate():
 
 def open_windows():
     return [(app, title) for _hwnd, app, title in _enumerate()]
+
+
+def open_windows_with_ids():
+    return [(str(hwnd), app, title) for hwnd, app, title in _enumerate()]
 
 
 def pick_window(windows, name):

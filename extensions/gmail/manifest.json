@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Arty Gmail reader",
-  "version": "1.4",
-  "description": "Lets Arty's browser agent (on this computer only) read Gmail in this window.",
+  "version": "1.5",
+  "description": "Lets Arty's browser agent (on this computer only) read Gmail in this window and send an email the user approved.",
   "background": {"service_worker": "background.js"},
   "permissions": ["scripting", "tabs", "alarms", "storage"],
   "host_permissions": ["https://mail.google.com/*", "http://127.0.0.1:9334/*"]

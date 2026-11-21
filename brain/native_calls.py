@@ -4,27 +4,33 @@ import sqlite3
 import urllib.error
 from datetime import datetime
 
+import app_actions
 import calendar_feed
 import connections
 import docs_reading
+import job_tools
 import media
+import media_tools
 import models
 import notify
 import personal
+import reading_tools
 import reckon
 import research
 import safety
 import sharing
+import shopping
 import store
 import weather
+import working
 
 from api_support import optional_int
 from archive import archive_records, recall
 from native_tools import NATIVE_TOOLS
 from reply_rules import DO_REQUEST, APP_NOTES
 from schedules import cancel_active, create_schedule
-from steering import (LOOKUP_TOOLS, MESSAGE_PLACEHOLDER, QUERY_PADDING, MAX_LOOKUPS, LOOKUP_MAX_MESSAGE_CHARS,
-    LOOKUP_CHARS, LOOKUP_FAILED, sign_in_help)
+from steering import (LOOKUP_TOOLS, MESSAGE_PLACEHOLDER, WHOLE_MESSAGE_PLACEHOLDER, QUERY_PADDING, MAX_LOOKUPS, LOOKUP_MAX_MESSAGE_CHARS,
+    LOOKUP_CHARS, LOOKUP_FAILED, rule_applies, sign_in_help)
 from connections import TOOL_RESULT_CHARS
 from prompting import local_zone
 from model_choice import session_keep_alive
@@ -63,10 +69,10 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         if name == "weather" and weather.not_a_home_forecast(said, config.get("weather")):
             continue
 
-        if not re.search(rule.get("pattern", "(?!)"), said, re.I):
+        if not rule_applies(rule, said):
             continue
         query = QUERY_PADDING.sub("", said).strip(" ?.!")[:200]
-        arguments = {key: query if value == MESSAGE_PLACEHOLDER else value for key, value in (rule.get("arguments") or {}).items()}
+        arguments = {key: filled_in(value, query, said) for key, value in (rule.get("arguments") or {}).items()}
         try:
             result = run_native(name, arguments, config, False, None)[0] if name in NATIVE_TOOLS else connections.hub.call(name, arguments)
         except Exception as error:  # a failed lookup just leaves the model to use its tools
@@ -79,12 +85,15 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         if found_no_place(name, result):
             log.info("lookup %s found no place in the message, so it is left to the model", name)
             continue
+        if working.found_nothing_to_work_out(name, result):
+            log.info("lookup %s had nothing to work out exactly, so it is left to the model", name)
+            continue
         if name == WEB_SEARCH_TOOL:
             result = research.relevant_results(str(result), said)
         if LOOKUP_FAILED.search(str(result)) or (name == WEB_SEARCH_TOOL and research.found_nothing(result)):
             # Left to the model, a failed check becomes "nothing new": say it couldn't be checked, and why.
             log.warning("lookup %s didn't work: %s", name, str(result)[:200])
-            if name == WEB_SEARCH_TOOL and (page := top_page_for("", said)):
+            if name == WEB_SEARCH_TOOL and reads_found_pages(config) and (page := top_page_for("", said)):
                 used.append(docs_reading.FETCH_TOOL)
                 results.append(page)
                 continue
@@ -93,7 +102,7 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
         used.append(name)
         results.append(f"[{name}]\n{str(result)[:LOOKUP_CHARS]}")
         log.info("looked up %s before answering", name)
-        if name == WEB_SEARCH_TOOL and (page := top_page_for(str(result), said)):
+        if name == WEB_SEARCH_TOOL and reads_found_pages(config) and (page := top_page_for(str(result), said)):
             used.append(docs_reading.FETCH_TOOL)
             results.append(page)
     if blocked and not results:
@@ -104,6 +113,18 @@ def look_up_first(config, said: str) -> tuple[list[str], str, str | None]:
     return used, ("\n\nAlready looked up for this message. Answer the message from this, and only this, unless it "
                   "asks for something else (don't call these tools again):\n"
                   + "\n\n".join(results)), blocked
+
+
+def filled_in(value, query: str, said: str):
+    if value == MESSAGE_PLACEHOLDER:
+        return query
+    if value == WHOLE_MESSAGE_PLACEHOLDER:
+        return said
+    return value
+
+
+def reads_found_pages(config: dict) -> bool:
+    return config.get("reads_found_pages", True) is not False
 
 
 def top_page_for(search_text: str, said: str) -> str:
@@ -175,8 +196,20 @@ def run_native(name, arguments, config, background, task):
         return personal.TOOLS[name][0](arguments), None
     if name in reckon.TOOLS:
         return reckon.TOOLS[name][0](with_home_zone(name, arguments, config)), None
+    if name in app_actions.TOOLS:
+        return app_actions.run(name, arguments, config), None
     if name in sharing.TOOLS:
         return sharing.TOOLS[name][0](arguments), None
+    if name in working.TOOLS:
+        return working.TOOLS[name][0](arguments), None
+    if name in job_tools.TOOLS:
+        return job_tools.TOOLS[name][0](arguments, config), None
+    if name in reading_tools.TOOLS:
+        return reading_tools.TOOLS[name][0](arguments), None
+    if name in media_tools.TOOLS:
+        return media_tools.TOOLS[name][0](arguments), None
+    if name in shopping.TOOLS:
+        return shopping.TOOLS[name][0](arguments, zone=local_zone(config)), None
     if name == "weather":
         return weather_for(arguments, config.get("weather")), None
     if name == "week_recap":
@@ -229,7 +262,7 @@ def week_recap(config) -> str:
                 break
         except ValueError:
             continue
-        if not record["user"].startswith("[background task"):
+        if not record["user"].startswith(("[background task", "[daily briefing")):
             asked.append(f"- {record['time'][:10]}: {APP_NOTES.sub('', record['user'])[:150]}")
     jobs = [f"- {t['title']}" for t in store.list_tasks("done", 30) if t["updated"] >= cutoff]
     return ("What the user asked this week (newest first):\n" + "\n".join(asked[:60] or ["- nothing"])

@@ -1,5 +1,6 @@
 import collections
 import hashlib
+import ipaddress
 import re
 import secrets
 import threading
@@ -12,6 +13,7 @@ CODE_HALF = 4
 LIFETIME_SECONDS = 600
 POLL_SECONDS = 3
 MAX_PER_ADDRESS = 3
+IPV6_NETWORK_BITS = 64
 MAX_PENDING = 50
 MAX_STARTS_PER_MINUTE = 20
 START_WINDOW_SECONDS = 60
@@ -57,6 +59,19 @@ def approve_page(starfire_url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}{APPROVE_PAGE_PATH}"
 
 
+def address_group(address: str) -> str:
+    text = str(address or "").strip()
+    try:
+        parsed = ipaddress.ip_address(text.strip("[]").split("%")[0])
+    except ValueError:
+        return text
+    if parsed.version == 6 and parsed.ipv4_mapped:
+        return str(parsed.ipv4_mapped)
+    if parsed.version == 6:
+        return str(ipaddress.ip_network(f"{parsed}/{IPV6_NETWORK_BITS}", strict=False))
+    return str(parsed)
+
+
 def new_device_key() -> str:
     return DEVICE_KEY_PREFIX + secrets.token_urlsafe(32)
 
@@ -100,7 +115,8 @@ class Requests:
                 raise DeviceError(429, "too many devices asked to be approved just now; try again in a minute")
             if len(self.by_device) >= MAX_PENDING:
                 raise DeviceError(429, "too many devices are waiting to be approved; try again in a few minutes")
-            if sum(request.address == address for request in self.by_device.values()) >= MAX_PER_ADDRESS:
+            group = address_group(address)
+            if sum(address_group(request.address) == group for request in self.by_device.values()) >= MAX_PER_ADDRESS:
                 raise DeviceError(429, "this device already has requests waiting; approve or let them run out first")
             user_code = new_user_code()
             while self.by_user_code(user_code):

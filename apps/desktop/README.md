@@ -87,17 +87,30 @@ itself and [Arty for your browser](../../extensions/browser/README.md).
 - **Link to starfire Desktop** - starfire Desktop on the same PC can pair with Arty and ask for computer steps.
   **Link starfire…** in the tray menu shows a 6 digit code (one use, two minutes, five tries and it is gone). Each step
   a linked app asks for shows an Allow / Not now card first, whatever Arty would have done on its own, and needs
-  **HANDS** on. **Unlink** in the same screen, or in starfire Desktop, ends it. How the pairing, the cards and window
-  screenshots work: [Linking Arty Desktop to starfire Desktop](../../docs/desktop-starfire-link.md).
+  **HANDS** on. From 1.6.0, when both apps run as you on the same computer, starfire Desktop links by itself and
+  the code is only needed as a fallback. **Unlink** in the same screen, or in starfire Desktop, ends it. From 1.6.0 starfire Desktop is told
+  what it may ask for (look at the screen, open a page in one of your connected browsers) and can ask Arty to open a
+  page, with a card naming the browser and the whole address. How the pairing, the cards, window screenshots and
+  opening pages work: [Linking Arty Desktop to starfire Desktop](../../docs/desktop-starfire-link.md).
 - **Your browser** - add [Arty for your browser](../../extensions/browser/README.md) (Chrome, Edge, Brave, Chromium
   and Firefox) and it can open, read, scroll, look at, click and type in your own tabs too. Not released yet, coming
-  in Arty Desktop 1.5.9 with extension 1.6: Opera and Vivaldi, and choosing a browser by name. With it paired in
+  in Arty Desktop 1.6.0 with extension 1.6 or newer: Opera and Vivaldi, and choosing a browser by name. With it paired in
   several browsers, ask for one by name ("open the BBC in Firefox"); Arty is told which are connected, and asking for
   one that isn't gets an answer naming those that are, never another browser instead. Choosing by name needs
   extension 1.6 or newer.
-  Pair it once with the code under **Chrome sites…** in the tray menu; the same screen lists the sites Arty may
-  use, each with a **Forget** button. Once Arty has read a page in your browser, any command, file change or link it
+  Pair it once with the code under **Chrome sites…** in the tray menu, or, from Arty Desktop 1.6.0 with extension
+  1.7, not at all: Arty finds browsers that have the extension and connects them by itself through native
+  messaging ([how](../../extensions/browser/README.md#pairing-by-itself)). The **Browsers** section of that screen
+  shows each one with one line saying whether it is connected, and a **Connect** button that sets up what Arty can
+  by itself; it also switches this off, and on Linux switch it off before deleting the AppImage. The same screen lists
+  the sites Arty may use, each with a **Forget** button. Once Arty has read a page in your browser, any command, file change or link it
   opens in that same reply asks first.
+- **Arty's own browser** - from 1.6.0 Arty can also run a separate browser of its own, not signed in to anything of
+  yours, to look things up: [Arty's own browser, screen control and quizzes](../../docs/desktop-control.md).
+- **Screen control** - from 1.6.0, off until you tick **Let Arty control the screen** in the tray menu: Arty can
+  click, type and send a Discord or Slack message on your screen, asking every time with the exact name and text, with
+  a red bar and Stop button while it works, stopping the moment you touch the mouse or keyboard
+  ([how](../../docs/desktop-control.md#screen-control)).
 
 ---
 
@@ -113,8 +126,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.5.8-x86_64.AppImage
-./Arty-1.5.8-x86_64.AppImage
+chmod +x Arty-1.6.0-x86_64.AppImage
+./Arty-1.6.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -125,7 +138,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.5.8.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.6.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.
@@ -140,9 +153,9 @@ possible on Windows (it needs a packaged-app listener), so that one tool is Linu
 The first run opens a **Connect to Arty** screen: enter your brain's address (`http://<brain address>:8081/v1`) and
 the Arty API key, and, for use away from home, the Cloudflare address and Access token. Arty checks them against your
 brain before saving them to `~/.config/Arty/arty_config.yaml` on Linux or `%APPDATA%\Arty\arty_config.yaml` on Windows (readable by you only), then restarts its local service
-to use them. **Connect to another Arty…** in the tray menu changes them later. **Phone setup code…** in the tray menu
-shows them as a QR code for the Android and iPhone apps to scan, for two minutes
-([docs/connecting-a-phone.md](../../docs/connecting-a-phone.md)).
+to use them. **Connect to another Arty…** in the tray menu changes them later. **Link a phone…** in the tray menu
+shows a one-use QR code for the Android and iPhone apps to scan (two minutes, no keys in it) and lists the linked
+phones, each with **Remove** ([docs/connecting-a-phone.md](../../docs/connecting-a-phone.md)).
 
 ## Setup From Source
 

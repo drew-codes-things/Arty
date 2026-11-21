@@ -1,9 +1,11 @@
 import fnmatch
 import hashlib
+import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import installs
+import prices
 
 URL_LINE = re.compile(r"^(?P<title>.*) \| (?P<url>https?://\S+)$", re.MULTILINE)
 ELEMENT_LINE = re.compile(r'^\[(\d+)\] \S+ "(.*)"$', re.MULTILINE)
@@ -27,14 +29,35 @@ SHELL_OPERATORS = re.compile(r"&&|\|\||[|;`]|\$\(|>")
 LOWERCASE_START = re.compile(r"^(?:sudo\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*[a-z0-9_./~-]")
 UNTRUSTED_READS = ["fetch__*", "research__web_search", "research__read_document", "research__search_library", "workspace__browser_*",
                    "workspace__gmail_*", "workspace__read_file", "workspace__read_screen_text", "workspace__get_clipboard",
-                   "homelab__nextcloud_get", "homelab__nextcloud_search", "chrome_*", "computer_read_file", "computer_look",
+                   "homelab__nextcloud_get", "homelab__nextcloud_search", "read_attached_file", "spreadsheet",
+                   "identify_song", "read_image_text", "look_at_attachment", "analyse_sound", "chrome_*", "computer_read_file",
+                   "computer_look", "computer_camera",
                    "computer_search", "computer_find_files", "computer_list_files", "read_clipboard", "desktop_notifications",
-                   "desktop_windows"]
+                   "desktop_windows", "email_inbox", "email_read", "calendar_app_events", "arty_browser_*",
+                   "read_web_page", "check_price"]
 AFTER_UNTRUSTED = ["memory__create_*", "memory__add_*", "memory__delete_*", "workspace__run_command", "workspace__type_text",
                    "workspace__open_app", "workspace__press_keys", "workspace__click", "workspace__write_file", "workspace__edit_file",
-                   "workspace__set_clipboard", "workspace__email_draft_link", "homelab__nextcloud_upload",
-                   "start_background_task", "schedule_task"]
+                   "workspace__set_clipboard", "workspace__email_draft_link", "email_draft", "homelab__nextcloud_upload",
+                   "start_background_task", "schedule_task", "add_watcher", "set_daily_briefing", "set_inbox_tidy",
+                   "always_allow_inbox_change", "pause_job", "resume_job", "delete_job", "workspace__own_app_request",
+                   "workspace__drive_upload", "workspace__gmail_send"]
 UNTRUSTED_NOTE = "asked for after reading outside content (a web page, email or file)"
+WEB_READS = {"read_web_page": "url", "check_price": "url", "fetch__fetch": "url"}
+WEB_LINK = re.compile(r"https?://[^\s<>\"'`\])]+")
+LINK_END = ".,;:!?"
+NAMED_HOST = re.compile(r"[a-z0-9][a-z0-9.-]*")
+FILE_NAME_ENDINGS = frozenset({
+    "md", "txt", "py", "js", "mjs", "ts", "tsx", "jsx", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "csv", "tsv",
+    "log", "html", "htm", "css", "xml", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "png", "jpg", "jpeg",
+    "gif", "svg", "webp", "zip", "gz", "tgz", "tar", "7z", "rar", "c", "h", "cpp", "hpp", "java", "kt", "kts", "php",
+    "sql", "lock", "env", "bak", "tmp", "exe", "dll", "apk", "deb", "mp3", "mp4", "wav", "mov", "mkv", "ipynb", "bat",
+    "ps1"})
+MOST_NAMED_SITE_PATH_CHARS = 40
+MOST_REQUEST_CHARS_SCANNED = 4000
+MAX_SEEN_LINKS = 600
+SHOWN_LINK_CHARS = 200
+UNSEEN_LINK_NOTE = ("reading {url}, a web address that didn't come from you or from a page read for this reply (after "
+                    "reading outside content, a made-up address could carry what was read to another site)")
 
 
 def is_plain_approval(text: str) -> bool:
@@ -88,6 +111,7 @@ def remember_tool_result(context: dict, tool_name: str, result: str, rules: dict
     """Track guest names from Proxmox status, and the browser's current page and numbered items."""
     if matches(tool_name, (rules or {}).get("untrusted_reads", UNTRUSTED_READS)):
         context["untrusted"] = True
+        remember_links(context, result)
     if tool_name == "homelab__proxmox_status":
         context["guests"] = {match["vmid"]: f'{match["kind"]} {match["vmid"]} ({match["name"]})' if match["name"]
                              else f'{match["kind"]} {match["vmid"]}' for match in GUEST_LINE.finditer(result)}
@@ -107,10 +131,85 @@ def remember_tool_result(context: dict, tool_name: str, result: str, rules: dict
         context["elements"] = elements
 
 
+def starting_context(has_attachment: bool) -> dict:
+    return {"untrusted": True} if has_attachment else {}
+
+
 def remember_client_results(context: dict, tool_names: list[str], rules: dict | None = None):
     reads = (rules or {}).get("untrusted_reads", UNTRUSTED_READS)
     if any(matches(name, reads) for name in tool_names):
         context["untrusted"] = True
+
+
+def remember_client_links(context: dict, results: list[tuple[str, str]], rules: dict | None = None):
+    reads = (rules or {}).get("untrusted_reads", UNTRUSTED_READS)
+    for name, text in results:
+        if matches(name, reads):
+            remember_links(context, text)
+
+
+def link_key(url: str) -> str:
+    base, hashmark, fragment = str(url or "").strip().partition("#")
+    return (base if "?" in base else base.rstrip("/")) + hashmark + fragment
+
+
+def same_link(url: str) -> str:
+    return link_key(str(url or "").strip().rstrip(LINK_END))
+
+
+def link_keys_in(text) -> list[str]:
+    keys = []
+    for link in WEB_LINK.findall(str(text or "")):
+        key = same_link(link)
+        keys += [key, key.partition("#")[0]] if "#" in key else [key]
+    return [key for key in keys if key]
+
+
+def remember_links(context: dict, text) -> None:
+    seen = context.setdefault("seen_links", [])
+    for key in link_keys_in(text):
+        if key not in seen:
+            seen.append(key)
+    del seen[:-MAX_SEEN_LINKS]
+
+
+def without_www(host: str) -> str:
+    return host[len("www."):] if host.startswith("www.") else host
+
+
+def named_hosts(request_text: str) -> set[str]:
+    said = str(request_text or "")[:MOST_REQUEST_CHARS_SCANNED].lower()
+    hosts = set()
+    for token in NAMED_HOST.findall(said):
+        typed = without_www(token.strip(".-"))
+        if "." in typed and (token.startswith("www.") or not is_file_name(typed)):
+            hosts |= {typed, prices.registrable_name(f"https://{typed}")}
+    return hosts
+
+
+def is_file_name(typed: str) -> bool:
+    return typed.rsplit(".", 1)[-1] in FILE_NAME_ENDINGS
+
+
+def site_named_in(url: str, request_text: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        host = without_www((parts.hostname or "").lower().rstrip("."))
+    except ValueError:
+        return False
+    is_short_plain_address = not parts.query and not parts.fragment and len(parts.path) <= MOST_NAMED_SITE_PATH_CHARS
+    return bool(host) and is_short_plain_address and host in named_hosts(request_text)
+
+
+def web_read_reason(name: str, arguments: dict, context: dict, request_text: str) -> str | None:
+    field = WEB_READS.get(name)
+    url = str(arguments.get(field) or "").strip() if field else ""
+    if not url or not context.get("untrusted"):
+        return None
+    known = set(context.get("seen_links", [])) | set(link_keys_in(request_text))
+    if link_key(url) in known or site_named_in(url, request_text):
+        return None
+    return UNSEEN_LINK_NOTE.format(url=url[:SHOWN_LINK_CHARS])
 
 
 def _words(text: str) -> set[str]:
@@ -131,6 +230,22 @@ def untrusted_reason(name: str, arguments: dict, context: dict, rules: dict) -> 
 def approval_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
     """A sentence describing why this call needs approval, or None if it can go ahead."""
     return own_approval_reason(name, arguments, context, rules) or untrusted_reason(name, arguments, context, rules)
+
+
+def inbox_rule_reason(arguments: dict) -> str | None:
+    if arguments.get("remove") is True:
+        return None
+    action = str(arguments.get("action", "")).strip().lower()
+    what = f'label as "{str(arguments.get("label", "")).strip()}"' if action == "label" else "archive"
+    return f"always {what} mail from {str(arguments.get('sender', '')).strip()} without asking each time, from now on"
+
+
+NATIVE_APPROVALS = {"always_allow_inbox_change": inbox_rule_reason}
+
+
+def native_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
+    asked = NATIVE_APPROVALS.get(name)
+    return (asked(arguments) if asked else None) or untrusted_reason(name, arguments, context, rules)
 
 
 def own_approval_reason(name: str, arguments: dict, context: dict, rules: dict) -> str | None:
@@ -191,11 +306,18 @@ def describe_action(name: str, arguments: dict, context: dict) -> str:
 
 
 APPROVAL_QUESTION = "Before I do that, I need your OK: {reason}. Shall I go ahead?"
+QUESTION_START = "Before I do that, I need your OK: "
 APPROVAL_ASKED = re.compile(r"^Before I do that, I need your OK: (?P<reason>.+)\. Shall I go ahead\?$", re.DOTALL)
+PRETEND_QUESTION_REFUSAL = ("I haven't done that: its details contain the words I use to ask for your OK, so a yes could "
+                            "end up approving something else. Nothing was sent or changed.")
 
 
 def approval_question(reason: str) -> str:
     return APPROVAL_QUESTION.format(reason=reason)
+
+
+def pretends_to_ask(reason: str) -> bool:
+    return same_words(QUESTION_START).lower() in same_words(str(reason or "")).lower()
 
 
 def approved_reason(messages: list[dict], text_of) -> str | None:
@@ -204,8 +326,17 @@ def approved_reason(messages: list[dict], text_of) -> str | None:
         return None
     if not is_plain_approval(text_of(chat[-1])):
         return None
-    asked = APPROVAL_ASKED.match(text_of(chat[-2]).strip())
+    said = text_of(chat[-2]).strip()
+    if said.count(QUESTION_START) != 1:
+        return None
+    asked = APPROVAL_ASKED.match(said[said.find(QUESTION_START):])
     return asked.group("reason") if asked else None
+
+
+def approval_key(messages: list[dict], text_of) -> str:
+    chat = [m for m in messages if m.get("role") in ("user", "assistant")]
+    asked = [[m.get("role"), text_of(m)] for m in chat[:-1]]
+    return hashlib.sha256(json.dumps([len(chat), asked]).encode("utf-8", "surrogateescape")).hexdigest()
 
 
 def same_words(text: str) -> str:

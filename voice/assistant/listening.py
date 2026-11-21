@@ -88,13 +88,18 @@ class UtteranceCollector:
 
     def __init__(self, aggressiveness: int = VAD_AGGRESSIVENESS, speech: SpeechDetector | None = None,
                  turn: TurnJudge | None = None, turn_wait_frames: int = TURN_WAIT_FRAMES,
-                 live: LiveEar | None = None):
+                 live: LiveEar | None = None, pause_frames: int = PAUSE_FRAMES):
         self.speech = speech or WebrtcSpeech(aggressiveness)
         self.turn = turn
         self.turn_wait_frames = turn_wait_frames
+        self.base_pause_frames = pause_frames
+        self.pause_frames = pause_frames
         self.live = live
         self.live_text: LiveText | None = None
         self.reset()
+
+    def wait_longer_before_judging(self, pause_frames: int) -> None:
+        self.pause_frames = max(self.base_pause_frames, pause_frames)
 
     def reset(self) -> None:
         self._drop_live_text()
@@ -136,6 +141,7 @@ class UtteranceCollector:
         self._drop_live_text()
         self.skipping_rest = not quiet
         self.frames, self.speech_frames, self.silence_run, self.speech_run = [], 0, 0, 0
+        self.pause_frames = self.base_pause_frames
         self.judge_failed = False
         self.pre_roll.clear()
         return utterance
@@ -150,7 +156,7 @@ class UtteranceCollector:
         return False
 
     def _is_judging_point(self) -> bool:
-        since_pause = self.silence_run - PAUSE_FRAMES
+        since_pause = self.silence_run - self.pause_frames
         return since_pause >= 0 and since_pause % RECHECK_FRAMES == 0
 
     def _judge_says_finished(self) -> bool:

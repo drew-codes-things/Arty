@@ -40,7 +40,7 @@ import app.arty.data.ConversationStore
 import app.arty.data.StoredMessage
 import app.arty.notify.Announcements
 import app.arty.notify.LiveConnection
-import app.arty.phone.PhoneAction
+import app.arty.core.PhoneAction
 import app.arty.core.ArtyClient
 import app.arty.ui.ArtyMedia
 import app.arty.ui.speakableText
@@ -107,7 +107,26 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
     var phoneRequest by mutableStateOf<PhoneAction?>(null); private set
 
     fun openPhoneAction(action: PhoneAction) {
+        if (action.kind == PhoneAction.CAMERA) return requestPhoto(action)
         phoneRequest = action
+    }
+
+    var photoRequests by mutableStateOf(0); private set
+    private var photoAskedFor: PhoneAction? = null
+
+    fun requestPhoto(action: PhoneAction? = null) {
+        photoAskedFor = action
+        photoRequests++
+    }
+
+    fun attachPhoto(photo: Uri) {
+        attach(listOf(photo))
+        draft = PhoneAction.photoQuestion(photoAskedFor, draft)
+        photoAskedFor = null
+    }
+
+    fun photoNotTaken() {
+        photoAskedFor = null
     }
 
     fun phoneRequestHandled() {
@@ -423,7 +442,7 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
         // Away from the app: "Arty has replied" with its first few words, like other assistants do.
         if (!onScreen) Announcements.showReply(getApplication(), conversationId, reply.content, reply.failed)
         // Just asked for: open the call or text straight away (it still waits for the user to press call or send).
-        if (onScreen) PhoneAction.fromJson(reply.phoneAction)?.let { phoneRequest = it }
+        if (onScreen) PhoneAction.fromJson(reply.phoneAction)?.takeIf { it.startsWhenTheReplyArrives }?.let { phoneRequest = it }
         if (current.id == conversationId) {
             update(updated)
             thinkingSince = null

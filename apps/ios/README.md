@@ -41,9 +41,11 @@ It talks to the brain with the same API as the Android app ([docs/API.md](../../
 1. In **Safari**, open `https://arty.<your domain>/ios/`.
 2. Tap **Share**, then **Add to Home Screen**, then **Add**.
 3. Open **Arty** from the Home Screen and tap **Scan QR code**, then point it at the code from Arty Desktop (tray
-   menu > **Phone setup code…**). Or tap **Enter details manually** and type the app key (`ARTY_API_KEY`) and, for
-   use away from home, the Cloudflare Access id and secret. Arty checks them before saving. Where each one comes
-   from: [docs/connecting-a-phone.md](../../docs/connecting-a-phone.md).
+   menu > **Link a phone…**). The iPhone links itself: it gets its own key (and the Cloudflare token, if Arty uses
+   one) without anything typed, and Arty Desktop lists it under **Linked phones**. Linking through
+   `https://arty.<your domain>` needs the "Arty phone link" Cloudflare rule once. Or tap **Enter details manually**
+   and type the app key (`ARTY_API_KEY`) and, for use away from home, the Cloudflare Access id and secret. Arty
+   checks them before saving. Where each one comes from: [docs/connecting-a-phone.md](../../docs/connecting-a-phone.md).
 
 The keys are kept on the iPhone, in the Home Screen app's own storage, and are only sent to Arty. **More > Forget
 the keys on this iPhone** removes them; the chats stay. The page itself holds no keys, which is why `/ios/` can be
@@ -55,8 +57,9 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
   replies aloud), using the iPhone's own voices.
 - **Updates arrive while the app is open.** There are no notifications when it's closed: that needs Web Push, which
   the brain doesn't send yet.
-- **Calls and texts:** a web app can't read contacts, so asking Arty to call or text someone gets a pointer to the
-  phone app instead.
+- **Calls and texts:** a web app can't read contacts. Asking Arty to text someone shows an Allow card with the exact
+  words; **Open Messages** opens them and you pick who in Messages (Arty never fills in a number). A call opens only
+  for a number. Alarms, timers and opening other apps aren't possible from a Home Screen app, and Arty says so.
 - **Lecture recording** only runs while Arty is open with the screen on. For long lessons, record in Voice Memos and
   use **Add a recording**.
 - No widget, no call screen and no battery note.
@@ -74,7 +77,8 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
 | `js/answerguard.js` | The one-second hold and "New question" flash on approval cards |
 | `js/authorise.js` | The "approve this computer" sheet, and the starfire link and QR code when this browser has no key |
 | `js/qr.js`, `js/vendor/qrcode-generator.js` | Draws QR codes as SVG (qrcode-generator 2.0.4, MIT, see `js/vendor/LICENSE-qrcode-generator.txt`) |
-| `js/setup.js`, `js/setupcode.js`, `js/scanner.js` | First start: scan the setup QR code or type the keys |
+| `js/setup.js`, `js/setupcode.js`, `js/scanner.js` | First start: scan the link QR code or type the keys |
+| `js/phonelink.js` | Linking by QR code: the one-use offer, the SPAKE2 sums (same test values as the brain) and the two link steps |
 | `js/markdown.js`, `js/links.js` | Safe markdown (everything escaped first) and Arty file links |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Home Screen install and opening without a connection |
 | `tests/` | Unit tests and `fake_brain.py`, a stand-in brain for trying the app on a laptop |

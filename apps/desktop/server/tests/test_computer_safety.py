@@ -113,7 +113,10 @@ def test_search_does_not_follow_a_link_into_a_secret_folder(home):
     (home / ".ssh").mkdir()
     (home / ".ssh" / "id_ed25519").write_text("greet secret\n")
     (home / "project").mkdir()
-    os.symlink(home / ".ssh" / "id_ed25519", home / "project" / "key.txt")
+    try:
+        os.symlink(home / ".ssh" / "id_ed25519", home / "project" / "key.txt")
+    except OSError as error:
+        pytest.skip(f"this account can't make links here ({error})")
     assert "greet" not in computer.computer_search("greet", str(home / "project")).split("matches")[0]
 
 

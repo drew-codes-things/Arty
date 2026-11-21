@@ -5,10 +5,20 @@
 - **Local models** - runs on ArtyEngine on your own GPU; switch models with one command or by asking.
 - **Real actions, checked in code** - email, calendar, reminders, deadlines, dates, sums, units, currency and server
   status are handled by code before the model sees them, so the model can't make results up.
+- **Word problems worked out exactly** - with the code runner on, a money, measurement or date question ("how much
+  do I save buying 36 in packs?", "what is the last Friday of October 2026?") is worked out by a small program first
+  and the model answers from its printed result. Riddles and logic puzzles are left to the model, which thinks them
+  through first, as it does for quizzes and multiple-choice questions (`think_for` in brain.json).
+- **Reads what you give it** - PDFs (scanned pages through the vision model), Word and OpenDocument files,
+  spreadsheets with every number worked out in code, photos and screenshots, and a webcam or phone camera photo only
+  when you ask. See [reading files](reading-files-and-the-camera.md).
 - **Honesty check** - a reply that claims it did something when no tool ran (or every tool failed) is replaced with
   what really happened.
 - **Briefings** - a morning and evening summary built from your real servers, weather, calendar, reminders,
-  deadlines and email, with empty sections left out.
+  deadlines and email, with empty sections left out. Ask for one at a time you pick, with unread counts and news
+  headlines ([background jobs](background-jobs.md)).
+- **Watchers and inbox tidy** - "tell me when this page changes, this price drops or this server goes down", and
+  inbox label and archive suggestions that wait for your Allow ([background jobs](background-jobs.md)).
 - **Its own PC** - a Debian + XFCE virtual machine with a visible browser, a shared terminal you can watch, a
   searchable `~/library` of documents, and a desktop look it picks itself.
 - **Approvals** - anything that sends, buys, deletes or touches the homelab, or installs software on Arty's PC, waits

@@ -28,6 +28,16 @@ def stock(item: Item) -> str:
     return f"{item.count} x {item.name}"
 
 
+@server.tool(description="Pretends to read a web page.")
+def fetch(url: str) -> str:
+    return f"read {url}"
+
+
+@server.tool(description="Pretends to read a document.")
+def read_document(path_or_url: str, start: int = 0) -> str:
+    return f"read {path_or_url}"
+
+
 @server.tool(description="Always fails.")
 def fail() -> str:
     raise ToolError("the fake tool broke")

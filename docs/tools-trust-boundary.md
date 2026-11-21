@@ -77,6 +77,11 @@ What the brain checks whatever the caller says:
   drafts, Nextcloud uploads, and starting or scheduling background work. The reason ends "asked for after reading
   outside content", so text in a page or an email can't quietly make Arty act. Reading more is never held back. Both
   lists can be changed in `brain.json`; the defaults are in `brain/policy.py`.
+- **Email, Starfire Calendar and Starfire Drive actions always ask.** `email_send`, `email_reply`, the `calendar_app_` changes,
+  `drive_save`, `drive_share` and `undo_app_action` show the exact recipients, text, time or file and wait for a plain
+  yes in the chat, whatever the rules above say. They are refused in background and scheduled jobs, can't be called
+  through `/v1/tools`, and only send to addresses the user typed in the chat or saved as contacts
+  ([details](acting-in-your-apps.md)).
 
 ## Limits of the Checks
 

@@ -48,6 +48,7 @@ request anyway after 1.6 s. On the recorded test phrases this cut the wait after
 | `VOICE_TURN_END` | `smart` | `silence` goes back to the old rule: the request ends after 810 ms of quiet |
 | `VOICE_VAD` | `silero` | `webrtc` goes back to webrtcvad for finding speech |
 | `VOICE_TURN_WAIT_MS` | `1600` | longest quiet before a request ends when Smart Turn keeps saying it is unfinished |
+| `VOICE_TURN_PAUSE_MS` | `300` | quiet before Smart Turn is first asked whether a request has ended. Raise it (600 to 900) if short pauses cut you off; every request then ends that much later |
 | `SMART_TURN_MODEL` | `/opt/ai-arty/models/smart-turn-v3.2-cpu.onnx` | |
 | `SILERO_VAD_MODEL` | `/opt/ai-arty/models/silero_vad.onnx` | |
 
@@ -98,6 +99,84 @@ To retrain: `wake-training/make_clips.py clips.npz` (needs the desktop app's Kok
 `wake-training/train_spotter.py clips.npz models/hey-arty/speech_embedding.onnx models/hey-arty/hey_arty.npz samples`
 (needs numpy, scipy, scikit-learn, onnxruntime). `wake-training/convert_embedding.py` rebuilt
 `speech_embedding.onnx` from the TensorFlow module (needs tensorflow, tf2onnx).
+
+## Talking over her (barge-in)
+
+You can talk while she is speaking. She stops within about a fifth of a second of you starting, keeps in her
+memory only the part she had actually said (the words she got through, followed by "..."), and listens to you
+without needing "Hey Arty" again for 10 s. Her answer is also spoken as it streams in: the first sentence starts as
+soon as it is complete (a short opening sentence of 20 characters or more does not wait for a longer chunk), a long
+run-on without a full stop is cut at a comma, and the next sentence is turned into speech while the current one plays,
+so there is no gap between them.
+
+Her own voice comes back into the room mic through the speakers, and that must not count as you. The assistant knows
+exactly what it is playing, so it keeps a copy (the "reference") and takes it away from what the mic hears:
+
+1. It works out how late the echo comes back (`echo_cancel.py`, `DelayTracker`: the echo of what she plays arrives a
+   fraction of a second later, after the network, the sound card and the room).
+2. A small adaptive filter learns the path from speaker to mic in that room and subtracts her echo
+   (`EchoCanceller`, a partitioned frequency-domain NLMS filter, about 0.6 ms of CPU per 30 ms of audio).
+3. What is left is compared with how loud that leftover has recently been (`barge_in.py`, `BargeInDetector`). Only
+   speech that stays at least 9 dB above it for 180 ms, and that the speech detector accepts as speech, counts as you.
+   A cough or a knock shorter than that does not.
+
+When it triggers, the assistant tells the hub to stop the speakers (`POST /assistant/stop`, assistant key only; the
+hub ends `aplay` and tells linked PCs to stop with a `{"type": "stop"}` message), cancels the rest of the reply, and
+hands the last half second before the trigger plus everything after it to the same end-of-request logic as always
+(Smart Turn when it is installed). Because someone cutting in is likely to pause and carry on, the first "has the speaker
+finished?" check for that one request waits for 900 ms of quiet instead of 300 ms, so a pause of up to about 0.7 s in
+the middle of what you say does not cut you off (the table below); a longer one still ends the request.
+
+The filter learns while she talks and keeps what it learned between answers, so:
+
+- The first answer after the assistant starts (or after you change the room volume, which resets it) is learning the
+  room. Barge-in then only reacts if you are clearly louder than her echo, about 6 to 12 dB. From the second answer on it
+  hears you even when you are quieter than her echo.
+- It never reacts in the first 0.6 s of an answer, or until it has found her echo in the mic.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `VOICE_BARGE_IN` | `on` | `off` goes back to ignoring the mic while she talks |
+| `VOICE_BARGE_MARGIN_DB` | `9` | how far above her leftover echo you must be. Raise it if she stops by herself, lower it if she does not stop |
+| `VOICE_BARGE_SPEECH_MS` | `180` | how long you must keep talking before she stops |
+| `VOICE_BARGE_WARMUP_MS` | `600` | how long she must have been talking before barge-in is armed |
+| `VOICE_BARGE_PAUSE_MS` | `900` | quiet needed before the first "has the speaker finished?" check, for the request after you cut in. Raise it if you get cut off mid-thought |
+
+Quest headsets and Wyoming satellites are not changed: a headset has no echo and its player is on the headset.
+
+Measured in the simulator (`voice/tests/barge_sim.py`, no mic and no sound: recorded phrases and a made-up room with
+delay, reverb and distortion), from the first sound of speech to the trigger, then the hub's `aplay` is ended in under
+a second more (a test measures that against a stand-in `aplay`):
+
+Time from the first sound of your voice to the trigger (3 s into her answer; recorded phrases, three made-up rooms,
+3 runs of 2 phrases each; `+6 dB` means your voice is 6 dB louder than her echo at the mic):
+
+| Your voice against her echo | Filter already learned (second answer onward) | First answer after a start |
+|---|---|---|
+| 6 dB quieter | 6 of 6 heard in every room, 179 ms | 0 of 6 |
+| the same | 6 of 6, 179 ms | 0 of 6 |
+| 6 dB louder | 6 of 6, 179 ms | 0 of 6 |
+| 12 dB louder | 6 of 6, 179 ms | 6 of 6, 179 ms |
+
+Her own echo cutting her off: 0 of 3 first answers (after a 2.5 s quiet wait) and 0 of 9 later answers, in each of the
+three rooms. Cost: about 1 ms of CPU per 30 ms of audio.
+
+Requests heard when you pause in the middle of what you say (1 is right, 2 means you were cut off; Smart Turn and
+Silero as deployed, the pause put at the quietest point of "play my workout playlist"):
+
+| Pause | Old silence rule (810 ms) | Smart Turn, normal (first check at 300 ms) | After a barge-in, first check at 900 ms |
+|---|---|---|---|
+| 0.3 s | 1 | 2 | 1 |
+| 0.5 s | 1 | 2 | 1 |
+| 0.7 s | 1 | 2 | 1 |
+| 1.0 s | 2 | 2 | 2 |
+| 1.5 s | 2 | 2 | 2 |
+
+Smart Turn at its normal first check already cuts this recorded phrase at a 0.3 s pause. That is how the assistant
+behaved before this change and it is unchanged for ordinary requests; `VOICE_TURN_PAUSE_MS` moves it if it bothers
+you.
+
+Not measured: a real room. Settings and the table will change with real speakers and a real mic.
 
 ## Room speaker volume
 
@@ -171,6 +250,10 @@ rules that make the mic and the onboard sound card mode 0666.
 Moonshine models also need onnxruntime, faster-whisper and moonshine-voice, and the folder holding the models in `ARTY_TEST_MODELS` (recorded phrases in `ARTY_TEST_PHRASES`,
 wake word samples in `ARTY_TEST_WAKE_SAMPLES`; each test skips while its folder is unset); run them on
 their own (`python -m pytest voice/tests/test_turn_end.py`, then `voice/tests/test_live_text.py`), as other test files stand in a fake faster-whisper.
+
+The barge-in simulator needs no mic and plays no sound: `ARTY_TEST_PHRASES=<folder of phrase WAVs> python voice/tests/barge_sim.py`
+mixes recorded phrases into a made-up room (delay, reverb, speaker distortion, noise) and prints the false-trigger,
+latency and pause tables above. The same recorded phrases switch on one extra test in `test_barge_in.py`.
 
 ## License
 

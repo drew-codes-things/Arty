@@ -54,9 +54,16 @@ def valid_messages(messages) -> list[dict]:
     for message in messages:
         if not isinstance(message, dict) or not isinstance(message.get("role"), str):
             raise ApiError(400, "each message must be an object with a role")
-        if not isinstance(message.get("content", ""), (str, list, type(None))):
+        content = message.get("content", "")
+        if not isinstance(content, (str, list, type(None))):
             raise ApiError(400, "message content must be text or a list of parts")
+        if isinstance(content, list) and not has_only_text_parts(content):
+            raise ApiError(400, "the text of a message part must be text")
     return messages
+
+
+def has_only_text_parts(parts: list) -> bool:
+    return all(isinstance(part.get("text", ""), str) for part in parts if isinstance(part, dict))
 
 
 def client_name(body: dict) -> str:

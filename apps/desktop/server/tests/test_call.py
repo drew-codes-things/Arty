@@ -58,8 +58,8 @@ def test_the_phone_style_is_hidden_from_the_brains_archive():
 def fake_brain(monkeypatch):
     sent, saved = [], []
 
-    def llm_stream(user_input, extra_system=None, note=""):
-        sent.append((user_input, note))
+    def llm_stream(user_input, extra_system=None, note="", arty_started=False):
+        sent.append((user_input, note) if not arty_started else (user_input, note, "started by Arty"))
         yield "Hiya, what's up?"
 
     monkeypatch.setattr(arty_server.brain, "llm_stream", llm_stream)

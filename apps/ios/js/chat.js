@@ -2,7 +2,8 @@ import { ConversationStore, historyToSend, newChatModel, randomId, titleFor } fr
 import { h, showToast } from "./dom.js";
 import { fileNameFromPath, mediaKind } from "./links.js";
 import { renderMarkdown, speakableText } from "./markdown.js";
-import { phoneLink, splitPhoneAction } from "./phone.js";
+import { stampLabel } from "./messagestamp.js";
+import { allowCard, isCameraAction, phoneLink, photoQuestion, splitPhoneAction } from "./phone.js";
 import { loadPreferences, savePreferences } from "./settings.js";
 import { chatStats, modelLabel, pickerModels, replyModelLabel, statusLine } from "./turnstatus.js";
 
@@ -22,6 +23,7 @@ export class ChatView {
     this.titleElement = titleElement;
     this.onConversationsChanged = onConversationsChanged;
     this.pendingFiles = [];
+    this.cameraAction = null;
     this.turn = null;
     this.models = [];
     this.tick = null;
@@ -32,12 +34,14 @@ export class ChatView {
     this.modelSelect = h("select", { id: "model", "aria-label": "Model", onchange: () => this.chooseModel(this.modelSelect.value) });
     this.messageList = h("div", { class: "messages", "aria-live": "polite" });
     this.fileInput = h("input", { type: "file", multiple: true, hidden: true, onchange: () => this.attach([...this.fileInput.files]) });
+    this.cameraInput = h("input", { type: "file", accept: "image/*", capture: "environment", hidden: true,
+      onchange: () => this.attachPhoto([...this.cameraInput.files]) });
     this.textInput = h("textarea", { rows: "1", placeholder: "Message Arty", "aria-label": "Message", oninput: () => this.resizeComposer() });
     this.sendButton = h("button", { type: "submit", class: "send", "aria-label": "Send" }, sendIcon());
     this.pendingList = h("div", { class: "pending" });
     const attachButton = h("button", { type: "button", class: "icon-button", "aria-label": "Attach files", onclick: () => this.fileInput.click() },
       h("span", { "aria-hidden": "true" }, "+"));
-    const composer = h("form", { class: "composer" }, this.pendingList, h("div", { class: "composer-row" }, attachButton, this.textInput, this.sendButton), this.fileInput);
+    const composer = h("form", { class: "composer" }, this.pendingList, h("div", { class: "composer-row" }, attachButton, this.textInput, this.sendButton), this.fileInput, this.cameraInput);
     composer.addEventListener("submit", (event) => {
       event.preventDefault();
       this.send();
@@ -119,6 +123,16 @@ export class ChatView {
         .finally(() => this.renderPending());
     }
     this.renderPending();
+  }
+
+  attachPhoto(files) {
+    const action = this.cameraAction;
+    this.cameraInput.value = "";
+    this.cameraAction = null;
+    if (files.length === 0) return;
+    this.attach(files);
+    this.textInput.value = photoQuestion(action, this.textInput.value);
+    this.resizeComposer();
   }
 
   renderPending() {
@@ -294,14 +308,21 @@ export class ChatView {
       bubble,
       message.phone ? this.phoneActionElement(message.phone) : null,
       message.tools?.length ? h("div", { class: "message-tools" }, message.tools.map((tool) => h("span", { class: "chip" }, tool))) : null,
-      h("div", { class: "message-actions" }, actions));
+      h("div", { class: "message-actions" }, actions, h("span", { class: "message-time" }, stampLabel(message.sent))));
   }
 
   phoneActionElement(action) {
+    if (isCameraAction(action)) {
+      return h("div", { class: "message-actions" }, h("button", {
+        type: "button", class: "link-button accent", onclick: () => { this.cameraAction = action; this.cameraInput.click(); },
+      }, "Take a photo"));
+    }
     const link = phoneLink(action);
     if (!link) return h("p", { class: "notice" }, `This app can't look up contacts: open Phone to call ${action.who}.`);
-    const label = action.kind === "call" ? `Call ${action.who}` : `Text ${action.who}`;
-    return h("div", { class: "message-actions" }, h("a", { class: "link-button accent", href: link }, label));
+    const card = allowCard(action);
+    if (!card) return h("div", { class: "message-actions" }, h("a", { class: "link-button accent", href: link }, `Call ${action.who}`));
+    return h("div", { class: "card" }, h("p", {}, h("strong", {}, card.title)), card.lines.map((line) => h("p", {}, line)),
+      h("div", { class: "message-actions" }, h("a", { class: "link-button accent", href: link }, card.button)));
   }
 
   hydrateFiles(element) {

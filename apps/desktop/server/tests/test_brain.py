@@ -40,6 +40,25 @@ def fake(monkeypatch, tmp_path):
     return {"ran": ran, "replies": replies, "sent": sent}
 
 
+SAVED_AT_SECONDS = 1_700_000_000
+
+
+def test_a_saved_reply_keeps_the_time_it_was_saved(fake, monkeypatch):
+    monkeypatch.setattr(brain, "_now_seconds", lambda: SAVED_AT_SECONDS)
+    brain.save_turn("hello", "hi there")
+    assert brain.load_history() == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there", "time": SAVED_AT_SECONDS},
+    ]
+
+
+def test_the_time_is_not_sent_back_to_the_brain(fake, monkeypatch):
+    monkeypatch.setattr(brain, "_now_seconds", lambda: SAVED_AT_SECONDS)
+    brain.save_turn("hello", "hi there")
+    sent, _ = brain._as_sent(brain.load_history())
+    assert sent == [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi there"}]
+
+
 def test_runs_the_brains_tool_calls_here_and_sends_back_the_results(fake):
     fake["replies"] += [{"content": "", "tool_calls": [call("computer_open", {"app": "Dolphin"})]}, {"content": "Dolphin's open."}]
     pieces = list(brain.llm_stream("open dolphin"))
@@ -228,7 +247,7 @@ def test_the_saved_conversation_is_readable_by_this_user_only(fake, tmp_path):
     brain.save_turn("hello", "hi there")
     saved = tmp_path / "history.json"
     assert saved.stat().st_mode & 0o777 == 0o600
-    assert brain.load_history()[-1] == {"role": "assistant", "content": "hi there"}
+    assert brain.load_history()[-1]["content"] == "hi there"
 
 
 def test_the_next_turn_knows_which_tools_the_last_reply_used(fake):
@@ -379,3 +398,27 @@ def test_ordinary_angle_brackets_the_user_types_are_kept(fake):
     fake["replies"] += [{"content": "Yes."}]
     list(brain.llm_stream("is 3 < 5 and is <b>bold</b> html?"))
     assert fake["sent"][0][-1]["content"].startswith("is 3 < 5 and is <b>bold</b> html?")
+
+
+def test_the_screen_is_let_go_before_a_card_is_shown(fake, monkeypatch):
+    order = []
+    monkeypatch.setattr(brain.tools, "needs_ok", lambda name, arguments, consented: "Let Arty press ctrl+w?")
+    monkeypatch.setattr(brain.tools, "let_go_of_the_screen_for_a_card", lambda: order.append("let go"))
+    monkeypatch.setattr(confirm, "wait", lambda ask, timeout=None: order.append("asked") or True)
+    fake["replies"] += [{"tool_calls": [call("computer_key", {"keys": "ctrl+w"})]}, {"content": "Done."}]
+    list(brain.llm_stream("close the tab"))
+    assert order == ["let go", "asked"] and fake["ran"] == [("computer_key", {"keys": "ctrl+w"})]
+
+
+def test_the_brains_report_of_an_outside_read_reaches_the_tool_checks(monkeypatch):
+    noted = []
+    monkeypatch.setattr(brain.tools, "note_brain_report", noted.append)
+    replies = [{"role": "assistant", "content": "done", "tool_calls": [], "arty": {"steps": 1, "read_outside": True}}]
+
+    def answer(messages, offer, lead=""):
+        return replies.pop(0)
+        yield
+    monkeypatch.setattr(brain, "_stream", answer)
+    monkeypatch.setattr(brain, "load_history", lambda: [])
+    list(brain.llm_stream("what's new on the news site?"))
+    assert noted == [{"steps": 1, "read_outside": True}]

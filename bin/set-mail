@@ -1,0 +1,41 @@
+#!/bin/bash
+set -euo pipefail
+PROXMOX=${PROXMOX:-proxmox}
+CT=${CT:-104}
+SECRETS_FILE=/srv/ai/secrets/mail.env
+
+ask() {
+  local prompt=$1 default=${2:-} answer
+  read -rp "$prompt${default:+ [$default]}: " answer
+  printf '%s' "${answer:-$default}"
+}
+
+echo "Connects Arty to your own mailbox (IMAP to read and save drafts, SMTP to send after you say yes)."
+echo "Use an app password from your mail provider, never your main password. Nothing typed here is printed."
+address=$(ask "Your email address")
+user=$(ask "Sign-in name" "$address")
+read -rsp "App password (hidden): " password
+echo
+imap_host=$(ask "IMAP server, e.g. imap.example.org")
+imap_security=$(ask "IMAP security: ssl, starttls or none (none only on the home network)" "ssl")
+imap_port=$(ask "IMAP port" "$([ "$imap_security" = ssl ] && echo 993 || echo 143)")
+smtp_host=$(ask "SMTP server, e.g. smtp.example.org")
+smtp_security=$(ask "SMTP security: ssl, starttls or none (none only on the home network)" "ssl")
+smtp_port=$(ask "SMTP port" "$([ "$smtp_security" = ssl ] && echo 465 || echo 587)")
+drafts=$(ask "Drafts folder" "Drafts")
+archive=$(ask "Folder the inbox tidy archives to (blank: Gmail's own archive, or Archive)" "")
+name=$(ask "Name shown on sent email (optional)" "")
+contacts=$(ask "Saved contacts Arty may email, comma separated (optional)" "")
+
+for value in "$address" "$user" "$password" "$imap_host" "$imap_port" "$imap_security" "$smtp_host" "$smtp_port" \
+             "$smtp_security" "$drafts" "$archive" "$name" "$contacts"; do
+  case "$value" in *$'\n'*|*$'\r'*) echo "A value had a line break in it; nothing saved."; exit 1 ;; esac
+done
+[ -n "$address" ] && [ -n "$imap_host" ] && [ -n "$smtp_host" ] || { echo "Address, IMAP and SMTP servers are needed; nothing saved."; exit 1; }
+
+printf '%s\n' "MAIL_ADDRESS=$address" "MAIL_USER=$user" "MAIL_PASSWORD=$password" "MAIL_IMAP_HOST=$imap_host" \
+  "MAIL_IMAP_PORT=$imap_port" "MAIL_IMAP_SECURITY=$imap_security" "MAIL_SMTP_HOST=$smtp_host" "MAIL_SMTP_PORT=$smtp_port" \
+  "MAIL_SMTP_SECURITY=$smtp_security" "MAIL_DRAFTS_FOLDER=$drafts" "MAIL_ARCHIVE_FOLDER=$archive" "MAIL_NAME=$name" "MAIL_CONTACTS=$contacts" |
+  ssh "$PROXMOX" "pct exec $CT -- bash -c 'umask 077; cat > $SECRETS_FILE.tmp && mv $SECRETS_FILE.tmp $SECRETS_FILE'"
+echo "Saved on CT $CT (root only). Checking Arty can read the inbox:"
+ssh "$PROXMOX" "pct exec $CT -- bash -c '. /srv/ai/secrets/brain.env; curl -s -X POST -H \"Authorization: Bearer \$ARTY_API_KEY\" -H \"Content-Type: application/json\" -d \"{\\\"arguments\\\":{\\\"count\\\":1}}\" http://127.0.0.1:8081/v1/tools/email_inbox'" | python3 -c 'import sys, json; print((json.load(sys.stdin).get("result") or "no answer").splitlines()[0])'

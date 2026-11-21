@@ -30,13 +30,37 @@ if [ -n "$ARTY_DISCORD_ID$ARTY_TELEGRAM_ID" ]; then
     *[!A-Za-z0-9/._-]*) echo "PUFFER_DIR may only hold letters, digits and / . _ -" >&2; exit 1 ;;
   esac
 fi
+own_app_origin() {
+  case "$2" in
+    "") ;;
+    https://*/*|*[!A-Za-z0-9.:/-]*) echo "$1 must be https://<host> with nothing after the host" >&2; exit 1 ;;
+    https://?*) ;;
+    *) echo "$1 must be https://<host> with nothing after the host" >&2; exit 1 ;;
+  esac
+  printf '%s' "$2"
+}
+drive_origin=$(own_app_origin DRIVE_ADDRESS "${DRIVE_ADDRESS:-}")
+calendar_origin=$(own_app_origin CALENDAR_ADDRESS "${CALENDAR_ADDRESS:-}")
+starfire_origin=$(own_app_origin STARFIRE_ADDRESS "${STARFIRE_ADDRESS:-}")
+own_apps=$(printf '{"drive": "%s", "calendar": "%s", "starfire": "%s"}\n' "$drive_origin" "$calendar_origin" "$starfire_origin")
+own_app_hosts=$(printf '%s\n' "$drive_origin" "$calendar_origin" "$starfire_origin" | sed -e 's#^https://##' -e 's#:[0-9]*$##' | grep . || true)
+if [ -n "$own_app_hosts" ]; then
+  cookie_rows=$(ssh "$DESKTOP" python3 -I - $own_app_hosts < arty-pc/own-app-cookie-rows) \
+    || { echo "couldn't count the own app cookies in Arty's browser profile on the desktop, so nothing was deployed" >&2; exit 1; }
+  if [ "$cookie_rows" != 0 ]; then
+    echo "Arty's browser profile (~/.browser-profile) on the desktop holds ${cookie_rows:-unknown} cookie rows for an own app or its parent domain: remove them before deploying, so Arty's browser can't act as you in your own apps" >&2
+    exit 1
+  fi
+fi
 bundle=$(mktemp --suffix=.tgz)
-trap 'rm -f "$bundle"' EXIT
+own_apps_folder=$(mktemp -d)
+trap 'rm -f "$bundle"; rm -rf "$own_apps_folder"' EXIT
+printf '%s\n' "$own_apps" > "$own_apps_folder/own-apps.json"
 tar czf "$bundle" --exclude=services/arty-desktop-egress.service --exclude='mcp/test_*.py' brain/*.py brain/persona.md brain/system-prompt.md brain/brain.json \
-  mcp/*.py mcp/tool-hub.json hub/tool_hub.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless bin/ai-engine-lib services/*.service \
+  mcp/*.py mcp/tool-hub.json hub/tool_hub.py hub/web_host.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless bin/ai-engine-lib services/*.service \
   services/*.timer doclib/*.py doclib/retrieval_set.json \
   apps/ios/index.html apps/ios/app.css apps/ios/sw.js apps/ios/manifest.webmanifest apps/ios/js/*.js apps/ios/js/vendor/*.js \
-  apps/ios/fonts/*.ttf apps/ios/icons/*.png
+  apps/ios/fonts/*.ttf apps/ios/icons/*.png -C "$own_apps_folder" own-apps.json
 remote_bundle=$(ssh "$PROXMOX" mktemp --suffix=.tgz)
 [[ $remote_bundle =~ ^/tmp/tmp\.[A-Za-z0-9]+\.tgz$ ]] || { echo "unexpected temporary path on $PROXMOX: $remote_bundle" >&2; exit 1; }
 scp -q "$bundle" "$PROXMOX:$remote_bundle"
@@ -50,13 +74,14 @@ cd /root && rm -rf deploy && mkdir deploy && tar xzf ai-deploy.tgz -C deploy && 
 live_model=$(jq -r .model /srv/ai/brain/brain.json 2>/dev/null || true)
 live_toolless=$(jq -r ".allow_toolless_models // false" /srv/ai/brain/brain.json 2>/dev/null || echo false)
 install -m 644 deploy/brain/* /srv/ai/brain/
+install -m 644 deploy/own-apps.json /srv/ai/brain/own-apps.json
 if [ -n "$live_model" ] && [ "$live_model" != null ]; then
   jq --arg m "$live_model" --argjson t "$live_toolless" ".model = \$m | .allow_toolless_models = \$t" /srv/ai/brain/brain.json > /srv/ai/brain/brain.json.tmp && mv /srv/ai/brain/brain.json.tmp /srv/ai/brain/brain.json
 fi
 mkdir -p /srv/ai/brain/state
 install -m 644 deploy/mcp/* /srv/ai/mcp/
 install -d /srv/ai/hub
-install -m 644 deploy/hub/tool_hub.py /srv/ai/hub/
+install -m 644 deploy/hub/tool_hub.py deploy/hub/web_host.py /srv/ai/hub/
 install -m 644 deploy/desktop_known_hosts /srv/ai/mcp/workspace_known_hosts
 install -m 755 deploy/bin/* /usr/local/bin/
 chmod 644 /usr/local/bin/ai-engine-lib
@@ -83,29 +108,55 @@ rm -rf /srv/ai/apps/ios.old
 [ ! -d /srv/ai/apps/beta/ios ] || echo "the old copy at /srv/ai/apps/beta/ios was left in place: delete it once the new one is checked"'
 REMOTE
 scp -q arty-pc/browser_agent.py "$DESKTOP:.local/browser-agent/browser_agent.py"
+scp -q arty-pc/web_host.py "$DESKTOP:.local/browser-agent/web_host.py"
 doc2text_upload=$(ssh "$DESKTOP" mktemp)
 scp -q arty-pc/doc2text "$DESKTOP:$doc2text_upload"
 scp -q arty-pc/run.sh "$DESKTOP:.local/browser-agent/run.sh"
-scp -q arty-pc/sign-in-browser "$DESKTOP:.local/bin/sign-in-browser"
-scp -q arty-pc/sign-in-browser.desktop "$DESKTOP:.local/share/applications/sign-in-browser.desktop"
-scp -q arty-pc/sign-in-google "$DESKTOP:.local/bin/sign-in-google"
+launcher_upload=$(ssh "$DESKTOP" mktemp -d)
+[[ $launcher_upload =~ ^/tmp/tmp\.[A-Za-z0-9]+$ ]] || { echo "unexpected temporary folder on the desktop: $launcher_upload" >&2; exit 1; }
+scp -q arty-pc/sign-in-browser arty-pc/sign-in-google arty-pc/sign-in-apps "$DESKTOP:$launcher_upload/"
+scp -q arty-pc/sign-in-browser.desktop arty-pc/sign-in-google.desktop arty-pc/sign-in-apps.desktop "$DESKTOP:$launcher_upload/"
+launcher_sums=$(cd arty-pc && sha256sum sign-in-browser sign-in-google sign-in-apps sign-in-browser.desktop sign-in-google.desktop \
+  sign-in-apps.desktop | base64 -w0)
+doc2text_sum=$(sha256sum < arty-pc/doc2text | cut -d" " -f1)
 scp -q arty-pc/arty-style "$DESKTOP:.local/bin/arty-style"
 # Arty's own desktop look (arty-style) uses these dark themes; installs only if missing.
 ssh "$DESKTOP" 'dpkg -s arc-theme papirus-icon-theme >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q arc-theme papirus-icon-theme >/dev/null'
 ssh "$DESKTOP" "pinned='$YT_DLP_VERSION' sh -s" < arty-pc/install-yt-dlp
 ssh "$DESKTOP" 'dpkg -s python3-openpyxl >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-openpyxl >/dev/null'
-scp -q arty-pc/sign-in-google.desktop "$DESKTOP:.local/share/applications/sign-in-google.desktop"
 ssh "$DESKTOP" 'mkdir -p ~/.local/browser-agent/gmail-extension'
-scp -q extensions/gmail/* "$DESKTOP:.local/browser-agent/gmail-extension/"
-ssh "$DESKTOP" 'chmod +x ~/.local/browser-agent/run.sh ~/.local/bin/sign-in-browser ~/.local/bin/sign-in-google ~/.local/bin/arty-style; mkdir -p ~/Desktop
-  for launcher in sign-in-browser sign-in-google; do
-    install -m 755 ~/.local/share/applications/$launcher.desktop ~/Desktop/$launcher.desktop
+scp -q extensions/gmail/background.js extensions/gmail/manifest.json extensions/gmail/README.md "$DESKTOP:.local/browser-agent/gmail-extension/"
+printf '%s' "$own_apps" \
+  | ssh "$DESKTOP" 'sudo install -d -o root -g root -m 755 /etc/arty && sudo tee /etc/arty/own-apps.json.new >/dev/null && sudo chown root:root /etc/arty/own-apps.json.new && sudo chmod 644 /etc/arty/own-apps.json.new && sudo mv /etc/arty/own-apps.json.new /etc/arty/own-apps.json && rm -f ~/.local/browser-agent/own-apps.json'
+ssh "$DESKTOP" "upload='$launcher_upload' sums='$launcher_sums'"' sh -s' <<'LAUNCHERS'
+set -e
+sudo install -d -o root -g root -m 755 /usr/local/share/applications
+for launcher in sign-in-browser sign-in-google sign-in-apps; do
+  sudo install -o root -g root -m 755 "$upload/$launcher" /usr/local/bin/$launcher
+  sudo install -o root -g root -m 644 "$upload/$launcher.desktop" /usr/local/share/applications/$launcher.desktop
+  rm -f ~/.local/bin/$launcher ~/.local/share/applications/$launcher.desktop
+done
+rm -rf "$upload"
+installed_sums=$(cd /usr/local/bin && sha256sum sign-in-browser sign-in-google sign-in-apps
+  cd /usr/local/share/applications && sha256sum sign-in-browser.desktop sign-in-google.desktop sign-in-apps.desktop)
+if [ "$installed_sums" != "$(printf '%s' "$sums" | base64 -d)" ]; then
+  for launcher in sign-in-browser sign-in-google sign-in-apps; do
+    sudo rm -f /usr/local/bin/$launcher /usr/local/share/applications/$launcher.desktop
+  done
+  echo "the sign-in launchers changed on the desktop between upload and install, so they were removed" >&2
+  exit 1
+fi
+LAUNCHERS
+ssh "$DESKTOP" 'chmod +x ~/.local/browser-agent/run.sh ~/.local/bin/arty-style; mkdir -p ~/Desktop
+  for launcher in sign-in-browser sign-in-google sign-in-apps; do
+    rm -f ~/Desktop/$launcher.desktop
+    sudo install -o root -g root -m 755 /usr/local/share/applications/$launcher.desktop ~/Desktop/$launcher.desktop
     # XFCE only runs desktop launchers whose checksum is recorded as trusted.
     DISPLAY=:0 gio set ~/Desktop/$launcher.desktop metadata::xfce-exe-checksum "$(sha256sum ~/Desktop/$launcher.desktop | cut -d" " -f1)" 2>/dev/null || true
   done'
 
 # The agent's run.sh loop restarts it within seconds; [b] keeps pgrep from matching this command.
-ssh "$DESKTOP" "sudo install -m 755 '$doc2text_upload' /usr/local/bin/doc2text && rm -f '$doc2text_upload'"'; pid=$(pgrep -f "[b]rowser_agent.py" || true); [ -z "$pid" ] || kill $pid'
+ssh "$DESKTOP" "sudo install -o root -g root -m 755 '$doc2text_upload' /usr/local/bin/doc2text && rm -f '$doc2text_upload' && { [ \"\$(sha256sum < /usr/local/bin/doc2text | cut -d' ' -f1)\" = '$doc2text_sum' ] || { sudo rm -f /usr/local/bin/doc2text; echo 'doc2text changed on the desktop between upload and install, so it was removed' >&2; exit 1; }; }"'; pid=$(pgrep -f "[b]rowser_agent.py" || true); [ -z "$pid" ] || kill $pid'
 for bot in "discord/arty_discord.py:$ARTY_DISCORD_ID" "telegram/arty_telegram.py:$ARTY_TELEGRAM_ID"; do
   source_file=chat-bots/${bot%%:*}
   server_id=${bot##*:}

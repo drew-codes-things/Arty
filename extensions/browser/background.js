@@ -15,7 +15,7 @@ const SETTLE_LIMIT_MS = 3000;
 const PRIVATE_FIELD_HINTS = 'pass|pwd|\\bpin\\b|pin.?code|one.?time|\\botp\\b|2fa|mfa|verif\\w*.?(code|number)|auth\\w*.?code|security.?(code|answer|question)|memorable|\\bcards?\\b|card.?(num|no\\b|holder|code|cvc|cvv|exp)|cc-|\\bcc.?(num|csc|cvc|exp)|cvv|cvc|\\bcsc\\b|iban|sort.?code|account.?(num|no\\b)|routing|\\bssn\\b|social.?security|national.?insurance|\\bnino?\\b|tax.?id|secret|token|api.?key|private.?key';
 const PRIVATE_FIELD_REFUSAL = 'a password or payment field on this page has something typed in it, so Arty will not take a picture of it. Ask the user to look, or read the page instead';
 const EXTENSION_NAME = 'Arty for your browser';
-const UNPAIRED_TITLE = `${EXTENSION_NAME}: not paired yet. Click here and paste the pairing code from Arty Desktop (tray menu, Chrome sites).`;
+const UNPAIRED_TITLE = `${EXTENSION_NAME}: not paired yet. Open Arty Desktop, or click here and paste the pairing code from Arty Desktop (tray menu, Chrome sites).`;
 const PAIRED_TITLE = EXTENSION_NAME;
 const NAMED_BRANDS = [['Opera', 'Opera'], ['Microsoft Edge', 'Edge'], ['Brave', 'Brave'], ['Vivaldi', 'Vivaldi'], ['Google Chrome', 'Chrome'], ['Chromium', 'Chromium']];
 const NAMED_USER_AGENTS = [[/\bVivaldi\//, 'Vivaldi'], [/\bOPR\//, 'Opera'], [/\bEdg\//, 'Edge'], [/\bFirefox\//, 'Firefox'], [/\bChrome\//, 'Chrome']];
@@ -24,6 +24,9 @@ const SERVICE_PROOF_CONTEXT = 'arty-browser-service:';
 const RANDOM_ID_BYTES = 16;
 const BROWSER_ID = /^[0-9a-f]{32}$/;
 const OPENABLE_SCHEMES = ['http:', 'https:'];
+const NATIVE_HOST = 'app.arty.desktop';
+const NATIVE_RETRY_MS = 30000;
+const PAIRING_CODE = /^[0-9a-f]{32}$/;
 
 const FIRST_ITEM_NUMBER = 1;
 const ITEM_NUMBER_LIMIT = 100000;
@@ -32,6 +35,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let polling = false;
 let nextItemNumber = FIRST_ITEM_NUMBER;
 let detectedName = null;
+let lastNativeTry = -Infinity;
 
 async function poll() {
   if (polling) return;
@@ -40,15 +44,11 @@ async function poll() {
     for (;;) {
       // Any extension API call keeps this service worker alive between long polls.
       await chrome.runtime.getPlatformInfo();
-      const pairing = await pairingCode();
-      if (!pairing) {
-        await showPaired(false);
-        await sleep(OFFLINE_RETRY_MS);
-        continue;
-      }
       let command;
+      let pairing;
       try {
-        if (!(await serviceHoldsCode(pairing))) {
+        pairing = await usablePairing();
+        if (!pairing) {
           await showPaired(false);
           await sleep(OFFLINE_RETRY_MS);
           continue;
@@ -110,6 +110,29 @@ async function serviceHoldsCode(pairing) {
   if (!response.ok) return false;
   const { proof } = await response.json();
   return typeof proof === 'string' && proof === await proofFor(pairing, nonce);
+}
+
+async function nativePairing() {
+  const now = Date.now();
+  if (typeof chrome.runtime.sendNativeMessage !== 'function' || now - lastNativeTry < NATIVE_RETRY_MS) return '';
+  lastNativeTry = now;
+  let answer;
+  try {
+    answer = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'pair' });
+  } catch {
+    return '';
+  }
+  if (answer?.type !== 'pairing' || typeof answer.code !== 'string' || !PAIRING_CODE.test(answer.code)) return '';
+  return answer.code;
+}
+
+async function usablePairing() {
+  const stored = await pairingCode();
+  if (stored && (await serviceHoldsCode(stored))) return stored;
+  const offered = await nativePairing();
+  if (!offered || offered === stored || !(await serviceHoldsCode(offered))) return '';
+  await chrome.storage.local.set({ pairing: offered, pairedBy: 'native' });
+  return offered;
 }
 
 async function browserId() {

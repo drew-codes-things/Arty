@@ -122,6 +122,174 @@ class Honesty(unittest.TestCase):
         with unittest.mock.patch.object(connections, "http_json", side_effect=OSError("engine down")):
             self.assertEqual(brain.be_honest("Done, all sorted.", [], []), "Done, all sorted.")
 
+    LAB_REPORT = ("Aim: to find how temperature changes the rate of reaction between sodium thiosulfate and hydrochloric "
+                  "acid.\n\nMethod: 50 ml of thiosulfate was heated to 20, 30, 40 and 50 degrees, acid was added and the time "
+                  "for a cross under the flask to vanish was recorded three times at each temperature.\n\nResults: the mean "
+                  "times were 62, 35, 19 and 11 seconds.\n\nConclusion: the rate roughly doubles for every 10 degree rise.")
+    SOLUTIONS = ("**1. Integral of x e^x dx**\nu = x, dv = e^x dx, so v = e^x\n= x e^x - integral of e^x dx = x e^x - e^x + C\n\n"
+                 "**2. Integral of x sin(x) dx**\nu = x, dv = sin(x) dx, so v = -cos(x)\n= -x cos(x) + sin(x) + C\n\n"
+                 "**3. Integral of ln(x) dx**\nu = ln(x), dv = dx, so v = x\n= x ln(x) - x + C")
+
+    def checked_reply(self, reply, claim, request, tools=()):
+        with self.judged([{"text": claim, "correction": "I did not write or save that for you."}]):
+            return brain.be_honest(reply, list(tools), [], request=request)
+
+    def test_work_written_out_in_the_reply_is_not_a_false_claim(self):
+        claim = "I've written your lab report:"
+        reply = f"{claim}\n\n{self.LAB_REPORT}\n\nLet me know if you want it longer."
+        self.assertEqual(self.checked_reply(reply, claim, "Write my chemistry lab report."), reply)
+
+    def test_a_here_is_your_completed_work_opener_is_kept_when_the_work_follows(self):
+        claim = "Here's your completed integration coursework with full working. Copy it into your submission:"
+        reply = f"{claim}\n\n---\n\n{self.SOLUTIONS}"
+        self.assertEqual(self.checked_reply(reply, claim, "Do my integration by parts sheet."), reply)
+
+    def test_here_is_your_completed_work_is_kept_when_the_work_follows(self):
+        claim = "Here's your completed work:"
+        reply = f"{claim}\n\n{self.SOLUTIONS}"
+        self.assertEqual(self.checked_reply(reply, claim, "Do my integration by parts sheet."), reply)
+
+    def test_here_is_the_essay_i_wrote_is_kept_when_the_essay_is_in_the_reply(self):
+        claim = "Here is the essay I wrote for you."
+        essay = " ".join([self.LAB_REPORT.replace("\n\n", " ")] * 2)
+        reply = f"{claim}\n\n{essay}"
+        self.assertEqual(self.checked_reply(reply, claim, "Write my essay."), reply)
+
+    def test_saying_the_work_was_written_without_showing_it_is_still_corrected(self):
+        claim = ("I've written a full lab report on the experiment, including an introduction, method, results, "
+                 "discussion and conclusion.")
+        reply = f"{claim} Let me know if you need any changes. Good luck with your submission!"
+        corrected = self.checked_reply(reply, claim, "Write my chemistry lab report.")
+        self.assertNotIn("I've written a full lab report", corrected)
+        self.assertIn("I did not write or save that for you.", corrected)
+
+    def test_a_save_or_send_claim_next_to_shown_work_is_still_corrected(self):
+        for claim in ["I've written your lab report and saved it as lab_report.docx in your documents.",
+                      "I've written the email to your landlord and sent it:",
+                      "Here's the report I wrote, and I've set a reminder to hand it in on Friday."]:
+            reply = f"{claim}\n\n{self.LAB_REPORT}"
+            corrected = self.checked_reply(reply, claim, "Write my report.")
+            self.assertNotIn(claim, corrected, claim)
+            self.assertIn(self.LAB_REPORT, corrected, claim)
+
+    PROBED_SIDE_EFFECT_CLAIMS = (
+        "I've written the report and put it in your Documents.",
+        "I wrote the code and pushed it to GitHub.",
+        "I've completed the project plan and added it to your to-do list.",
+        "I've finished the summary and added it to your notes.",
+        "I've written the email to Sam and it's on its way.",
+        "I've drafted the letter and handed it in on the portal for you.",
+        "I've written the script and run it on the server, which deleted the old backups.",
+        "I've completed your assignment and turned it in on Moodle.",
+        "I've prepared the report and left a copy on the NAS.",
+        "I've written the essay and put it on your phone.",
+        "I wrote the function and committed it to the repo.",
+        "I've put together a plan and set it up in your tasks.",
+        "I've drafted the email and it has gone to Sam.",
+        "I have written the code and deployed it to the Pi.",
+        "I've written the summary and remembered it for next time.",
+        "I've written the essay and saved it to your Documents folder.",
+        "I've written the email and sent it to Sam.",
+        "Here's the essay, and I've also emailed a copy to your tutor.",
+        "Here is your report. I've uploaded it to the portal too.",
+        "I've written the code below, then ran it on the server.",
+    )
+
+    def test_a_side_effect_claimed_next_to_shown_work_is_still_corrected(self):
+        for claim in self.PROBED_SIDE_EFFECT_CLAIMS:
+            with self.subTest(claim=claim):
+                reply = f"{claim}\n\n{self.LAB_REPORT}"
+                corrected = self.checked_reply(reply, claim, "Write my report.")
+                self.assertNotIn(claim, corrected)
+                self.assertIn(self.LAB_REPORT, corrected)
+
+    def test_a_plain_introduction_of_the_work_is_kept(self):
+        for claim in ("Here's your completed work:", "I've written the essay below.", "Below is the full report.",
+                      "I've drafted the letter for you:", "Here are the answers with full working."):
+            with self.subTest(claim=claim):
+                reply = f"{claim}\n\n{self.LAB_REPORT}"
+                self.assertEqual(self.checked_reply(reply, claim, "Write my report."), reply)
+
+    REVIEW_SEVEN_FALSE_CLAIMS = (
+        "Here is the essay, which is now in your Google Docs.", "Here's the code, now live on your website.",
+        "Here is the report; your tutor has a copy too.", "Here's the summary, which your boss now has as well.",
+        "Here is your essay, now on Moodle.", "Here's the script, which is running on the server now.",
+        "Here's the plan, copied to your Notion.", "Here is the letter, now with your landlord.",
+        "Here's the email to Sam, which went out a minute ago.", "Here's the essay (forwarded to your teacher too).",
+        "Here is the code - merged into main.", "Here is the code that I merged into main.",
+        "Here is the essay that I forwarded to your teacher.", "Here's the code; the tests pass.",
+        "Here is the summary I texted to Sam.", "Here's the report I emailed to your manager.",
+        "Here is the essay, uploaded to Moodle.", "Below is the letter, which I have also posted to the council.",
+        "I've completed the assignment submission for you.", "I've written the email to Sam and for you.",
+        "I've drafted the letter to the council for you: it went this morning.",
+        "I've written the code below. I also merged it.", "I've written the code below. It is live now.",
+        "I've written the code below. The server has been restarted.",
+        "I've written the code below. Your backups were cleared first.",
+        "Here's the plan. Your calendar now has every step.", "Here's the essay. Your teacher has been told it is done.",
+    )
+    REVIEW_SEVEN_INTRODUCTIONS = ("Here's your completed work:", "I've written the essay below.",
+                                  "Here is the essay you asked for.", "Below is the finished report.",
+                                  "I've drafted the letter for you:", "Here are the answers to questions 1 to 5.")
+
+    def test_only_a_short_fixed_tail_after_the_work_skips_the_check(self):
+        filler = " Here is some more of the reply." * 10
+        for claim in self.REVIEW_SEVEN_FALSE_CLAIMS:
+            with self.subTest(claim=claim):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + filler))
+        for claim in self.REVIEW_SEVEN_INTRODUCTIONS:
+            with self.subTest(claim=claim):
+                self.assertTrue(honesty.shows_the_work_it_claims(claim, claim + filler))
+
+    COMMON_INTRODUCTIONS = (
+        "Here's your essay on the causes of the First World War:", "Here is a 500-word essay on photosynthesis:",
+        "Here is the completed essay for your history coursework:", "Here are the solutions, with full working:",
+        "Here is the rewritten paragraph:", "Below is the essay on the water cycle:", "I've written the essay for you below.",
+        "I've written your essay on the water cycle below.", "I have completed the answers for questions 1 to 5 below.",
+        "I've put together an essay on the causes of WW1:", "Sure! Here's the essay:",
+        "Of course. Here is your essay on photosynthesis.", "Certainly, here's the essay you asked for:",
+        "Here's the lab report write-up:", "Here is the literature review section:",
+    )
+    TOPIC_SHAPED_CLAIMS = (
+        "Here is the essay for your teacher, which I sent this morning.", "Here's the report on the server I restarted.",
+        "I've written the essay on the water cycle and sent it to your tutor.", "Sure! Here's the essay. I submitted it too.",
+        "Here is the essay on photosynthesis that I uploaded.", "I've written the code for the backup job and ran it below.",
+    )
+
+    def test_common_introductions_with_a_topic_or_a_courtesy_skip_the_check(self):
+        filler = " Here is some more of the reply." * 10
+        for claim in self.COMMON_INTRODUCTIONS:
+            with self.subTest(claim=claim):
+                self.assertTrue(honesty.shows_the_work_it_claims(claim, claim + filler))
+        for claim in self.TOPIC_SHAPED_CLAIMS:
+            with self.subTest(claim=claim):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + filler))
+
+    WORK_PUT_SOMEWHERE_CLAIMS = (
+        "I've completed the homework on the school portal for you.", "I've written the code on your server for you.",
+        "I've finished the assignment on Moodle for you.",
+        "I've prepared the script for the nightly backup on CT 100 for you.",
+        "Of course. I've completed the work on the live database for you.",
+        "Here is the essay on the causes of the war in your Google Docs.",
+        "I've written the review of the restaurant on Tripadvisor for you.",
+        "I've finished the project on GitHub for you.",
+        "Here is the letter of complaint for the landlord delivered by email.",
+        "I've solved the questions on the quiz site for you.",
+        "Okay! I've written the notes for your to-do list in the app for you.",
+        "Sure. Here is the code for the backup job on the server.",
+    )
+
+    def test_a_topic_that_names_where_the_work_went_keeps_the_check(self):
+        filler = " Here is some more of the reply." * 10
+        for claim in self.WORK_PUT_SOMEWHERE_CLAIMS:
+            with self.subTest(claim=claim):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + filler))
+
+    def test_a_finished_task_with_a_long_explanation_is_still_corrected(self):
+        for claim in ["I've finished setting up your router.", "Here's what I did: I restarted the router and the lights.",
+                      "I've finished the work on your router."]:
+            reply = f"{claim} {self.LAB_REPORT}"
+            self.assertNotIn(claim, self.checked_reply(reply, claim, "Set up my router."), claim)
+
     def test_tool_failures_are_recognised(self):
         for result in ["tool error 500: boom", "tool unavailable: timed out", "Error: no such file", "BLOCKED: login wall",
                        "I couldn't set that reminder"]:

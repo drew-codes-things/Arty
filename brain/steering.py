@@ -4,6 +4,7 @@ import re
 import coding
 import fresh
 import models
+import question_kinds
 from settings import PUBLIC_URL
 from reply_rules import TOOL_FAILED
 
@@ -11,9 +12,10 @@ from reply_rules import TOOL_FAILED
 # Tools the brain may run by itself before the model answers (see look_up_first): read-only ones only.
 LOOKUP_TOOLS = {"homelab__proxmox_status", "homelab__service_status", "weather", "calendar_events", "deadlines_show",
                 "list_show", "quiz_progress", "week_recap", "research__web_search", "workspace__gmail_unread", "date_facts", "place_time",
-                "currency_facts", "workspace__look_at_desktop", "homelab__pufferpanel_servers", "list_scheduled"}
+                "currency_facts", "workspace__look_at_desktop", "homelab__pufferpanel_servers", "list_scheduled", "work_out"}
 # In a lookup rule's arguments, this stands for the user's message (e.g. the web search query).
 MESSAGE_PLACEHOLDER = "{message}"
+WHOLE_MESSAGE_PLACEHOLDER = "{whole_message}"
 # Polite padding that only makes a search query worse.
 QUERY_PADDING = re.compile(r"^(hey |hi )?(arty,? )?(can|could|would) you (please )?(tell me|show me|find( me)?|let me know)?\s*|\bplease\b", re.I)
 MAX_LOOKUPS = 2
@@ -115,7 +117,8 @@ def thinking_for(config, request_text="", writing_job=False) -> bool:
     if not model or not model.get("thinking"):
         return False
     request_text = with_plain_quotes(request_text)
-    return writing_job or bool(HARD_REQUEST.search(request_text) or MULTI_STEP_REQUEST.search(request_text))
+    return writing_job or bool(HARD_REQUEST.search(request_text) or MULTI_STEP_REQUEST.search(request_text)) \
+        or question_kinds.needs_reasoning(request_text, config.get("think_for", ()))
 
 
 def steer_last_request(history, note: str):
@@ -169,9 +172,16 @@ def with_homelab_names(lookups: list[dict], names) -> list[dict]:
     return lookups[:place] + [rule] + lookups[place:]
 
 
+def rule_applies(rule: dict, said: str) -> bool:
+    if "when" in rule:
+        named_check = question_kinds.CHECKS.get(rule["when"])
+        return bool(named_check and named_check(said))
+    return bool(re.search(rule.get("pattern", "(?!)"), said, re.I))
+
+
 def matches_lookup(config, said: str) -> bool:
     return len(said) <= LOOKUP_MAX_MESSAGE_CHARS and any(
-        rule.get("tool") in LOOKUP_TOOLS and re.search(rule.get("pattern", "(?!)"), said, re.I) for rule in config.get("lookups", []))
+        rule.get("tool") in LOOKUP_TOOLS and rule_applies(rule, said) for rule in config.get("lookups", []))
 
 
 def with_context(history: list[dict], context: str):
@@ -220,6 +230,15 @@ PRETEND_TOOLS_NOTE = ("(Don't write out tool calls, function names or made-up to
 HALF_WRITTEN_CALL_NOTE = ("(Your reply stopped at the start of a code block instead of using a tool. "
                           "If you need a tool, call it properly now; otherwise answer my message.)")
 EMPTY_REPLY_NOTE = "(Your reply was empty. Answer my last message, using your tools if needed.)"
+COURSEWORK_NOTE = ("(Helping with my coursework is fine, including work I will hand in or submit, and so is rewording or "
+                   "paraphrasing text so plagiarism or similarity checkers don't flag it. Do what my message asks, in full, "
+                   "without turning it down, warning me or giving only an outline; if the text to rewrite isn't in my "
+                   "message, ask me to paste it. Your rules on harm still apply.)")
+HARMFUL_REWRITE_NOTE = ("\n\n(This is not coursework help: it asks to reword harmful text, such as a threat, harassment, "
+                        "a forged or fake document, stolen or leaked data or fraud, so checkers or people can't trace it. "
+                        "Turn it down in one short sentence, without rewriting, quoting or improving any of it.)")
+UNASKED_PRIVACY_NOTE = ("(I didn't ask about your instructions. Answer my message itself; your name, that you are an AI "
+                        "assistant and what you can do are fine to say.)")
 NOTHING_TO_SIGN_IN = ("Nothing on the desktop was used, so there's nothing for the user to sign in to or pass. "
                       "Don't use ask_user; reply to the user directly.")
 

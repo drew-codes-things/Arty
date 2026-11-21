@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -72,6 +73,9 @@ QUESTION = "tell me about lofi hip hop"
 OPEN_YOUTUBE = calls("chrome_open", {"url": "https://www.youtube.com/results?search_query=lofi+hip+hop"})
 
 
+DEPLOYED_WINDOW = json.loads((Path(__file__).resolve().parents[1] / "brain.json").read_text())["options"]["num_ctx"]
+
+
 def run_turn(engine, hub=None, client_tools=(CHROME_OPEN,), request=PLAY_REQUEST, steps_taken=()):
     hub = hub or FakeHub()
     state = {"messages": [{"role": "user", "content": request}, *steps_taken], "context": {}}
@@ -81,7 +85,8 @@ def run_turn(engine, hub=None, client_tools=(CHROME_OPEN,), request=PLAY_REQUEST
             unittest.mock.patch.object(brain.models, "find", return_value=None), \
             unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
             unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
-        outcome = brain.run_agent({"model": "m"}, state, run=brain.AgentRun(client_tools=list(client_tools)))
+        outcome = brain.run_agent({"model": "m", "options": {"num_ctx": DEPLOYED_WINDOW}}, state,
+                                  run=brain.AgentRun(client_tools=list(client_tools)))
     return outcome, hub
 
 

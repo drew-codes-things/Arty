@@ -7,9 +7,10 @@ from pathlib import Path
 
 import models
 import owner
+import web_host
 
 from environment import HUB_KEY
-from settings import HUB_URL, ARTY_ENGINE_URL, CONFIG_FILE, HOMELAB_NAMES
+from settings import HUB_URL, ARTY_ENGINE_URL, CONFIG_FILE, HOMELAB_NAMES, OWN_APPS_FILE, STARFIRE_URL
 from steering import thinking_for, with_thinking, with_homelab_names
 
 log = logging.getLogger("brain")
@@ -61,9 +62,74 @@ def load_config():
     persona_file = config.get("persona_file")
     config["persona"] = Path(persona_file).read_text().strip() if persona_file and Path(persona_file).exists() else ""
     config["lookups"] = with_homelab_names(config.get("lookups", []), HOMELAB_NAMES)
+    config["approval"] = with_own_app_hosts(config.get("approval", {}), own_app_hosts())
     return config
 
 
+def host_of(address) -> str:
+    try:
+        return web_host.host_of(address)
+    except web_host.UnclearAddress:
+        return ""
+
+
+class UnreadableOwnApps(ValueError):
+    pass
+
+
+def read_own_apps(path: str) -> list:
+    try:
+        listed = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as error:
+        raise UnreadableOwnApps(f"couldn't read the own app addresses in {path}: {error}") from None
+    return list(listed.values()) if isinstance(listed, dict) else []
+
+
+def listed_own_apps(path: str) -> list:
+    try:
+        return read_own_apps(path)
+    except UnreadableOwnApps as error:
+        log.warning("%s", error)
+        return []
+
+
+def distinct_hosts(addresses: list) -> list[str]:
+    hosts = []
+    for address in addresses:
+        try:
+            host = web_host.host_of(address)
+        except web_host.UnclearAddress as error:
+            raise UnreadableOwnApps(f"an own app address can't be used: {error}") from None
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def own_app_hosts(path: str | None = None, starfire_url: str | None = None) -> list[str]:
+    starfire = STARFIRE_URL if starfire_url is None else starfire_url
+    try:
+        return distinct_hosts(listed_own_apps(path or OWN_APPS_FILE) + [starfire])
+    except UnreadableOwnApps as error:
+        log.warning("%s", error)
+        return [host for host in (host_of(starfire),) if host]
+
+
+def own_app_hosts_or_refuse() -> list[str]:
+    return distinct_hosts(read_own_apps(OWN_APPS_FILE) + [STARFIRE_URL])
+
+
+def is_own_app_address(url, hosts: list[str]) -> bool:
+    return web_host.is_own_app_address(url, hosts)
+
+
+def with_own_app_hosts(approval: dict, hosts: list[str]) -> dict:
+    domains = list(approval.get("domains", []))
+    return {**approval, "domains": domains + [host for host in hosts if host not in domains]}
+
+
+PAGE_FETCH_TOOL = "fetch__fetch"
 MAX_SCHEMA_DEPTH = 8
 
 
@@ -118,6 +184,10 @@ class ToolHub:
         route = self.routes.get(name)
         if not route:
             return f"unknown tool {name}"
+        if name == PAGE_FETCH_TOOL:
+            import shopping
+
+            return shopping.fetch_tool_text(arguments or {})[:limit]
         try:
             result = http_json(route, body=arguments or {}, headers={"Authorization": f"Bearer {HUB_KEY}"}, timeout=900)
         except urllib.error.HTTPError as error:

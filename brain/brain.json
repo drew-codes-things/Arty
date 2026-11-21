@@ -1,9 +1,14 @@
 {
   "model": "qwen3:14b",
   "think": "auto",
+  "think_for": [
+    "quiz",
+    "puzzle"
+  ],
   "arty_models": [],
   "solo_models": [],
   "vision_model": "mimo-v2.6:9b",
+  "audio_model": "",
   "coding_model": "qwen3:14b",
   "route_coding_chats": true,
   "route_picture_chats": true,
@@ -82,6 +87,7 @@
     "memory__search_nodes",
     "research__web_search",
     "fetch__fetch",
+    "read_web_page",
     "calculate",
     "date_maths",
     "clock_maths",
@@ -229,6 +235,8 @@
       ],
       "tools": [
         "research__read_document",
+        "read_attached_file",
+        "spreadsheet",
         "research__search_library",
         "research__reindex_library",
         "research__git"
@@ -293,6 +301,33 @@
         "homelab__nextcloud_*"
       ]
     },
+    "drive": {
+      "description": "the user's own Starfire Drive app: save a file or text into it, or make a share link (after he says yes)",
+      "keywords": [
+        "drive",
+        "my drive",
+        "save it to",
+        "save this to",
+        "share link",
+        "share the file"
+      ],
+      "tools": [
+        "drive_save",
+        "drive_share"
+      ]
+    },
+    "app_undo": {
+      "description": "undo the last thing done in the user's Starfire Calendar or Starfire Drive app",
+      "keywords": [
+        "undo",
+        "take that back",
+        "put it back",
+        "move it back"
+      ],
+      "tools": [
+        "undo_app_action"
+      ]
+    },
     "tasks": {
       "description": "background jobs, schedules, reminders and phone notifications",
       "keywords": [
@@ -309,7 +344,14 @@
         "notification",
         "phone",
         "in an hour",
-        "each morning"
+        "each morning",
+        "watch",
+        "tell me when",
+        "let me know when",
+        "briefing",
+        "tidy",
+        "pause",
+        "my jobs"
       ],
       "tools": [
         "start_background_task",
@@ -317,7 +359,15 @@
         "list_scheduled",
         "cancel_scheduled",
         "list_tasks",
-        "notify_user"
+        "notify_user",
+        "add_watcher",
+        "set_daily_briefing",
+        "set_inbox_tidy",
+        "always_allow_inbox_change",
+        "list_jobs",
+        "pause_job",
+        "resume_job",
+        "delete_job"
       ]
     },
     "models": {
@@ -378,11 +428,32 @@
       ]
     },
     "files": {
-      "description": "convert attached files (images, audio, video) to other formats and give download links",
+      "description": "convert attached files (images, audio, video) to other formats and give download links; read attached PDFs, Word files and spreadsheets and work out exact numbers from spreadsheets; find out what song an audio or video file is; read the exact text in a picture; answer questions about a picture or a moment in a video",
       "tools": [
-        "convert_file"
+        "convert_file",
+        "read_attached_file",
+        "spreadsheet",
+        "identify_song",
+        "analyse_sound",
+        "read_image_text",
+        "look_at_attachment"
       ],
       "keywords": [
+        "is this sound",
+        "what is that noise",
+        "what's that noise",
+        "strange noise",
+        "weird noise",
+        "rattle",
+        "what song",
+        "which song",
+        "name this song",
+        "this track",
+        "song is this",
+        "read the text",
+        "what does this say",
+        "what does it say",
+        "ocr",
         "convert",
         "turn it into",
         "turn this into",
@@ -470,7 +541,11 @@
         "calendar_events",
         "calendar_add",
         "calendar_change",
-        "calendar_remove"
+        "calendar_remove",
+        "calendar_app_events",
+        "calendar_app_add",
+        "calendar_app_move",
+        "calendar_app_cancel"
       ],
       "keywords": [
         "calendar",
@@ -608,12 +683,17 @@
       ]
     },
     "email": {
-      "description": "the user's Gmail: unread emails, searching, reading whole emails, drafting replies (never sending)",
+      "description": "the user's email: Gmail in the browser, and his own mailbox (read, draft, send or reply after he says yes)",
       "tools": [
         "workspace__gmail_unread",
         "workspace__gmail_search",
         "workspace__gmail_read",
-        "workspace__email_draft_link"
+        "workspace__email_draft_link",
+        "email_inbox",
+        "email_read",
+        "email_draft",
+        "email_send",
+        "email_reply"
       ],
       "keywords": [
         "email",
@@ -626,7 +706,36 @@
         "e-mail",
         "emails from",
         "email from",
-        "message from"
+        "message from",
+        "send an email",
+        "drafts"
+      ]
+    },
+    "shopping": {
+      "description": "check what products cost right now in shops (Amazon UK and others), read-only",
+      "tools": [
+        "check_price",
+        "read_web_page"
+      ],
+      "keywords": [
+        "price",
+        "prices",
+        "how much",
+        "cost",
+        "costs",
+        "cheapest",
+        "cheaper",
+        "deal",
+        "deals",
+        "in stock",
+        "amazon",
+        "ebay",
+        "argos",
+        "currys",
+        "john lewis",
+        "shop",
+        "shops",
+        "store"
       ]
     },
     "reckoning": {
@@ -755,7 +864,10 @@
     "always": [
       "homelab__start_guest",
       "homelab__restart_guest",
-      "homelab__pufferpanel_power"
+      "homelab__pufferpanel_power",
+      "workspace__own_app_request",
+      "workspace__drive_upload",
+      "workspace__gmail_send"
     ],
     "draft_words": [
       "start",
@@ -816,7 +928,7 @@
       }
     },
     {
-      "pattern": "\\b(deadlines?|due (date|soon|in)|assignments?|coursework)\\b",
+      "pattern": "(?s)^(?!.*\\b(?:write|rewrite|draft|complete|solve|implement|finish|answer|explain|do my|help me (?:with|write))\\b)(?:.*\\b(?:deadlines?|due (?:date|soon|in))\\b|.*\\b(?:what|which|any|list|show|see|check|when)\\b[^.?!]{0,40}\\b(?:assignments?|coursework)\\b)",
       "tool": "deadlines_show",
       "skip_for_changes": true
     },
@@ -868,6 +980,13 @@
       "arguments": {
         "query": "{message}",
         "results": 5
+      }
+    },
+    {
+      "when": "needs_exact_work",
+      "tool": "work_out",
+      "arguments": {
+        "text": "{whole_message}"
       }
     }
   ],

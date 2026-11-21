@@ -273,3 +273,90 @@ def test_a_listener_that_comes_back_while_the_mic_closes_gets_audio_at_once(monk
         return restarted, error
 
     assert asyncio.run(run()) == (2, "")
+
+
+def write_slow_aplay(folder, monkeypatch):
+    stub = folder / "aplay"
+    stub.write_text("#!/bin/sh\ncat > /dev/null\nexec sleep 30\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_stopping_the_speakers_ends_the_playback_at_once_and_tells_linked_pcs(tmp_path, monkeypatch):
+    write_slow_aplay(tmp_path, monkeypatch)
+
+    async def scenario(client):
+        _, assistant_key = client.app["devices"].add("Arty", "assistant", "assistant")
+        _, pc_key = client.app["devices"].add("My PC", "debian", "pc")
+        assistant = {"Authorization": f"Bearer {assistant_key}"}
+        speaker = await client.ws_connect("/ws/speaker", headers={"Authorization": f"Bearer {pc_key}"})
+        refused = await client.post("/assistant/stop", headers={"Authorization": f"Bearer {pc_key}"})
+        idle = await (await client.post("/assistant/stop", headers=assistant)).json()
+        told_when_idle = await asyncio.wait_for(speaker.receive_json(), 5)
+        playing = asyncio.create_task(client.post("/speak", data=b"RIFF....", headers=assistant))
+        wav_on_pc = await speaker.receive()
+        await asyncio.sleep(0.3)
+        began = asyncio.get_running_loop().time()
+        stopped = await (await client.post("/assistant/stop", headers=assistant)).json()
+        reply = await asyncio.wait_for(playing, 5)
+        seconds = asyncio.get_running_loop().time() - began
+        told_pc = await asyncio.wait_for(speaker.receive_json(), 5)
+        return refused.status, idle, told_when_idle, wav_on_pc.data, stopped, reply.status, await reply.json(), seconds, told_pc
+
+    refused, idle, told_when_idle, wav, stopped, status, body, seconds, told_pc = run_with_client(tmp_path, monkeypatch, scenario)
+    assert refused == 403
+    assert idle == {"ok": True, "stopped": False}
+    assert told_when_idle == {"type": "stop"}
+    assert wav == b"RIFF...."
+    assert stopped == {"ok": True, "stopped": True}
+    assert status == 200 and body["ok"] is True and body["server_speakers"] == "played"
+    assert seconds < 1.0
+    assert told_pc == {"type": "stop"}
+
+
+def test_a_cancelled_playback_ends_the_speaker_process(tmp_path, monkeypatch):
+    write_slow_aplay(tmp_path, monkeypatch)
+
+    async def scenario():
+        speakers = voice_hub.Speakers()
+        playing = asyncio.create_task(speakers.play(b"RIFF...."))
+        await asyncio.sleep(0.3)
+        process = speakers.process
+        playing.cancel()
+        await asyncio.gather(playing, return_exceptions=True)
+        await asyncio.wait_for(process.wait(), 5)
+        return process.returncode, speakers.process
+
+    returncode, leftover = asyncio.run(scenario())
+    assert returncode != 0
+    assert leftover is None
+
+
+def test_a_playback_asked_for_before_a_stop_is_dropped_instead_of_starting_late(tmp_path, monkeypatch):
+    marker = tmp_path / "played"
+    stub = tmp_path / "aplay"
+    stub.write_text(f"#!/bin/sh\ncat > /dev/null\ntouch {marker}\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    async def scenario():
+        speakers = voice_hub.Speakers()
+        asked_for = speakers.generation
+        await speakers.stop()
+        dropped = await speakers.play(b"RIFF....", asked_for)
+        after_stop = await speakers.play(b"RIFF....", speakers.generation)
+        return dropped, after_stop
+
+    dropped, after_stop = asyncio.run(scenario())
+    assert dropped == "" and after_stop == ""
+    assert marker.exists()
+    marker.unlink()
+
+    async def only_the_stale_one():
+        speakers = voice_hub.Speakers()
+        asked_for = speakers.generation
+        await speakers.stop()
+        await speakers.play(b"RIFF....", asked_for)
+
+    asyncio.run(only_the_stale_one())
+    assert not marker.exists()

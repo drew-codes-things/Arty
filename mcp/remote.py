@@ -25,8 +25,10 @@ OUTPUT_LIMIT = int(os.environ.get("WORKSPACE_OUTPUT_CHARS", "6000"))
 DEFAULT_TIMEOUT = int(os.environ.get("WORKSPACE_TIMEOUT_SECONDS", "120"))
 GUI_ENV = "export DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority;"
 SSH_GRACE_SECONDS = 15
-PRIVATE_FOLDERS = ((".gmail-chrome",), (".browser-profile",), (".local", "browser-agent"), (".ssh",))
-PRIVATE_REFUSAL = ("Refused: Arty's signed-in browser profiles (~/.browser-profile, ~/.gmail-chrome), the browser "
+PRIVATE_FOLDERS = ((".gmail-chrome",), (".browser-profile",), (".apps-browser-profile",), (".local", "browser-agent"),
+                   (".ssh",))
+PRIVATE_REFUSAL = ("Refused: Arty's signed-in browser profiles (~/.browser-profile, ~/.gmail-chrome, "
+                   "~/.apps-browser-profile), the browser "
                    "agent's folder and ~/.ssh are off limits to tools.")
 PRIVATE_EXIT = 86
 PATH_SEPARATORS = re.compile(r"[/=:\s()`;|&<>]+")

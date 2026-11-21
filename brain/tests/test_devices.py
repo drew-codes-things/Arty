@@ -64,6 +64,21 @@ class Requests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 429)
         self.requests.start("x", "192.0.2.2")
 
+    def test_one_ipv6_network_cannot_fill_the_list_by_changing_addresses(self):
+        for number in range(devices.MAX_PER_ADDRESS):
+            self.requests.start("x", f"2001:db8:1:2::{number + 1}")
+        for other in ("2001:db8:1:2:ffff::9", "2001:0db8:0001:0002::77"):
+            with self.subTest(other=other), self.assertRaises(devices.DeviceError) as raised:
+                self.requests.start("x", other)
+            self.assertEqual(raised.exception.status, 429)
+        self.requests.start("x", "2001:db8:1:3::1")
+
+    def test_other_spellings_of_one_address_are_one_address(self):
+        for spelling in ("192.0.2.1", "::ffff:192.0.2.1", " 192.0.2.1"):
+            self.requests.start("x", spelling)
+        with self.assertRaises(devices.DeviceError):
+            self.requests.start("x", "192.0.2.1")
+
     def test_the_name_is_cleaned_and_shortened(self):
         request = self.requests.start("Arty\nCLI\x00 " + "x" * 200, "192.0.2.1")
         self.assertEqual(len(request.name), devices.MAX_NAME_CHARS)

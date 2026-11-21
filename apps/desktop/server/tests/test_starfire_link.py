@@ -234,7 +234,7 @@ def test_the_window_token_is_not_a_link_token(served):
 
 
 def test_the_window_asks_who_is_linked(served):
-    assert client.get("/link", headers=WINDOW).json() == {"linked": False}
+    assert client.get("/link", headers=WINDOW).json()["linked"] is False
     paired_token(served)
     assert client.get("/link", headers=WINDOW).json()["name"] == APP_NAME
     assert client.get("/link").status_code == 403
@@ -253,9 +253,12 @@ def test_either_side_can_unlink(served):
 def test_status_reports_whether_computer_control_is_on(served, monkeypatch):
     token = paired_token(served)
     monkeypatch.setattr(computer, "available", lambda: False)
-    assert client.get("/link/status", headers=linked(token)).json() == {"ok": True, "computer": False}
+    off = client.get("/link/status", headers=linked(token)).json()
+    assert (off["ok"], off["computer"]) == (True, False)
     monkeypatch.setattr(computer, "available", lambda: True)
-    assert client.get("/link/status", headers=linked(token)).json() == {"ok": True, "computer": True}
+    on = client.get("/link/status", headers=linked(token)).json()
+    assert (on["ok"], on["computer"]) == (True, True)
+    assert {entry["id"] for entry in on["capabilities"]} >= {"screen.look", "browser.open"}
 
 
 @pytest.fixture

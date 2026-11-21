@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+import glob
+import os
+import shutil
+import sqlite3
+import sys
+import tempfile
+
+PROFILE = os.path.expanduser("~/.browser-profile")
+COOKIE_FILES = ("*/Cookies", "*/Network/Cookies")
+COMPANION_SUFFIXES = ("", "-journal", "-wal")
+
+
+HARMLESS_PARENT_DOMAIN_NAMES = ("__cf_bm", "cf_clearance", "_cfuvid", "__cflb", "__cfruid")
+
+
+def own_host_keys(hosts: list[str]) -> set[str]:
+    keys = set()
+    for host in hosts:
+        own = host.lower().strip(".")
+        keys.update({own, "." + own})
+    return keys
+
+
+def parent_domain_keys(hosts: list[str]) -> set[str]:
+    keys = set()
+    for host in hosts:
+        labels = host.lower().strip(".").split(".")
+        keys.update("." + ".".join(labels[start:]) for start in range(1, len(labels) - 1))
+    return keys
+
+
+def rows_in(cookie_file: str, hosts: list[str]) -> int:
+    own_keys = sorted(own_host_keys(hosts))
+    parent_keys = sorted(parent_domain_keys(hosts) - own_host_keys(hosts))
+    with tempfile.TemporaryDirectory() as folder:
+        copy = os.path.join(folder, "Cookies")
+        for suffix in COMPANION_SUFFIXES:
+            if os.path.exists(cookie_file + suffix):
+                shutil.copyfile(cookie_file + suffix, copy + suffix)
+        under = ["%." + host.lower().strip(".") for host in hosts]
+        own_app = f"lower(host_key) IN ({','.join('?' * len(own_keys))})" + " OR lower(host_key) LIKE ?" * len(under)
+        parent = (f"(lower(host_key) IN ({','.join('?' * len(parent_keys)) or 'NULL'}) "
+                  f"AND name NOT IN ({','.join('?' * len(HARMLESS_PARENT_DOMAIN_NAMES))}))")
+        where = f"{own_app} OR {parent}"
+        values = own_keys + under + parent_keys + list(HARMLESS_PARENT_DOMAIN_NAMES)
+        with sqlite3.connect(f"file:{copy}?mode=ro", uri=True) as database:
+            return database.execute(f"SELECT COUNT(*) FROM cookies WHERE {where}", values).fetchone()[0]
+
+
+def main(hosts: list[str]) -> int:
+    if not hosts:
+        print(0)
+        return 0
+    files = sorted({path for pattern in COOKIE_FILES for path in glob.glob(os.path.join(PROFILE, pattern))})
+    print(sum(rows_in(path, hosts) for path in files))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

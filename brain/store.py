@@ -111,9 +111,13 @@ def init():
             connection.execute("ALTER TABLE schedules ADD COLUMN message TEXT")
         if "attempts" not in columns:
             connection.execute("ALTER TABLE schedules ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        if "job" not in columns:
+            connection.execute("ALTER TABLE schedules ADD COLUMN job TEXT")
         device_columns = {row["name"] for row in connection.execute("PRAGMA table_info(approved_devices)")}
         if "remote_control" not in device_columns:
             connection.execute("ALTER TABLE approved_devices ADD COLUMN remote_control INTEGER NOT NULL DEFAULT 0")
+        if "kind" not in device_columns:
+            connection.execute("ALTER TABLE approved_devices ADD COLUMN kind TEXT NOT NULL DEFAULT ''")
         announcement_columns = {row["name"] for row in connection.execute("PRAGMA table_info(announcements)")}
         if "category" not in announcement_columns:
             connection.execute(f"ALTER TABLE announcements ADD COLUMN category TEXT NOT NULL DEFAULT '{notify.OTHER}'")
@@ -253,13 +257,33 @@ def delete_event(event_id: int) -> bool:
 
 
 def create_schedule(title: str, instructions: str, cron: str | None, description: str, next_run: float,
-                    message: str | None = None) -> dict:
+                    message: str | None = None, job: dict | None = None) -> dict:
     with write_lock, connect() as connection:
         cursor = connection.execute(
-            "INSERT INTO schedules (title, instructions, cron, description, next_run, created, message) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (title[:120], instructions, cron, description, next_run, time.time(), message),
+            "INSERT INTO schedules (title, instructions, cron, description, next_run, created, message, job) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (title[:120], instructions, cron, description, next_run, time.time(), message, json.dumps(job) if job else None),
         )
         return dict(connection.execute("SELECT * FROM schedules WHERE id = ?", (cursor.lastrowid,)).fetchone())
+
+
+def get_schedule(schedule_id: int) -> dict | None:
+    with connect() as connection:
+        row = connection.execute("SELECT * FROM schedules WHERE id = ?", (schedule_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_schedule(schedule_id: int) -> bool:
+    with write_lock, connect() as connection:
+        return connection.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,)).rowcount > 0
+
+
+def list_job_schedules() -> list[dict]:
+    with connect() as connection:
+        return [dict(row) for row in connection.execute("SELECT * FROM schedules WHERE job IS NOT NULL ORDER BY id").fetchall()]
+
+
+def save_job(schedule_id: int, job: dict) -> bool:
+    return update_schedule(schedule_id, job=json.dumps(job))
 
 
 def list_schedules(include_disabled: bool = False) -> list[dict]:
@@ -282,10 +306,10 @@ def update_schedule(schedule_id: int, **fields) -> bool:
 DEVICE_TOUCH_SECONDS = 60
 
 
-def add_device(name: str, address: str, key_hash: str) -> int:
+def add_device(name: str, address: str, key_hash: str, kind: str = "") -> int:
     with write_lock, connect() as connection:
-        cursor = connection.execute("INSERT INTO approved_devices (name, address, key_hash, created) VALUES (?, ?, ?, ?)",
-                                    (name, address, key_hash, time.time()))
+        cursor = connection.execute("INSERT INTO approved_devices (name, address, key_hash, created, kind) VALUES (?, ?, ?, ?, ?)",
+                                    (name, address, key_hash, time.time(), kind))
         return cursor.lastrowid
 
 
@@ -308,7 +332,7 @@ def active_device_hashes() -> list[str]:
 
 def list_devices() -> list[dict]:
     with connect() as connection:
-        rows = connection.execute("SELECT id, name, address, created, last_used, remote_control FROM approved_devices "
+        rows = connection.execute("SELECT id, name, address, created, last_used, remote_control, kind FROM approved_devices "
                                   "WHERE revoked IS NULL ORDER BY created")
         return [dict(row, remote_control=bool(row["remote_control"])) for row in rows]
 

@@ -198,7 +198,8 @@ h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: 600; letter-spacing: -.012em; }
   display: inline-flex; align-items: center; min-height: var(--control-h-sm); padding: 0 var(--s-3);
   border: 1px solid var(--line-strong); border-radius: var(--r-pill); background: transparent; color: var(--muted); font-size: var(--fs-xs);
 }
-.message-actions { display: flex; gap: 2px; margin-left: calc(-1 * var(--s-2)); }
+.message-actions { display: flex; align-items: center; gap: 2px; margin-left: calc(-1 * var(--s-2)); }
+.message-time { color: var(--faint); font-size: var(--fs-xs); padding-left: var(--s-2); }
 .link-button {
   display: inline-flex; align-items: center; min-height: var(--touch); padding: 0 var(--s-3); border: 0; border-radius: var(--r-sm); background: none;
   color: var(--muted); font-size: var(--fs-xs); text-decoration: none;

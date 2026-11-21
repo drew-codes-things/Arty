@@ -79,21 +79,24 @@ def fit_to_window(samples: numpy.ndarray) -> numpy.ndarray:
 class Listening:
 
     def __init__(self, make_speech: Callable[[], SpeechDetector], turn: TurnJudge | None,
-                 turn_wait_frames: int = TURN_WAIT_FRAMES, live: LiveEar | None = None):
+                 turn_wait_frames: int = TURN_WAIT_FRAMES, live: LiveEar | None = None,
+                 pause_frames: int = PAUSE_FRAMES):
         self.make_speech = make_speech
         self.turn = turn
         self.turn_wait_frames = turn_wait_frames
         self.live = live
+        self.pause_frames = pause_frames
 
     def new_collector(self) -> UtteranceCollector:
         return UtteranceCollector(speech=self.make_speech(), turn=self.turn, turn_wait_frames=self.turn_wait_frames,
-                                  live=self.live)
+                                  live=self.live, pause_frames=self.pause_frames)
 
 
 def load_listening(settings: Mapping[str, str]) -> Listening:
     turn_end = choice(settings, "VOICE_TURN_END", TURN_END_CHOICES)
     vad = choice(settings, "VOICE_VAD", VAD_CHOICES)
     wait_frames = turn_wait_frames(settings)
+    pause_frames = turn_pause_frames(settings, wait_frames)
     command_engine = choice(settings, "COMMAND_ENGINE", COMMAND_ENGINE_CHOICES)
     make_speech = WebrtcSpeech
     if vad == "silero":
@@ -107,7 +110,7 @@ def load_listening(settings: Mapping[str, str]) -> Listening:
     log.info("listening with %s speech detection, %s end-of-turn and %s commands",
              "silero" if make_speech is not WebrtcSpeech else "webrtc", "smart" if turn else "silence",
              "moonshine" if live else "whisper")
-    return Listening(make_speech, turn, wait_frames, live)
+    return Listening(make_speech, turn, wait_frames, live, pause_frames)
 
 
 def choice(settings: Mapping[str, str], name: str, allowed: tuple[str, ...]) -> str:
@@ -125,6 +128,17 @@ def turn_wait_frames(settings: Mapping[str, str]) -> int:
         raise ValueError(f"VOICE_TURN_WAIT_MS must be a whole number of milliseconds, not {raw!r}") from None
     if frames <= PAUSE_FRAMES:
         raise ValueError(f"VOICE_TURN_WAIT_MS must be more than {PAUSE_FRAMES * FRAME_MS}, not {raw!r}")
+    return frames
+
+
+def turn_pause_frames(settings: Mapping[str, str], wait_frames: int) -> int:
+    raw = settings.get("VOICE_TURN_PAUSE_MS", str(PAUSE_FRAMES * FRAME_MS))
+    try:
+        frames = int(raw) // FRAME_MS
+    except ValueError:
+        raise ValueError(f"VOICE_TURN_PAUSE_MS must be a whole number of milliseconds, not {raw!r}") from None
+    if not 1 <= frames < wait_frames:
+        raise ValueError(f"VOICE_TURN_PAUSE_MS must be from {FRAME_MS} up to less than VOICE_TURN_WAIT_MS, not {raw!r}")
     return frames
 
 

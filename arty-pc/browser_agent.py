@@ -5,6 +5,8 @@ made by the user in this window are kept. Listens on 127.0.0.1 only; the workspa
 tools reach it over SSH. Single-threaded on purpose: Playwright's sync API isn't
 thread-safe, and one browser should do one thing at a time.
 """
+import base64
+import contextlib
 import hmac
 import json
 import os
@@ -22,6 +24,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
+
+import web_host
 
 PROFILE = os.path.expanduser("~/.browser-profile")
 # Google Chrome, not Playwright's "Chrome for Testing" build: Google refuses to sign in on
@@ -186,16 +190,23 @@ MATCHES_STEP_JS = """
 # Gmail has its own ordinary Google Chrome window and profile, read by an extension (extensions/gmail/): Google
 # signs out a browser that a program drives through the debugging port, as this agent does with the main one.
 GMAIL_PROFILE = os.path.expanduser("~/.gmail-chrome")
-GMAIL_LAUNCHER = os.path.expanduser("~/.local/bin/sign-in-google")
+GMAIL_LAUNCHER = "/usr/local/bin/sign-in-google"
 GMAIL_PORT = 9334            # where the extension asks for jobs: 127.0.0.1 only
 GMAIL_POLL_SECONDS = 20      # how long a job request from the extension is held open
 GMAIL_JOB_SECONDS = 90
 GMAIL_START_SECONDS = 30
 GMAIL_CONNECTED_SECONDS = 45  # an extension that asked for a job this recently is running
 GMAIL_UNREAD_QUERY = "in:inbox is:unread"
-GMAIL_ACTIONS = ("gmail_unread", "gmail_list", "gmail_read", "gmail_tabs")
+GMAIL_SEND = "gmail_send"
+GMAIL_ACTIONS = ("gmail_unread", "gmail_list", "gmail_read", "gmail_tabs", GMAIL_SEND)
+GMAIL_CHANGING_ACTIONS = frozenset({GMAIL_SEND})
+GMAIL_SEND_SECONDS = 120
+GMAIL_SEND_HAND_OUT_SECONDS = 30
 AGENT_FOLDER = os.path.expanduser("~/.local/browser-agent")
-PRIVATE_FOLDERS = (PROFILE, GMAIL_PROFILE, AGENT_FOLDER, os.path.expanduser("~/.ssh"))
+APPS_PROFILE = os.path.expanduser("~/.apps-browser-profile")
+APPS_SIGNING_IN_FILE = os.path.join(AGENT_FOLDER, "apps-signing-in")
+APPS_CHROME_ARGS = ["--password-store=basic", "--no-first-run"]
+PRIVATE_FOLDERS = (PROFILE, GMAIL_PROFILE, APPS_PROFILE, AGENT_FOLDER, os.path.expanduser("~/.ssh"))
 TOKEN_FILE = os.path.join(AGENT_FOLDER, "token")
 TOKEN_HEADER_FILE = os.path.join(AGENT_FOLDER, "token.header")
 EXTENSION_TOKEN_FILE = os.path.join(AGENT_FOLDER, "gmail-extension", "agent-token.json")
@@ -212,6 +223,76 @@ STEP_MAX_CHARS = 120
 PERSONAL_STEP = re.compile(r"@|\d{4,}")
 NO_CACHE_URLS = ("checkout", "payment", "/pay/", "/pay?", "billing", "/cart", "/basket", "/wallet", "/donate")
 SECRET_FIELD_PATTERN = r"password|cc-|card.?number|cardnumber|cvc|cvv|security.?code|expiry|iban|stripe|braintree|adyen|checkout"
+
+OWN_APPS_FILE = "/etc/arty/own-apps.json"
+DRIVE = "drive"
+CALENDAR = "calendar"
+OWN_APP_NAMES = (DRIVE, CALENDAR)
+OWN_APP_LANDING = "/api/health"
+OWN_APP_ACTIONS = frozenset({"app_call", "app_upload"})
+NAVIGATING_ACTIONS = frozenset({"open", "linkedin_posts"})
+PLAIN_HOST = re.compile(r"[a-z0-9.-]+")
+OWN_APP_REFUSAL = ("{host} is one of your own apps behind the starfire sign-in, so Arty's browser never opens or works on "
+                   "it; Arty's app actions reach it in their own browser, after asking you")
+APPS_SIGNING_IN = ("the Starfire apps sign-in window is open on the desktop: finish signing in there and close it, "
+                   "then ask again")
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+MOST_DOWNLOAD_REDIRECTS = 5
+NUMBER = r"\d{1,18}"
+SEGMENT = r"[A-Za-z0-9._@~%-]{1,255}"
+BROKEN_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+SEGMENT_BREAKERS = frozenset("/\\%")
+IN_PAGE_FETCH_MS = 60_000
+DAY = r"\d{4}-\d{2}-\d{2}"
+OWN_APP_CALLS = {
+    DRIVE: (("GET", rf"/api/folders/{NUMBER}"), ("GET", r"/api/search\?q=[A-Za-z0-9._~%+-]{1,600}"),
+            ("POST", "/api/nodes/trash"), ("POST", "/api/shares"), ("DELETE", rf"/api/shares/{NUMBER}")),
+    CALENDAR: (("GET", "/api/calendars"), ("GET", rf"/api/events\?from={DAY}&to={DAY}"), ("POST", "/api/events"),
+               ("GET", rf"/api/calendars/{SEGMENT}/events/{SEGMENT}"),
+               ("PATCH", rf"/api/calendars/{SEGMENT}/events/{SEGMENT}"),
+               ("DELETE", rf"/api/calendars/{SEGMENT}/events/{SEGMENT}")),
+}
+UPLOAD_ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+MOST_UPLOAD_BYTES = 25 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024
+SMALLEST_UPLOAD_CHUNK_BYTES = 64 * 1024
+MOST_ANSWER_CHARS = 400_000
+MOST_FILE_NAME_CHARS = 255
+SUCCESS_STATUSES = range(200, 300)
+IN_PAGE_REQUEST_JS = """
+async ([method, path, json, base64, ifMatch, waitMs]) => {
+  const plain = {credentials: 'same-origin', redirect: 'error', cache: 'no-store'};
+  const giveUp = AbortSignal.timeout(waitMs);
+  let facts;
+  try {
+    const session = await fetch('/api/session', {...plain, signal: giveUp});
+    if (!session.ok) return {signedOut: true};
+    facts = await session.json();
+  } catch (error) {
+    if (giveUp.aborted) return {failed: 'no answer in time'};
+    return {signedOut: true};
+  }
+  if (!facts || typeof facts.csrfToken !== 'string' || !facts.csrfToken) return {signedOut: true};
+  const headers = {};
+  if (method !== 'GET') headers['X-CSRF-Token'] = facts.csrfToken;
+  if (ifMatch) headers['If-Match'] = ifMatch;
+  let body;
+  if (base64 !== null) {
+    headers['Content-Type'] = 'application/octet-stream';
+    body = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+  } else if (json !== null) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(json);
+  }
+  try {
+    const answer = await fetch(path, {...plain, method, headers, body, signal: giveUp});
+    return {status: answer.status, text: await answer.text(), timeZone: String(facts.timeZone || ''),
+            sharesEnabled: facts.sharesEnabled === true};
+  } catch (error) {
+    return {failed: String((error && error.message) || error)};
+  }
+}
+"""
 
 
 ACCEPT_COOKIE_LABEL = (r"^(?:(?:yes,? )?i (?:accept|agree)|(?:accept|allow|agree)(?: to)?(?: all| additional| optional)?"
@@ -524,6 +605,8 @@ class Browser:
         self.pending_selector = None
         self.used_saved_selector = False
         self.crashed_tabs = set()
+        self.own_hosts = frozenset()
+        self.blocked_route = None
 
     def page(self):
         if self.browser is None or not self.browser.is_connected() or not self.browser.contexts:
@@ -582,9 +665,35 @@ class Browser:
         self.context = self.browser.contexts[0]
         self.context.set_default_timeout(ACTION_TIMEOUT_MS)
         self.crashed_tabs = set()
+        self.blocked_route = None
         for tab in self.context.pages:
             self.watch_for_crash(tab)
         self.context.on("page", self.watch_for_crash)
+        self.block_own_apps()
+
+    def block_own_apps(self):
+        pattern = own_app_requests(self.own_hosts)
+        if self.context is None or pattern == self.blocked_route:
+            return
+        if self.blocked_route is not None:
+            self.context.unroute(self.blocked_route, abort_request)
+            self.blocked_route = None
+        if pattern is not None:
+            self.context.route(pattern, abort_request)
+            self.blocked_route = pattern
+
+    def refuse_own_app(self, url):
+        if is_own_app_address(url, self.own_hosts):
+            raise ValueError(OWN_APP_REFUSAL.format(host=host_of(url)))
+
+    def leave_own_app(self, result):
+        if not isinstance(result, dict) or not is_own_or_unclear_address(result.get("url"), self.own_hosts):
+            return result
+        try:
+            self.page().goto("about:blank")
+        except PlaywrightError as error:
+            print(f"could not leave an own app page: {first_line(error)}", flush=True)
+        raise ValueError(OWN_APP_REFUSAL.format(host=host_of(result["url"])))
 
     def close(self):
         """Lets go of the browser but leaves it running, so its signed-in sessions survive the agent restarting."""
@@ -648,8 +757,11 @@ class Browser:
     def handle(self, action, args):
         self.pending_selector = None
         self.used_saved_selector = False
+        if action in OWN_APP_ACTIONS:
+            return self.app_call(args) if action == "app_call" else self.app_upload(args)
+        self.own_hosts = own_app_hosts()
         try:
-            result = self.act(action, args)
+            result = self.leave_own_app(self.act(action, args))
         except PlaywrightError:
             self.drop_saved_selector()
             raise
@@ -675,11 +787,15 @@ class Browser:
         if action == "upload" and (reason := private_upload_reason(os.path.expanduser(str(args.get("path", ""))))):
             raise ValueError(reason)
         page = self.page()
+        self.block_own_apps()
+        if action not in NAVIGATING_ACTIONS:
+            self.refuse_own_app(page.url)
         if action == "open":
-            self.close_other_tabs(page)
             url = args["url"]
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
+            self.refuse_own_app(url)
+            self.close_other_tabs(page)
             page.goto(url, wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
             accept_cookies(page)
@@ -761,6 +877,7 @@ class Browser:
         else:
             url = f"https://www.linkedin.com/in/{profile.split('/')[-1]}/recent-activity/shares/"
         wanted = max(1, min(int(args.get("max", 20)), POSTS_MAX))
+        self.refuse_own_app(url)
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(3500)
         snapshot = self.snapshot(page, with_text=False)
@@ -803,7 +920,7 @@ class Browser:
                     element.click()
                 return self.save(page, pending.value.suggested_filename, pending.value.save_as)
             url = urllib.parse.urljoin(page.url, href)
-        response = self.context.request.get(url, timeout=DOWNLOAD_WAIT_MS)
+        response, url = self.fetch_outside_own_apps(url)
         if not response.ok:
             raise ValueError(f"the download failed: {response.status} {response.status_text}")
         disposition = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)', response.headers.get("content-disposition", ""))
@@ -814,6 +931,17 @@ class Browser:
             with open(path, "wb") as out:
                 out.write(body)
         return self.save(page, name, write)
+
+    def fetch_outside_own_apps(self, url):
+        for _ in range(MOST_DOWNLOAD_REDIRECTS + 1):
+            self.refuse_own_app(url)
+            response = self.context.request.get(url, timeout=DOWNLOAD_WAIT_MS, max_redirects=0)
+            self.refuse_own_app(response.url)
+            location = response.headers.get("location")
+            if response.status not in REDIRECT_STATUSES or not location:
+                return response, url
+            url = urllib.parse.urljoin(url, location)
+        raise ValueError("the download was sent on through too many other addresses")
 
     def save(self, page, suggested, write):
         name = os.path.basename(suggested or "") or "download"
@@ -826,6 +954,71 @@ class Browser:
         result["saved"] = path
         return result
 
+    @contextlib.contextmanager
+    def own_app_tab(self, origin):
+        if apps_sign_in_open():
+            raise RuntimeError(APPS_SIGNING_IN)
+        apps = self.playwright.chromium.launch_persistent_context(
+            APPS_PROFILE, executable_path=CHROME, headless=True, chromium_sandbox=True, args=APPS_CHROME_ARGS)
+        try:
+            tab = apps.pages[0] if apps.pages else apps.new_page()
+            tab.goto(origin + OWN_APP_LANDING, wait_until="domcontentloaded")
+            yield tab if same_origin(tab.url, origin) else None
+        finally:
+            self.close_apps_browser(apps)
+
+    @staticmethod
+    def close_apps_browser(apps):
+        try:
+            apps.close()
+        except PlaywrightError as error:
+            print(f"could not close the own apps browser: {first_line(error)}", flush=True)
+
+    @staticmethod
+    def in_page(tab, method, path, json_body=None, data=None, if_match=""):
+        encoded = base64.b64encode(data).decode() if data is not None else None
+        return tab.evaluate(IN_PAGE_REQUEST_JS, [method, path, json_body, encoded, if_match, IN_PAGE_FETCH_MS])
+
+    def app_call(self, args):
+        app = str(args.get("app") or "")
+        origin = own_app_origin(app)
+        method, path = checked_call(app, args.get("method"), args.get("path"))
+        with self.own_app_tab(origin) as tab:
+            if tab is None:
+                return signed_out(app, origin)
+            answer = self.in_page(tab, method, path, args.get("json"), None, str(args.get("if_match") or ""))
+        return app_answer(app, origin, answer)
+
+    def app_upload(self, args):
+        origin = own_app_origin(DRIVE)
+        name = checked_file_name(args.get("name"))
+        parent = int(args.get("parent_id") or 0)
+        if parent < 0:
+            raise ValueError("parent_id is a folder number, 0 for My Drive")
+        data = upload_bytes(args)
+        with self.own_app_tab(origin) as tab:
+            if tab is None:
+                return signed_out(DRIVE, origin)
+            return self.upload_in_page(tab, origin, name, parent, data)
+
+    def upload_in_page(self, tab, origin, name, parent, data):
+        started = app_answer(DRIVE, origin, self.in_page(tab, "POST", "/api/uploads",
+                                                          {"name": name, "size": len(data), "parentId": parent}))
+        if started.get("signed_out") or started["status"] not in SUCCESS_STATUSES:
+            return started
+        upload = started["body"] if isinstance(started["body"], dict) else {}
+        upload_id = str(upload.get("id") or "")
+        if not UPLOAD_ID.match(upload_id):
+            raise RuntimeError("the Drive app answered with an upload id Arty doesn't accept")
+        step = chunk_size(upload.get("chunkBytes"))
+        for offset in range(0, len(data), step):
+            sent = app_answer(DRIVE, origin, self.in_page(tab, "PUT", f"/api/uploads/{upload_id}?offset={offset}",
+                                                          data=data[offset:offset + step]))
+            if sent.get("signed_out") or sent["status"] not in SUCCESS_STATUSES:
+                self.in_page(tab, "DELETE", f"/api/uploads/{upload_id}")
+                return sent
+        return app_answer(DRIVE, origin, self.in_page(tab, "POST", f"/api/uploads/{upload_id}/finish"))
+
 
 class GmailWindow:
     """Hands Gmail jobs to the extension in the Gmail window and waits for its answers. The extension asks for work
@@ -835,6 +1028,7 @@ class GmailWindow:
         self.jobs = queue.Queue()
         self.results = {}
         self.waiting = set()
+        self.handed = set()
         self.answered = threading.Condition()
         self.last_asked = 0.0
 
@@ -845,10 +1039,14 @@ class GmailWindow:
             action = "tabs"
         self.make_sure_open()
         job_id = secrets.token_hex(16)
-        job = {"id": job_id, "action": action, "args": args, "expires": time.time() + GMAIL_JOB_SECONDS}
+        changing = action in GMAIL_CHANGING_ACTIONS
+        job = {"id": job_id, "action": action, "args": args,
+               "expires": time.time() + (GMAIL_SEND_SECONDS if changing else GMAIL_JOB_SECONDS)}
         with self.answered:
             self.waiting.add(job_id)
         self.jobs.put(job)
+        if changing:
+            return self.answer_once(job_id)
         with self.answered:
             # Half the time, then once more: a job handed to an extension that had just restarted is lost without
             # an error. Gmail jobs only read, so doing one twice is harmless.
@@ -859,9 +1057,24 @@ class GmailWindow:
             self.collect(job_id)
             raise RuntimeError("the Gmail window on my desktop didn't answer in time")
 
+    def answer_once(self, job_id):
+        deadline = time.monotonic() + GMAIL_SEND_SECONDS
+        with self.answered:
+            if not self.answered.wait_for(lambda: job_id in self.handed, min(GMAIL_SEND_HAND_OUT_SECONDS,
+                                                                                GMAIL_SEND_SECONDS)):
+                self.collect(job_id)
+                raise RuntimeError("the Gmail window on my desktop didn't pick up the email in time, so it was not "
+                                   "sent; ask again once the Gmail window is open")
+            if self.answered.wait_for(lambda: job_id in self.results, max(0.0, deadline - time.monotonic())):
+                return self.collect(job_id)
+            self.collect(job_id)
+        raise RuntimeError("the Gmail window on my desktop didn't say whether the email went; look in Sent before "
+                           "asking again")
+
     def collect(self, job_id):
         with self.answered:
             self.waiting.discard(job_id)
+            self.handed.discard(job_id)
             return self.results.pop(job_id, None)
 
     def connected(self):
@@ -891,12 +1104,23 @@ class GmailWindow:
                 job = self.jobs.get(timeout=left)
             except queue.Empty:
                 return None
-            if job["expires"] > time.time() and job["id"] in self.waiting:
+            if job["expires"] > time.time() and self.hand_out(job["id"]):
                 return job
         return None
 
+    def hand_out(self, job_id) -> bool:
+        with self.answered:
+            if job_id not in self.waiting:
+                return False
+            self.handed.add(job_id)
+            self.answered.notify_all()
+            return True
+
     def put_back(self, job):
         """A job whose hand-over failed (the extension restarted mid-request): the next request gets it."""
+        if job["action"] in GMAIL_CHANGING_ACTIONS:
+            print("a send job's hand-over failed; it is not handed out again, so nothing is sent twice", flush=True)
+            return
         self.jobs.put(job)
 
     def answer(self, job_id, result) -> bool:
@@ -916,6 +1140,184 @@ def private_upload_reason(path: str) -> str | None:
         if real == root or real.startswith(root + os.sep):
             return f"{path} is in a private folder ({folder}), so it can't be uploaded"
     return None
+
+
+def is_app_origin(origin: str) -> bool:
+    parts = urllib.parse.urlsplit(origin)
+    if parts.path or parts.query or parts.fragment or parts.username or parts.password or not parts.hostname:
+        return False
+    try:
+        parts.port
+    except ValueError:
+        return False
+    return parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOST_NAMES)
+
+
+def listed_own_apps(path: str | None = None) -> dict:
+    try:
+        with open(path or OWN_APPS_FILE) as handle:
+            listed = json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as error:
+        raise ValueError(f"the list of own app addresses can't be read: {first_line(error)}") from None
+    return listed if isinstance(listed, dict) else {}
+
+
+def host_of(url) -> str:
+    try:
+        return web_host.host_of(url)
+    except web_host.UnclearAddress:
+        return ""
+
+
+def own_app_hosts(path: str | None = None) -> frozenset:
+    try:
+        return frozenset(host for host in map(web_host.host_of, listed_own_apps(path).values()) if host)
+    except web_host.UnclearAddress as error:
+        raise ValueError(f"the list of own app addresses can't be read: {error}") from None
+
+
+def is_own_app_address(url, hosts) -> bool:
+    return web_host.is_own_app_address(url, hosts)
+
+
+def is_own_or_unclear_address(url, hosts) -> bool:
+    try:
+        return is_own_app_address(url, hosts)
+    except web_host.UnclearAddress:
+        return True
+
+
+def own_app_requests(hosts):
+    plain = sorted(host for host in hosts if PLAIN_HOST.fullmatch(host))
+    if not plain:
+        return None
+    names = "|".join(host.replace(".", r"\.") for host in plain)
+    return re.compile(rf"^[a-z][a-z0-9+.-]*://(?:[^/?#@]*@)?(?:[^/?#@:]*\.)?(?:{names})\.?(?::\d+)?(?:[/?#]|$)",
+                      re.IGNORECASE)
+
+
+def abort_request(route):
+    route.abort("blockedbyclient")
+
+
+def apps_sign_in_open(flag: str | None = None) -> bool:
+    try:
+        with open(flag or APPS_SIGNING_IN_FILE) as handle:
+            pid = int(handle.read().strip())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def own_app_origin(app, path: str | None = None) -> str:
+    if app not in OWN_APP_NAMES:
+        raise ValueError(f"there's no own app called {app!r}")
+    origin = str(listed_own_apps(path).get(app) or "").strip().rstrip("/")
+    if not origin:
+        raise ValueError(f"no address is set for the {app} app on this desktop ({app.upper()}_ADDRESS in hosts.env, then deploy)")
+    if not is_app_origin(origin):
+        raise ValueError(f"the {app} app's address must be https://<host> with nothing after the host")
+    return origin
+
+
+def same_origin(url: str, origin: str) -> bool:
+    found, wanted = urllib.parse.urlsplit(url or ""), urllib.parse.urlsplit(origin)
+    try:
+        return (found.scheme, found.hostname, found.port) == (wanted.scheme, wanted.hostname, wanted.port)
+    except ValueError:
+        return False
+
+
+def is_plain_segment(part: str) -> bool:
+    if BROKEN_ESCAPE.search(part):
+        return False
+    decoded = urllib.parse.unquote(part, errors="strict")
+    return decoded not in (".", "..") and not any(character in SEGMENT_BREAKERS or not character.isprintable()
+                                                  for character in decoded)
+
+
+def climbs_out(path: str) -> bool:
+    try:
+        return not all(is_plain_segment(part) for part in path.split("?", 1)[0].split("/"))
+    except UnicodeDecodeError:
+        return True
+
+
+def checked_call(app: str, method, path) -> tuple[str, str]:
+    method, path = str(method or "").upper(), str(path or "")
+    allowed = OWN_APP_CALLS.get(app, ())
+    if climbs_out(path) or not any(method == verb and re.fullmatch(pattern, path) for verb, pattern in allowed):
+        raise ValueError(f"{method} {path[:120]} isn't a call Arty makes to the {app} app")
+    return method, path
+
+
+def checked_file_name(raw) -> str:
+    name = str(raw or "").strip()
+    if not name or len(name) > MOST_FILE_NAME_CHARS or "/" in name or "\\" in name or not name.isprintable():
+        raise ValueError("give the file a plain name (no folders), up to 255 characters")
+    return name
+
+
+def upload_bytes(args: dict) -> bytes:
+    path, encoded = str(args.get("path") or ""), args.get("data_base64")
+    if bool(path) == (encoded is not None):
+        raise ValueError("give either a file on this computer (path) or the file's bytes (data_base64)")
+    if encoded is not None:
+        data = base64.b64decode(str(encoded), validate=True)
+    else:
+        data = read_upload_file(os.path.expanduser(path))
+    if len(data) > MOST_UPLOAD_BYTES:
+        raise ValueError(f"files Arty saves to Drive are at most {MOST_UPLOAD_BYTES // (1024 * 1024)} MB")
+    return data
+
+
+def read_upload_file(path: str) -> bytes:
+    reason = private_upload_reason(path)
+    if reason:
+        raise ValueError(reason)
+    if not os.path.isfile(path):
+        raise ValueError(f"no such file: {path}")
+    if os.path.getsize(path) > MOST_UPLOAD_BYTES:
+        raise ValueError(f"files Arty saves to Drive are at most {MOST_UPLOAD_BYTES // (1024 * 1024)} MB")
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def chunk_size(offered) -> int:
+    try:
+        wanted = int(offered)
+    except (TypeError, ValueError):
+        wanted = UPLOAD_CHUNK_BYTES
+    return max(SMALLEST_UPLOAD_CHUNK_BYTES, min(wanted, UPLOAD_CHUNK_BYTES))
+
+
+def signed_out(app: str, origin: str) -> dict:
+    return {"app": app, "origin": origin, "signed_out": True}
+
+
+def app_answer(app: str, origin: str, answer) -> dict:
+    if not isinstance(answer, dict) or answer.get("signedOut"):
+        return signed_out(app, origin)
+    if "failed" in answer:
+        raise RuntimeError(f"the {app} app didn't answer the browser ({str(answer['failed'])[:200]}); "
+                           "look in the app before trying again")
+    text = str(answer.get("text") or "")[:MOST_ANSWER_CHARS]
+    try:
+        body = json.loads(text) if text else None
+    except ValueError:
+        body = {"error": text[:300]}
+    return {"app": app, "origin": origin, "status": int(answer.get("status") or 0), "body": body,
+            "time_zone": str(answer.get("timeZone") or ""), "shares_enabled": answer.get("sharesEnabled") is True}
 
 
 def open_gmail_window(url="https://mail.google.com/mail/u/0/"):
@@ -991,7 +1393,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 result = browser.handle(action, body)
             except PlaywrightError as error:
-                if "has been closed" not in str(error):
+                if "has been closed" not in str(error) or action in OWN_APP_ACTIONS:
                     raise
                 # The window was closed under us (e.g. by the "Sign in to websites" shortcut): reopen once.
                 browser.context = None

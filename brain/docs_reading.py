@@ -5,15 +5,14 @@ from concurrent.futures import TimeoutError as FetchTimeout
 from typing import NamedTuple
 from urllib.parse import urlparse
 
-import connections
 import local_docs
 import research
+import shopping
 
 log = logging.getLogger("brain.docs")
 
 FETCH_TOOL = "fetch__fetch"
 PAGE_CHARS = 30000
-FETCHED_CHARS = PAGE_CHARS + 500
 FETCH_SECONDS = 6.0
 EXCERPT_CHARS = 4000
 CODE_BONUS = 3
@@ -221,7 +220,7 @@ def with_headings(units: list[Unit]) -> list[str]:
 
 
 def fetch_page(url: str) -> str:
-    return connections.hub.call(FETCH_TOOL, {"url": url, "max_length": PAGE_CHARS}, limit=FETCHED_CHARS)
+    return shopping.fetch_tool_text({"url": url, "max_length": PAGE_CHARS})
 
 
 def fetched_in_time(url: str, fetch) -> str:

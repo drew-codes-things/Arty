@@ -28,8 +28,12 @@ the Proxmox console at any time.
 | File | Installed to | What it does |
 |---|---|---|
 | `browser_agent.py`, `run.sh` | `~/.local/browser-agent/` | Arty's visible browser (Google Chrome with a localhost-only debugging port; Chromium and Firefox are not installed) and the agent that drives it. `run.sh` keeps it running, and waits while you're signing in. It also serves the Gmail extension on 127.0.0.1:9334. Both ports only answer requests that carry the agent's key (`~/.local/browser-agent/token`, made on first start, owner-only) and refuse anything sent from a web page |
-| `sign-in-browser`, `sign-in-browser.desktop` | `~/.local/bin/`, desktop shortcut | **Sign in to websites** - pauses Arty's browser and opens the same profile as a normal window, so sites that refuse automated browsers accept your sign-in |
-| `sign-in-google`, `sign-in-google.desktop` | `~/.local/bin/`, desktop shortcut | **Sign in to Google** - the separate Google Chrome window (profile `~/.gmail-chrome`) that Arty reads Gmail in, with the [Gmail extension](../extensions/gmail/README.md) |
+| `sign-in-browser`, `sign-in-browser.desktop` | `/usr/local/bin/` and `/usr/local/share/applications/` (owned by root), desktop shortcut | **Sign in to websites** - pauses Arty's browser and opens the same profile (`~/.browser-profile`) as a normal window, so sites that refuse automated browsers accept your sign-in. Not for your own Drive, Calendar or starfire: this browser never opens them |
+| `sign-in-apps`, `sign-in-apps.desktop` | `/usr/local/bin/` and `/usr/local/share/applications/` (owned by root), desktop shortcut | **Sign in to Starfire apps** - opens the separate apps browser (profile `~/.apps-browser-profile`) on the starfire, Drive and Calendar pages. Sign in to starfire there once: only Arty's [app actions](../docs/acting-in-your-apps.md) use this browser, started by the agent without a debugging port for each call and closed after it. App actions wait while this window is open |
+| `own-apps.json` | `/etc/arty/` (written by `deploy.sh`, owned by root) | The only Drive and Calendar addresses the agent will call, plus the starfire address (`DRIVE_ADDRESS`, `CALENDAR_ADDRESS`, `STARFIRE_ADDRESS` in `hosts.env`). Each call runs in the apps browser on that address, only for the calls the app actions need. Arty's own browser refuses every step on these hosts and aborts every request to them |
+| `sign-in-google`, `sign-in-google.desktop` | `/usr/local/bin/` and `/usr/local/share/applications/` (owned by root), desktop shortcut | **Sign in to Google** - the separate Google Chrome window (profile `~/.gmail-chrome`) that Arty reads Gmail in and sends approved emails from, with the [Gmail extension](../extensions/gmail/README.md) |
+| `web_host.py` | `~/.local/browser-agent/` | Reads an address's host the way a browser does (full-width letters, other dots, percent signs, international names) and refuses one with a backslash or control character, so no way of writing an own app's address gets past the check. The brain and the tool hub carry the same file |
+| `own-app-cookie-rows` | run by `deploy.sh` over SSH, not installed | Counts cookies in Arty's browser profile (`~/.browser-profile`) for an own app, its subdomains or a parent domain. `deploy.sh` stops before copying anything if there are any, or if they can't be counted |
 | `ai-tmux` | `/usr/local/bin/` (copy it by hand; `deploy.sh` doesn't) | The shared terminal (tmux session `assistant`) - you can watch the commands Arty runs |
 | `doc2text` | `/usr/local/bin/` | Prints any document's text (PDF, Office, images by OCR, ...) for `read_document` and the `~/library` search |
 | `arty-style` | `~/.local/bin/` | Arty's own desktop look - draws a wallpaper with its motto and sets a matching theme, icons and terminal colours. The brain picks the look (`brain/desktop_look.py`) |
@@ -40,7 +44,7 @@ the Proxmox console at any time.
 
 1. Make a Debian 13 VM with XFCE, a user `ai` with SSH key login from the brain, and the QEMU guest agent.
 2. From the project root, run `./provision.sh` once (document, OCR and clipboard tools), then `./deploy.sh`. That
-   copies these scripts, installs the Arc-Dark and Papirus-Dark themes if they're missing, and puts the two sign-in
+   copies these scripts, installs the Arc-Dark and Papirus-Dark themes if they're missing, and puts the three sign-in
    shortcuts on the desktop. yt-dlp is installed once and then left alone: YouTube breaks old versions within months,
    so when downloads start failing, update it on purpose with `YT_DLP_VERSION=<version> ./deploy.sh` (the version
    from https://pypi.org/project/yt-dlp/, digits and dots only).
@@ -67,8 +71,8 @@ the Proxmox console at any time.
   name an email address or a long number.
 - **Documents** - put files in `~/library` (or ask Arty to) and it finds them by meaning.
 - **Private folders** - Arty's tools refuse to read, list, write, upload or run commands in `~/.gmail-chrome`,
-  `~/.browser-profile`, `~/.local/browser-agent` and `~/.ssh`, checked again by real path on the VM so a link into
-  them is refused too.
+  `~/.browser-profile`, `~/.apps-browser-profile`, `~/.local/browser-agent` and `~/.ssh`, checked again by real path
+  on the VM so a link into them is refused too.
 - **Its desktop** - ask Arty to "customise your desktop" and it picks a new look. It also tinkers now and then while
   you're not using it (`"desktop_look"` in `brain/brain.json`).
 

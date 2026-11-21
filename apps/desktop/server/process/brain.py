@@ -146,11 +146,15 @@ def _save_history(messages):
         tmp.replace(path)
 
 
+def _now_seconds():
+    return int(time.time())
+
+
 def save_turn(user_text, reply, actions=(), numbers=None):
     """Keeps the exchange as the user heard it (a cut-off reply is saved cut off)."""
     if not user_text:
         return
-    answer = {"role": "assistant", "content": reply or "(no reply)"}
+    answer = {"role": "assistant", "content": reply or "(no reply)", "time": _now_seconds()}
     if actions:
         answer["actions"] = [str(action)[:MAX_SAVED_ACTION_CHARS] for action in list(actions)[:MAX_SAVED_ACTIONS]]
     if numbers:
@@ -414,10 +418,11 @@ def _clip(text):
     return text if len(text) <= TOOL_RESULT_CHARS else text[:TOOL_RESULT_CHARS] + "\n…(cut short)"
 
 
-def llm_stream(user_input, extra_system=None, note=""):
+def llm_stream(user_input, extra_system=None, note="", arty_started=False):
     """Yields the reply text (and Activity markers while tools run). The caller saves the
     turn with save_turn, since only it knows how much was actually heard. `note` rides on
     this message only (small models heed it there far more than in the system prompt)."""
+    tools.start_reply(user_input, arty_started)
     system = DESKTOP_NOTE + tools.prompt_addition() + context.NOTE_EXPLAINED + (extra_system or "")
     messages = [{"role": "system", "content": system.strip()}]
     remembered, tools_note = _as_sent(trimmed(load_history()))
@@ -426,7 +431,6 @@ def llm_stream(user_input, extra_system=None, note=""):
     messages.append({"role": "user", "content": _with_typed_tags_escaped(user_input) + (f"\n\n{note}" if note else "") + tools_note
                      + context.as_note()})
     offer = tools.definitions(user_input)
-    tools.start_reply()
     consented = set()  # things they've said yes to during this reply
     recent_calls = []
     steps_taken = Counter()
@@ -436,6 +440,7 @@ def llm_stream(user_input, extra_system=None, note=""):
     for _round in range(MAX_TOOL_ROUNDS + 1):
         reply = yield from _stream(messages, offer, lead)
         reports.append(reply.get("arty"))
+        tools.note_brain_report(reply.get("arty"))
         calls = reply.get("tool_calls") or []
         content = reply.get("content") or ""
         if content.strip():
@@ -461,6 +466,7 @@ def llm_stream(user_input, extra_system=None, note=""):
                 yield Activity(label, where)
             question = tools.needs_ok(name, arguments, consented)
             if question:
+                tools.let_go_of_the_screen_for_a_card()
                 ask = confirm.request(question)
                 yield Activity(question, where, confirm=ask.id)
                 if confirm.wait(ask):

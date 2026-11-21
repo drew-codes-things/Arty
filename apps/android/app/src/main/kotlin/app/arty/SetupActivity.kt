@@ -2,6 +2,7 @@ package app.arty
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -32,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -45,7 +47,12 @@ import androidx.compose.ui.unit.dp
 import app.arty.core.ArtyClient
 import app.arty.core.ArtyConfig
 import app.arty.core.ArtyException
-import app.arty.core.SetupCode
+import app.arty.core.FallbackTransport
+import app.arty.core.HttpLinkTransport
+import app.arty.core.LinkCode
+import app.arty.core.PhoneLink
+import app.arty.core.PhoneLinkException
+import app.arty.core.ScannedCode
 import app.arty.core.SetupCodeException
 import app.arty.notify.LiveConnection
 import app.arty.ui.ArtyButton
@@ -115,6 +122,16 @@ private fun tryConnecting(config: ArtyConfig): String? = try {
     "That address answered, but not like Arty's brain does. Check the address, and that Cloudflare Access lets the service token in."
 }
 
+private fun addressProblemOf(code: LinkCode): String? =
+    Connection.addressProblem(code.address) ?: code.homeAddress.takeIf { it.isNotEmpty() }?.let(Connection::addressProblem)
+
+private fun linkThisPhone(code: LinkCode): ArtyConfig {
+    val address = Connection.normalised(code.address)
+    val home = code.homeAddress.takeIf { it.isNotEmpty() }?.let { HttpLinkTransport(Connection.normalised(it)) }
+    val transport = FallbackTransport(HttpLinkTransport(address), home)
+    return PhoneLink(transport).link(code.copy(address = address), Build.MODEL.ifBlank { "Android phone" })
+}
+
 private fun scanSetupCode(context: Context, onScanned: (String) -> Unit, onProblem: (String) -> Unit) {
     val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
     GmsBarcodeScanning.getClient(context, options).startScan()
@@ -146,6 +163,7 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
     var connecting by rememberSaveable { mutableStateOf(false) }
     var typingIn by rememberSaveable { mutableStateOf(existing != null) }
     var showingHelp by rememberSaveable { mutableStateOf(false) }
+    var linkOffer by remember { mutableStateOf<LinkCode?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -168,13 +186,34 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
             if (failure == null) onConnected(config) else problem = failure
         }
     }
+    fun link(offer: LinkCode) {
+        connecting = true
+        problem = null
+        scope.launch {
+            val linked = withContext(Dispatchers.IO) {
+                try {
+                    Result.success(linkThisPhone(offer))
+                } catch (error: PhoneLinkException) {
+                    Result.failure(error)
+                }
+            }
+            connecting = false
+            linked.onSuccess(onConnected).onFailure { problem = it.message; linkOffer = null }
+        }
+    }
     fun useScanned(scanned: String) {
-        val code = try {
-            SetupCode.parse(scanned)
+        val scannedCode = try {
+            ScannedCode.parse(scanned)
         } catch (error: SetupCodeException) {
             problem = error.message
             return
         }
+        if (scannedCode is ScannedCode.Link) {
+            problem = addressProblemOf(scannedCode.code)
+            linkOffer = scannedCode.code.takeIf { problem == null }
+            return
+        }
+        val code = (scannedCode as ScannedCode.Keys).code
         address = code.address
         apiKey = code.apiKey
         behindAccess = code.accessClientId.isNotEmpty()
@@ -192,9 +231,22 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
     ) {
         Text("Connect to Arty", style = MaterialTheme.typography.headlineSmall, color = ArtyColors.Text)
         Text(
-            "Scan the setup code from Arty on your computer, or enter where your Arty brain is and its API key. They're kept encrypted on this phone, and only sent to that address.",
+            "Scan the code from Arty on your computer to link this phone, or enter where your Arty brain is and its API key. Keys are kept encrypted on this phone, and only sent to that address.",
             style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextDim,
         )
+        linkOffer?.let { offer ->
+            Text(
+                "Link this phone with Arty at ${Connection.hostOf(offer.address)}? Only go ahead if that's your Arty.",
+                style = MaterialTheme.typography.bodyLarge, color = ArtyColors.Text,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                ArtyButton(enabled = !connecting, onClick = { link(offer) }) { Text(if (connecting) "Linking..." else "Link") }
+                if (connecting) CircularProgressIndicator(Modifier.size(20.dp), color = ArtyColors.Signal, strokeWidth = 2.dp)
+                if (!connecting) ArtyTextButton("Cancel", onClick = { linkOffer = null }, colour = ArtyColors.TextDim)
+            }
+            problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.SignalText) }
+            return@Column
+        }
         if (!typingIn) {
             ArtyButton(
                 enabled = !connecting, onClick = { scanSetupCode(context, ::useScanned) { problem = it } },
@@ -205,7 +257,7 @@ private fun SetupScreen(existing: ArtyConfig?, notice: String?, onConnected: (Ar
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Enter details manually") }
             Text(
-                "The QR code is in Arty on your computer: open its tray menu and choose Phone setup code.",
+                "The QR code is in Arty on your computer: open its tray menu and choose Link a phone. Nothing to type.",
                 style = MaterialTheme.typography.bodySmall, color = ArtyColors.TextDim,
             )
             problem?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.SignalText) }

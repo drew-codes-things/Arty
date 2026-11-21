@@ -21,6 +21,9 @@ computer:
   enabled: false
   ask_before_mouse_and_keyboard: true    # true: ask once per request before clicking or typing
 
+own_browser:
+  enabled: true
+
 tools:
   enabled: true
   clipboard: true

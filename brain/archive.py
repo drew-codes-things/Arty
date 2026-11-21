@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from api_support import optional_int
-from reply_rules import NOT_FOR_ME
+from reply_rules import NOT_FOR_ME, is_only_a_deflection
 
 
 RECENT_CHARS = 300
@@ -60,10 +60,15 @@ def archive_records(config):
 
 
 def recent_exchanges(config):
+    wanted = int(config.get("recent_exchanges", 6))
+    if wanted <= 0:
+        return ""
     records = []
     for record in archive_records(config):
+        if is_only_a_deflection(record["assistant"]):
+            continue
         records.append(record)
-        if len(records) >= int(config.get("recent_exchanges", 6)):
+        if len(records) >= wanted:
             break
     lines = [f"[{r['time'][:16].replace('T', ' ')}] User: {r['user'][:RECENT_CHARS]}\n  Arty (you): {r['assistant'][:RECENT_CHARS]}" for r in reversed(records)]
     return "\n".join(lines)

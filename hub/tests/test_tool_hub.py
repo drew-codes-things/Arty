@@ -15,6 +15,8 @@ FAKE_TOOLS = Path(__file__).resolve().parent / "fake_tools.py"
 KEY = "hub-test-key-0123456789"
 START_SECONDS = 60
 RESTART_SECONDS = 30
+OWN_APPS = {"drive": "https://drive.example.org", "calendar": "https://calendar.example.org",
+            "starfire": "https://starfire.example.org"}
 
 sys.path.insert(0, str(HUB_FOLDER))
 
@@ -59,11 +61,16 @@ class RunningHub(unittest.TestCase):
         config = Path(cls.folder.name) / "servers.json"
         config.write_text(json.dumps({"mcpServers": {
             "fake": {"command": sys.executable, "args": [str(FAKE_TOOLS)], "env": {"FAKE_SETTING": "on"}},
+            "fetch": {"command": sys.executable, "args": [str(FAKE_TOOLS)]},
+            "research": {"command": sys.executable, "args": [str(FAKE_TOOLS)]},
             "missing": {"command": "/nonexistent/tool-server"},
         }}))
+        cls.own_apps = Path(cls.folder.name) / "own-apps.json"
+        cls.own_apps.write_text(json.dumps(OWN_APPS))
         cls.port = free_port()
         cls.process = subprocess.Popen(
-            [sys.executable, str(HUB_FOLDER / "tool_hub.py"), "--host", "127.0.0.1", "--port", str(cls.port), "--config", str(config)],
+            [sys.executable, str(HUB_FOLDER / "tool_hub.py"), "--host", "127.0.0.1", "--port", str(cls.port), "--config", str(config),
+             "--own-apps", str(cls.own_apps)],
             env={**os.environ, "MCPO_API_KEY": KEY}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         deadline = time.time() + START_SECONDS
         while time.time() < deadline:
@@ -96,7 +103,8 @@ class RunningHub(unittest.TestCase):
 
     def test_every_tool_is_a_post_path_with_its_description_and_body_schema(self):
         spec = self.spec()
-        self.assertEqual(set(spec["paths"]), {"/echo", "/add", "/stock", "/fail", "/crash", "/environment"})
+        self.assertEqual(set(spec["paths"]), {"/echo", "/add", "/stock", "/fetch", "/read_document", "/fail", "/crash",
+                                              "/environment"})
         operation = spec["paths"]["/add"]["post"]
         self.assertEqual(operation["description"], "Adds two numbers.")
         reference = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
@@ -149,6 +157,59 @@ class RunningHub(unittest.TestCase):
         self.assertEqual(request(self.port, "GET", "/missing/openapi.json")[0], 503)
         self.assertEqual(request(self.port, "POST", "/missing/anything", {})[0], 503)
         self.assertEqual(request(self.port, "POST", "/fake/echo", {"text": "still here"}), (200, "still here"))
+
+    def test_the_fetch_server_never_reads_an_own_app_or_the_starfire_host(self):
+        for url in ("https://drive.example.org/files/0", "https://STARFIRE.example.org./c/1", "https://api.calendar.example.org/x",
+                    "http://drive.example.org:8443/"):
+            with self.subTest(url=url):
+                status, body = request(self.port, "POST", "/fetch/fetch", {"url": url})
+                self.assertEqual(status, 403)
+                self.assertIn("one of the user's own apps", body["detail"])
+
+    def test_an_own_app_written_another_way_is_not_fetched(self):
+        for url in ("https://\uff44rive.example.org/api/session", "https://drive\u3002example\u3002org/api/session",
+                    "https://drive%2Eexample.org/api/session"):
+            with self.subTest(url=url):
+                status, body = request(self.port, "POST", "/fetch/fetch", {"url": url})
+                self.assertEqual(status, 403)
+                self.assertIn("one of the user's own apps", body["detail"])
+
+    def test_an_address_with_a_backslash_or_control_character_is_not_fetched(self):
+        for url in ("https://drive.example.org\\api/session", "https:\\\\drive.example.org/", "https://dri\x01ve.example.org/"):
+            with self.subTest(url=url):
+                status, body = request(self.port, "POST", "/fetch/fetch", {"url": url})
+                self.assertEqual(status, 403)
+
+    def test_a_document_is_never_read_from_an_own_app(self):
+        for url in ("https://drive.example.org/api/files/2/content", "https://\uff44rive.example.org/x.pdf",
+                    "https://drive.example.org\\api/x.pdf"):
+            with self.subTest(url=url):
+                status, body = request(self.port, "POST", "/research/read_document", {"path_or_url": url})
+                self.assertEqual(status, 403)
+
+    def test_other_documents_are_still_read(self):
+        for target in ("https://news.example.com/report.pdf", "notes/plan.docx"):
+            with self.subTest(target=target):
+                self.assertEqual(request(self.port, "POST", "/research/read_document", {"path_or_url": target}),
+                                 (200, f"read {target}"))
+
+    def test_the_fetch_server_still_reads_other_pages(self):
+        for url in ("https://news.example.com/story", "https://drive.example.org.evil.example/"):
+            with self.subTest(url=url):
+                self.assertEqual(request(self.port, "POST", "/fetch/fetch", {"url": url}), (200, f"read {url}"))
+
+    def test_other_servers_are_not_checked(self):
+        self.assertEqual(request(self.port, "POST", "/fake/fetch", {"url": "https://drive.example.org/"}),
+                         (200, "read https://drive.example.org/"))
+
+    def test_an_unreadable_list_stops_the_fetch_server(self):
+        self.own_apps.write_text("{broken")
+        try:
+            status, body = request(self.port, "POST", "/fetch/fetch", {"url": "https://news.example.com/story"})
+        finally:
+            self.own_apps.write_text(json.dumps(OWN_APPS))
+        self.assertEqual(status, 403)
+        self.assertIn("can't be read", body["detail"])
 
     def test_zz_a_server_that_dies_is_started_again(self):
         status, _ = request(self.port, "POST", "/fake/crash", {})

@@ -125,6 +125,11 @@ def _extract(path_expr: str) -> tuple[int, str]:
     return remote_text(f"{resolve_outside_private_folders(path_expr)} doc2text \"$target\"", timeout=600)
 
 
+REDIRECTED_EXIT = 30
+REDIRECTED_NOTE = ("could not download {url}: it sends you on to {to}. Nothing was downloaded. If that is the document "
+                   "you want, call read_document with that address.")
+
+
 def download_name(url: str) -> str:
     name = urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(url).path))
     return UNSAFE_NAME_CHARACTERS.sub("_", name).lstrip("-.").strip() or DEFAULT_DOWNLOAD_NAME
@@ -136,7 +141,10 @@ def download_script(url: str) -> str:
     return (
         f"mkdir -p ~/Downloads && cd ~/Downloads && name={shlex.quote(name)} && n=1 &&"
         f" while [ -e \"$name\" ]; do name={shlex.quote(stem)}\" ($n)\"{shlex.quote(extension)}; n=$((n + 1)); done &&"
-        f" {{ curl -sSLf -m 120 -o \"$name\" {shlex.quote(url)} || {{ rm -f \"$name\"; exit 22; }}; }} && printf '%s\\n' \"$name\""
+        f" {{ got=$(curl -sSf -m 120 --max-redirs 0 -w '%{{http_code}} %{{redirect_url}}' -o \"$name\" {shlex.quote(url)})"
+        f" || {{ rm -f \"$name\"; exit 22; }}; }} &&"
+        f" case \"$got\" in 3*) rm -f \"$name\"; printf '%s\\n' \"$got\"; exit {REDIRECTED_EXIT};; esac &&"
+        f" printf '%s\\n' \"$name\""
     )
 
 
@@ -149,6 +157,8 @@ def read_document(path_or_url: str, start: int = 0) -> str:
     if target.startswith(("http://", "https://")):
         code, output = remote_text(download_script(target), timeout=150)
         lines = output.strip().splitlines()
+        if code == REDIRECTED_EXIT:
+            return REDIRECTED_NOTE.format(url=target, to=(lines[-1].partition(" ")[2] if lines else "").strip()[:300])
         if code != 0 or not lines:
             return f"could not download {target}: {output.strip()[:300]}"
         path_expr = f'"$HOME"/Downloads/{shlex.quote(lines[-1])}'

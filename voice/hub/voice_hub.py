@@ -189,23 +189,56 @@ class Speakers:
     def __init__(self):
         self.listeners: set[web.WebSocketResponse] = set()
         self.lock = asyncio.Lock()
+        self.process: asyncio.subprocess.Process | None = None
+        self.stopped = False
+        self.generation = 0
 
-    async def play(self, wav: bytes) -> str:
+    async def play(self, wav: bytes, generation: int | None = None) -> str:
+        if generation is not None and generation != self.generation:
+            return ""
         for ws in list(self.listeners):
             try:
                 await ws.send_bytes(wav)
             except ConnectionError:
                 self.listeners.discard(ws)
         async with self.lock:
-            process = await asyncio.create_subprocess_exec(
+            if generation is not None and generation != self.generation:
+                return ""
+            self.stopped = False
+            self.process = await asyncio.create_subprocess_exec(
                 "aplay", "-q", "-D", SPEAKER_DEVICE, "-", stdin=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE)
-            _, stderr = await process.communicate(wav)
-        if process.returncode:
+            process = self.process
+            try:
+                _, stderr = await process.communicate(wav)
+            except asyncio.CancelledError:
+                self.end_playback(process)
+                raise
+            finally:
+                self.process = None
+        if process.returncode and not self.stopped:
             message = stderr.decode(errors="replace").strip()
             log.error("server speakers failed: %s", message)
             return message
         return ""
+
+    def end_playback(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is None:
+            process.terminate()
+
+    async def stop(self) -> bool:
+        self.stopped = True
+        self.generation += 1
+        for ws in list(self.listeners):
+            try:
+                await ws.send_json({"type": "stop"})
+            except ConnectionError:
+                self.listeners.discard(ws)
+        process = self.process
+        if process is None or process.returncode is not None:
+            return False
+        self.end_playback(process)
+        return True
 
 
 def mixer_state(amixer_output: str) -> tuple[int, bool]:
@@ -523,12 +556,22 @@ async def speak(request: web.Request):
     device = authenticated_device(request)
     if device.role != "assistant":
         raise web.HTTPForbidden(text="only the assistant can speak through the hub")
+    speakers: Speakers = request.app["speakers"]
+    generation = speakers.generation
     wav = await request.read()
     if not wav.startswith(b"RIFF") or len(wav) > MAX_SPEECH_BYTES:
         raise web.HTTPBadRequest(text="send a WAV file under 20 MB")
-    problem = await request.app["speakers"].play(wav)
+    problem = await speakers.play(wav, generation)
     return web.json_response({"ok": not problem, "server_speakers": problem or "played",
                               "devices": len(request.app["speakers"].listeners)})
+
+
+async def assistant_stop(request: web.Request):
+    device = authenticated_device(request)
+    if device.role != "assistant":
+        raise web.HTTPForbidden(text="only the assistant can stop the speakers")
+    stopped = await request.app["speakers"].stop()
+    return web.json_response({"ok": True, "stopped": stopped})
 
 
 async def assistant_volume(request: web.Request):
@@ -585,6 +628,7 @@ def build_app() -> web.Application:
     app.router.add_get("/ws/mic", mic_socket)
     app.router.add_get("/ws/speaker", speaker_socket)
     app.router.add_post("/speak", speak)
+    app.router.add_post("/assistant/stop", assistant_stop)
     app.router.add_post("/assistant/wake", assistant_set_wake)
     app.router.add_post("/assistant/volume", assistant_volume)
     app.router.add_static("/static", HERE / "static")

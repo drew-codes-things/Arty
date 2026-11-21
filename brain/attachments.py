@@ -43,6 +43,24 @@ def look(images: list[str], prompt: str, keep_alive=0) -> str:
     return ((raw or {}).get("message") or {}).get("content", "").strip() or "(the vision model gave no description)"
 
 
+def audio_model_name() -> str:
+    return str(connections.load_config().get("audio_model") or "").strip()
+
+
+def listen(audio: list[str], prompt: str, keep_alive=0) -> str:
+    config = connections.load_config()
+    name = audio_model_name()
+    model = models.find(name) if name else None
+    if model is None or not model.get("audio"):
+        raise ApiError(400, f"{name or 'no audio model'} isn't an installed model that reports it can listen to audio")
+    options = {k: v for k, v in config.get("options", {}).items() if k == "num_predict"}
+    models.make_room(name, models.vram_budget(config))
+    raw = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
+        "model": name, "stream": False, "think": False, "options": options, "keep_alive": session_keep_alive(name, keep_alive),
+        "messages": [{"role": "user", "content": prompt, "audio": audio}]}))
+    return ((raw or {}).get("message") or {}).get("content", "").strip() or "(the listening model gave no description)"
+
+
 def stored_attachment(part: dict) -> dict | None:
     """Stores (or finds) the file behind one content part: image_url data URIs, input_audio, or an uploaded file id."""
     kind = part.get("type")
@@ -77,6 +95,10 @@ def has_new_picture(messages: list[dict]) -> bool:
     latest = next((message for message in reversed(messages) if message.get("role") == "user"), None)
     content = latest.get("content") if latest else None
     return isinstance(content, list) and any(is_picture_part(part) for part in content)
+
+
+def typed_texts(messages: list[dict]) -> list[str]:
+    return [message_text(message) for message in messages if message.get("role") == "user"]
 
 
 def expand_attachments(messages: list[dict], look_keep_alive=0) -> tuple[list[dict], bool]:

@@ -91,6 +91,10 @@ def record_notice(summary, notice_id):
     _record("Arty", summary, "", kind="notice", notice=notice_id)
 
 
+def record_linked(name):
+    _record("Arty", f"{name} linked to Arty Desktop by itself (same user on this computer).", "", kind="linked")
+
+
 def record_link_ask(question, ask_id):
     _record("Arty", question, "", kind="link_ask", ask=ask_id)
 

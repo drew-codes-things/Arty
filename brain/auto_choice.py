@@ -6,6 +6,7 @@ import coding
 import media
 import model_choice
 import models
+import policy
 
 from attachments import is_picture_part
 
@@ -115,6 +116,8 @@ def usage_numbers(raw: dict | None) -> dict:
 
 def turn_report(chosen: dict | None, raw: dict | None, tools_used: list | None) -> dict:
     report = {**(chosen or {}), "steps": len(tools_used or [])}
+    if any(policy.matches(name, policy.UNTRUSTED_READS) for name in tools_used or []):
+        report["read_outside"] = True
     if usage := usage_numbers(raw):
         report["usage"] = usage
     return report

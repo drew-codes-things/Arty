@@ -46,6 +46,40 @@ JUDGE_SECONDS = 600
 CLAIM_CHECK_REQUEST_CHARS = 2000
 HONEST_NOTHING_DONE = ("I didn't actually do that: I don't have a way to do it from here, so nothing has changed. "
                        "If you tell me how you'd like it done, I'll help where I can.")
+SHOWN_WORK = (r"essay|report|review|answers?|solutions?|working|coursework|assignment|homework|sheet|questions?|draft|"
+              r"letter|email|story|poem|code|program|function|script|summary|translation|outline|plan|notes|"
+              r"dissertation|article|project|exercises?|work|paragraphs?|sections?|chapters?|write-?ups?")
+WORK_WORDS = r"(?:(?:the|your|my|a|an|some|this|these)\s+)?(?:[\w’'-]+\s+){0,4}?(?:" + SHOWN_WORK + r")"
+NOT_A_STATE_WORD = r"(?!(?:I|we|has|have|had|was|were|is|are|been|now|done|already|which|that|and|then|also)\b)"
+NOT_A_PLACE_OR_DELIVERY_WORD = (
+    r"(?!(?:servers?|portal|site|website|app|database|docs|drive|github|gitlab|moodle|tripadvisor|linkedin|blog|"
+    r"calendar|inbox|repo|repository|ct|vm|sent|e-?mailed|posted|saved|uploaded|submitted|delivered|published|pushed|"
+    r"attached|shared|(?:in|on|onto|into|to|at|via) (?:your|my|our))\b)")
+TOPIC_WORD = NOT_A_STATE_WORD + NOT_A_PLACE_OR_DELIVERY_WORD + r"[\w’'/()%-]+"
+WORK_TOPIC = r"(?:\s+(?:on|about|for|of|covering)\s+(?:" + TOPIC_WORD + r",?\s+){0,10}?" + TOPIC_WORD + r")?"
+COURTESY = r"(?:(?:sure|of course|certainly|absolutely|okay|ok|no problem)\W+)?"
+COURTESY_ONLY = re.compile(r"\W*(?:sure|of course|certainly|absolutely|okay|ok|no problem)\W*$", re.I)
+INTRO_TAIL = (r"(?:,?\s+(?:you asked for|for you|below|with (?:full |all (?:the |your )?)?(?:working|workings|steps|"
+              r"explanations?|comments|references|citations|answers)|(?:to|for) (?:questions?|q|parts?|exercises?|tasks?|"
+              r"problems?)\s*\d+(?:\s*(?:to|-|and|,)\s*\d+)*|(?:that |which )?I(?:['’]ve| have)? (?:wrote|written|drafted|"
+              r"prepared)(?: for you)?))?")
+WROTE_IT = (r"I(?:['’]ve| have)?\s+(?:just\s+)?(?:wr(?:ote|itten)|drafted|prepared|put together|completed|finished|solved|"
+            r"worked through)")
+WORK_INTRODUCTION = re.compile(
+    r"\W*" + COURTESY + r"(?:(?:here(?:['’]s| is| are)|below (?:is|are))\s+" + WORK_WORDS + WORK_TOPIC + INTRO_TAIL
+    + r"\s*[.!:]?|" + WROTE_IT + r"\s+" + WORK_WORDS + WORK_TOPIC + r"(?:\s*:|(?:\s+(?:below|for you)){1,2}\s*[.!:]?))\s*$",
+    re.I)
+HANDED_OVER = re.compile(r"(?:copy|paste|read|check|use|edit|adjust|change|tweak|let me know|feel free|tell me|ask me|"
+                         r"good luck)\b[^.!?\n]{0,80}[.!?:]?$", re.I)
+STATE_WORDS = re.compile(r"\b(?:I|we|has|have|had|was|were|is|are|been|now|done|already)\b|\bI['’]", re.I)
+OUTSIDE_THE_REPLY = re.compile(
+    r"\b(?:sav(?:e|ed|ing)|stored|files?|folders?|disk|desktop|drive|download(?:ed|ing)?|upload(?:ed|ing)?|"
+    r"sen(?:d|t|ding)|e-?mailed|texted|messaged|posted|published|submitted|shared|attached|printed|booked|ordered|"
+    r"bought|paid|installed|scheduled|calendar|remind(?:er|ers|ed)?|alarms?|timers?|pushed|committed|deployed|ran|run|"
+    r"deleted|added|set(?:ting)? (?:it |them )?up|put(?! together)|handed (?:\w+ )?in|turned (?:\w+ )?in|left|remembered|"
+    r"gone)\b", re.I)
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+SHOWN_WORK_CHARS = 200
 
 
 def tools_record(tools_used: list[str], failed: list[tuple[str, str]]) -> str:
@@ -134,8 +168,25 @@ def false_claims(answer: str, tools_used: list[str], failed: list[tuple[str, str
         log.warning("claim check failed, reply left as written: %s", error)
         return []
     candidates = [claim for claim in found if isinstance(claim, dict) and isinstance(claim.get("text"), str)
-                  and claim["text"].strip() and claim["text"].strip() in answer]
+                  and claim["text"].strip() and claim["text"].strip() in answer
+                  and not shows_the_work_it_claims(claim["text"].strip(), answer)]
     return [claim for claim in candidates if reports_an_action(request, claim["text"].strip(), model, keep_alive, prefix)]
+
+
+def only_introduces_the_work(sentence: str) -> bool:
+    parts = SENTENCE_END.split(sentence.strip())
+    while len(parts) > 1 and COURTESY_ONLY.match(parts[0]):
+        parts.pop(0)
+    first, *later = parts
+    if not WORK_INTRODUCTION.match(first):
+        return False
+    return all(HANDED_OVER.match(part) and not STATE_WORDS.search(part) for part in later)
+
+
+def shows_the_work_it_claims(sentence: str, answer: str) -> bool:
+    if not only_introduces_the_work(sentence) or OUTSIDE_THE_REPLY.search(sentence):
+        return False
+    return len(answer.replace(sentence, "", 1).strip()) >= SHOWN_WORK_CHARS
 
 
 def reports_an_action(request: str, sentence: str, model: str = "", keep_alive=None, prefix=None) -> bool:
@@ -148,11 +199,15 @@ def reports_an_action(request: str, sentence: str, model: str = "", keep_alive=N
     return kind != "B"
 
 
-def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]], already_sent: str = "",
-              request: str = "", model: str = "", keep_alive=None, prefix=None, sandbox_line: str = "") -> str:
+def acted_for_sure(tools_used: list[str], failed: list[tuple[str, str]]) -> bool:
     failed_names = {name for name, _ in failed}
     acted = [tool for tool in tools_used if tool not in NOT_ACTIONS and tool not in LOOKUP_TOOLS and tool not in LOOK_ONLY_TOOLS]
-    if acted and not failed_names & set(acted):
+    return bool(acted) and not failed_names & set(acted)
+
+
+def be_honest(answer: str, tools_used: list[str], failed: list[tuple[str, str]], already_sent: str = "",
+              request: str = "", model: str = "", keep_alive=None, prefix=None, sandbox_line: str = "") -> str:
+    if acted_for_sure(tools_used, failed):
         return answer
     body, sandbox_line = code_sandbox.without_summary(answer, sandbox_line)
     pieces = prose_and_code(body)

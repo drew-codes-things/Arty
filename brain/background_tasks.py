@@ -3,6 +3,7 @@ import logging
 import time
 
 import connections
+import inbox_tidy
 import notify
 import policy
 import store
@@ -50,6 +51,8 @@ def fix_still_needed(waiting: dict) -> tuple[bool, str]:
 
 def run_approved_call(call: dict) -> str:
     name, arguments = call["name"], call.get("arguments") or {}
+    if name == inbox_tidy.APPLY_TOOL:
+        return inbox_tidy.apply_approved(inbox_tidy.connected(), arguments)
     if name in NATIVE_TOOLS:
         return run_native_safely(name, arguments, connections.load_config(), True, None)[0]
     return connections.hub.call(name, arguments)
@@ -81,7 +84,16 @@ def carries_out_an_approval(waiting: dict) -> bool:
     return waiting.get("kind") == "approval" and waiting.get("decision") == "approve"
 
 
+def settle_inbox_card(task: dict, waiting: dict):
+    approved = waiting.get("decision") == "approve"
+    result = run_approved_call(waiting["call"]) if approved else inbox_tidy.DENIED_TEXT
+    store.update_task(task["id"], status="done", waiting=None, result=result)
+    notify.send(f"Arty: {task['title']}", result, category=notify.EMAIL)
+
+
 def process_task(task: dict):
+    if task.get("source") == inbox_tidy.SOURCE:
+        return settle_inbox_card(task, task["waiting"] or {})
     config = connections.load_config()
     state = task["history"] or {"messages": [{"role": "user", "content": f"Background task #{task['id']}: {task['title']}\n\n{task['instructions']}"}]}
     waiting = task["waiting"] or {}

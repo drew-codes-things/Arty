@@ -17,6 +17,8 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import ImageContent, PaginatedRequestParams, TextContent
 from mcp.types.jsonrpc import CONNECTION_CLOSED
 
+import web_host
+
 KEY_VARIABLE = "MCPO_API_KEY"
 SERVER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 CALL_TIMEOUT_SECONDS = 900
@@ -30,6 +32,11 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 MCP_ERROR_STATUS = {METHOD_NOT_FOUND: 404, INVALID_PARAMS: 422}
 LOCAL_DEFINITIONS = ("$defs", "definitions")
+WEB_READING_TOOLS = {("fetch", "fetch"): "url", ("research", "read_document"): "path_or_url"}
+WEB_SCHEMES = ("http://", "https://")
+OWN_APP_REFUSAL = "{host} is one of the user's own apps behind the starfire sign-in, so the tools never read it"
+OWN_APPS_UNREADABLE = ("the list of the user's own app addresses can't be read, so no web address is read until it is "
+                       "fixed")
 
 log = logging.getLogger("tool_hub")
 
@@ -243,6 +250,57 @@ class Hub:
         return self.run(self.servers[server].call(tool, arguments), CALL_TIMEOUT_SECONDS + CALL_GRACE_SECONDS)
 
 
+def host_of(url) -> str:
+    try:
+        return web_host.host_of(url)
+    except web_host.UnclearAddress:
+        return ""
+
+
+def own_app_hosts(path: Path) -> frozenset:
+    try:
+        listed = json.loads(path.read_text())
+    except FileNotFoundError:
+        return frozenset()
+    except (OSError, ValueError) as error:
+        raise ValueError(f"the own app list {path} can't be read: {error}") from None
+    values = listed.values() if isinstance(listed, dict) else []
+    try:
+        return frozenset(host for host in map(web_host.host_of, values) if host)
+    except web_host.UnclearAddress as error:
+        raise ValueError(f"the own app list {path} holds an address that can't be used: {error}") from None
+
+
+def is_own_app_address(url, hosts: frozenset) -> bool:
+    return web_host.is_own_app_address(url, hosts)
+
+
+def web_address_to_read(server: str, tool: str, arguments: dict) -> str | None:
+    name = WEB_READING_TOOLS.get((server, tool))
+    if name is None:
+        return None
+    value = str(arguments.get(name) or "")
+    if server == "fetch" or value.strip().startswith(WEB_SCHEMES):
+        return value
+    return None
+
+
+def fetch_refusal(server: str, tool: str, arguments: dict, own_apps: Path | None) -> str:
+    url = web_address_to_read(server, tool, arguments)
+    if own_apps is None or url is None:
+        return ""
+    try:
+        hosts = own_app_hosts(own_apps)
+    except ValueError as error:
+        log.warning("%s", error)
+        return OWN_APPS_UNREADABLE
+    try:
+        is_own_app = is_own_app_address(url, hosts)
+    except web_host.UnclearAddress as error:
+        return str(error)
+    return OWN_APP_REFUSAL.format(host=host_of(url)) if is_own_app else ""
+
+
 def error_body(message: str) -> dict:
     return {"detail": message}
 
@@ -252,7 +310,7 @@ def presented_key(header: str) -> str:
     return credentials.strip() if scheme.lower() == "bearer" else ""
 
 
-def handler_for(hub: Hub, key: str):
+def handler_for(hub: Hub, key: str, own_apps: Path | None = None):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -312,6 +370,9 @@ def handler_for(hub: Hub, key: str):
                 return 400, error_body("The body must be a JSON object of the tool's arguments")
             if arguments is None:
                 return 400, error_body("The body must be a JSON object of the tool's arguments")
+            if refusal := fetch_refusal(server, tool, arguments, own_apps):
+                log.info("refused %s/%s: %s", server, tool, refusal)
+                return 403, error_body(refusal)
             log.info("calling %s/%s", server, tool)
             try:
                 return result_response(hub.call(server, tool, arguments))
@@ -342,6 +403,7 @@ def arguments_from(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--own-apps", type=Path, default=None)
     return parser.parse_args(argv)
 
 
@@ -363,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     hub = Hub(parameters)
     hub.start()
-    server = ThreadingHTTPServer((options.host, options.port), handler_for(hub, key))
+    server = ThreadingHTTPServer((options.host, options.port), handler_for(hub, key, options.own_apps))
     server.daemon_threads = True
     signal.signal(signal.SIGTERM, stop_on_terminate)
     log.info("tool hub listening on %s:%d with %s", options.host, options.port, ", ".join(parameters))

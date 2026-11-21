@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+  <title>Arty is controlling the screen</title>
+  <link rel="stylesheet" href="control.css">
+</head>
+<body>
+  <div class="bar" role="alert">
+    <span class="dot"></span>
+    <span class="words">Arty is controlling the screen. Touch the mouse or keyboard to stop it.</span>
+    <button id="stop" type="button">Stop</button>
+    <span id="hotkey" class="hotkey"></span>
+  </div>
+  <script src="control.js"></script>
+</body>
+</html>

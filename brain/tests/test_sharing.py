@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("BRAIN_FILES", tempfile.mkdtemp(prefix="arty-sharing-"))
+for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
+    os.environ.setdefault(key, "test")
 
 import media
 import sharing

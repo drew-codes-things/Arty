@@ -12,3 +12,6 @@ __pycache__/
 .venv/
 models/kokoro/
 .arty_token
+own-browser/
+native-host/
+.arty_link_offer

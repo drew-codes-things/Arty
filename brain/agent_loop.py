@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import re
@@ -5,6 +6,8 @@ import time
 import urllib.error
 from dataclasses import dataclass, field
 
+import app_actions
+import browser_apps
 import code_check
 import code_sandbox
 import coding
@@ -19,9 +22,11 @@ import private_check
 import private_text
 import run_requests
 import sharing
+import shopping
 import store
 import style
 import tool_guide
+import web_pages
 import window_fit
 import written_calls
 
@@ -32,17 +37,20 @@ from settings import ARTY_ENGINE_URL
 from native_tools import NATIVE_TOOLS, BACKGROUND_ONLY_EXCLUDED
 from reply_rules import (PROMPT_LEAK, FUMBLED_CALL, ACTION_REQUEST, CLAIMED, CLARIFYING, SEARCH_REQUEST, PROMISE,
     TOOL_TALK, DO_REQUEST, PRETEND_TOOLS, TOOL_FAILED, FAILED_NOTE, ANSWERED_ALREADY_CHARS, NOT_ACTIONS, without_app_notes,
-    PRIVATE_CALL_NOT_RUN, SIBLING_CALL_NOT_RUN, HELD_CALL_RESULTS, is_client_refusal)
+    PRIVATE_CALL_NOT_RUN, SIBLING_CALL_NOT_RUN, HELD_CALL_RESULTS, ACTION_CLAIM, SCHEDULE_REQUEST, OFFERED_A_SCHEDULE,
+    SCHEDULE_NOT_ASKED, is_client_refusal, has_a_deflection, is_only_a_deflection, without_deflection, is_plain_identity_question,
+    is_needless_coursework_refusal, asks_to_disguise_harm)
 from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ONLY_NOTE, asks_for_code, asks_for_the_computer,
     WRITE_AND_RUN_NOTE, READ_LINK_NOTE, asks_to_read_a_link, thinking_for, HOW_TO_NOTE, asks_how_to,
     steer_last_request, steer_away_from_repeats, with_thinking, with_context, parse_arguments, DESKTOP_TOOLS,
     NOTHING_TO_SIGN_IN, question_for_user, RUN_COMMAND_TOOLS, DESKTOP_RUN_COMMAND_TOOLS, RUN_THE_CODE_NOTE, DONT_RUN_NOTE,
     asks_to_install, WRITE_ONLY_UNCHECKED_NOTE, DONT_RUN_UNCHECKED_NOTE, SEARCH_RESULTS_NOTE, NOTHING_DONE_NOTE,
-    PRETEND_TOOLS_NOTE, HALF_WRITTEN_CALL_NOTE, EMPTY_REPLY_NOTE)
+    PRETEND_TOOLS_NOTE, HALF_WRITTEN_CALL_NOTE, EMPTY_REPLY_NOTE, COURSEWORK_NOTE, UNASKED_PRIVACY_NOTE,
+    HARMFUL_REWRITE_NOTE)
 from connections import TOOL_RESULT_CHARS
 from prompting import system_prompt, with_persona_left_out, with_tool_guide, current_context
 from native_calls import run_native_safely
-from honesty import client_tool_runs, did_not_work
+from honesty import client_tool_runs, did_not_work, tool_results, acted_for_sure
 
 log = logging.getLogger("brain")
 
@@ -84,6 +92,13 @@ def know_the_page(name: str, context: dict):
     policy.remember_tool_result(context, PAGE_READER, connections.hub.call(PAGE_READER, {}))
 
 
+def home_network_fetch(name: str, arguments: dict) -> str | None:
+    url = str(arguments.get("url") or "")
+    if name != docs_reading.FETCH_TOOL or not (problem := web_pages.address_problem(url)):
+        return None
+    return f"{REFUSED_RESULT} {url[:200]}: {problem}."
+
+
 def private_upload(name: str, arguments: dict) -> str | None:
     path = str(arguments.get("path") or "")
     if name != "workspace__browser_upload" or not sharing.is_private(path):
@@ -96,12 +111,16 @@ def hold_for_approval(reason, call, calls, background, state, requested, add, to
     name = function.get("name") or ""
     arguments = repair_arguments(name, parse_arguments(function.get("arguments")))
     state["groups"] = sorted(requested)
+    if policy.pretends_to_ask(reason):
+        log.warning("refused %s: its card holds the approval question's own words", name)
+        return {"status": "done", "answer": policy.PRETEND_QUESTION_REFUSAL, "tools_used": tool_log, "raw": raw}
     if background:
         return {"status": "waiting", "waiting": {"kind": "approval", "message": reason, "call": {"name": name, "arguments": arguments}},
                 "tools_used": tool_log, "raw": raw}
     for unanswered in calls[calls.index(call):]:
         add({"role": "tool", "content": NOT_RUN_YET, "tool_name": unanswered.get("function", {}).get("name") or ""})
-    return {"status": "done", "answer": policy.approval_question(reason), "tools_used": tool_log, "raw": raw}
+    return {"status": "done", "answer": policy.approval_question(reason), "asks_approval": True, "tools_used": tool_log,
+            "raw": raw}
 
 
 def save_progress(task, state, requested):
@@ -320,6 +339,10 @@ def fitted_to_window(config: dict, body: dict) -> dict:
     return fitted
 
 
+SEARCH_ONLY = "everything_but_search"
+SEARCH_ONLY_TOOLS = ("research__web_search",)
+
+
 @dataclass(frozen=True)
 class AgentRun:
     background: bool = False
@@ -333,6 +356,10 @@ class AgentRun:
     agent: bool = False
     on_thinking: object = None
     client_texts: private_text.KnownText = private_text.NOTHING_KNOWN
+    allowed_tools: frozenset | None = None
+    room: bool = False
+    deadline: float | None = None
+    is_interrupted: object = None
 
 
 @dataclass
@@ -360,6 +387,7 @@ class AgentTurn:
     chat_approved: str | None
     raw: dict = field(default_factory=dict)
     nudged: bool = False
+    refusal_sent_back: bool = False
     replays: int = 0
     searched_for_it: bool = False
     answer_from_lookups: bool = False
@@ -377,6 +405,7 @@ class AgentTurn:
     asked_about_set_up: bool = False
     user_requests: str = ""
     private_set_up: str = ""
+    approval_key: str | None = None
 
     @property
     def is_chat(self) -> bool:
@@ -397,6 +426,9 @@ class AgentTurn:
 
 
 BACKGROUND_TOOL_ROUNDS = 30
+OUT_OF_TIME_ANSWER = "I ran out of time on this one. Ask me again, perhaps a shorter way."
+ROOM_UNSEEN_LINK = ("Not read: in the room you never open web pages, whoever names them. Answer from your search "
+                    "results, or without them.")
 
 
 class TurnEnded(RuntimeError):
@@ -421,11 +453,24 @@ def run_rounds(config, state, run: AgentRun) -> dict:
     for round_number in range(turn.max_rounds):
         if is_cancelled(run.task):
             return turn.outcome("cancelled")
+        if has_run_out_of_time(run):
+            return out_of_time(turn)
         outcome = agent_round(turn, round_number)
         if outcome is not None:
             return without_private_text(turn, outcome)
     turn.keep_groups()
     return turn.outcome("done", answer="I stopped after too many tool steps. Tell me how you'd like me to continue.")
+
+
+def has_run_out_of_time(run: AgentRun) -> bool:
+    if run.deadline is not None and time.monotonic() >= run.deadline:
+        return True
+    return bool(run.is_interrupted and run.is_interrupted())
+
+
+def out_of_time(turn: AgentTurn) -> dict:
+    turn.keep_groups()
+    return turn.outcome("done", answer=OUT_OF_TIME_ANSWER, out_of_time=True)
 
 
 def without_private_text(turn: AgentTurn, outcome: dict) -> dict:
@@ -503,6 +548,7 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     connections.hub.refresh()
     config = {**config, "tool_budget": models.budget_for(config, config["model"])}
     messages = state["messages"]
+    approval_key = policy.approval_key(messages, message_text) if run.chat_approved else None
     context = state.setdefault("context", {})
     requested = set(state.setdefault("groups", []))
     model_info = models.find(config["model"])
@@ -521,20 +567,23 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     rules = config.get("approval", {})
     steps_this_turn = client_tool_runs(messages)[0]
     policy.remember_client_results(context, steps_this_turn, rules)
+    policy.remember_client_links(context, [(m["tool_name"], message_text(m)) for m in tool_results(messages)], rules)
+    web_pages.start_reply(hashlib.sha256(request_text.encode("utf-8", "surrogateescape")).hexdigest())
     context["failed"] = []  # tools that didn't work this turn (see be_honest)
     last_request = newest_request(messages)
     private = hidden_notes.private_text_for(with_tool_guide(instructions, all_tools), all_tools, run.client_texts)
     shows_thinking = bool(run.agent and run.client_system and run.on_thinking)
     turn = AgentTurn(
         config=config, state=state, run=run, messages=messages, context=context, requested=requested, toolless=toolless,
-        instructions=seen, history=history, all_tools=all_tools, hidden=config.get("hidden_tools") or [],
+        instructions=seen, history=history, all_tools=all_tools, hidden=hidden_tools(config),
         request_text=request_text, rules=rules, max_rounds=max_tool_rounds(config, run.background),
         tool_log=list(looked_up[0]), steps_this_turn=steps_this_turn,
         client_names={tool["function"]["name"] for tool in run.client_tools or []}, last_request=last_request,
         think=thinking_for(config, agent_sessions.deciding_request(user_texts) if run.agent else last_request),
         shown_thinking=private_text.GuardedStream(run.on_thinking, private) if shows_thinking else None,
         chat_approved=run.chat_approved, private=private,
-        asked_about_set_up=asked_about_set_up, user_requests="\n\n".join(user_texts), private_set_up=instructions)
+        asked_about_set_up=asked_about_set_up, user_requests="\n\n".join(user_texts), private_set_up=instructions,
+        approval_key=approval_key)
     steer_the_request(turn)
     # A plain question whose answer was looked up first: the model answers from that, with no tools to
     # wander off with (small models otherwise pick unrelated ones). Asked to do something, it keeps them.
@@ -556,18 +605,29 @@ def max_tool_rounds(config: dict, background: bool) -> int:
 def add_turn_notes(config: dict, run: AgentRun, history: list, messages: list, looked_up: tuple):
     request = newest_request(messages)
     # Asked for something written (a post, an email): in the user's own voice (style.py).
-    voice = style.voice_note() if style.is_writing_request(request) else ""
+    in_owner_voice = config.get("writes_in_owner_voice", True) and style.is_writing_request(request)
+    voice = style.voice_note() if in_owner_voice else ""
     if not run.agent:
         with_context(history, current_context(config, request) + looked_up[1] + voice)
         steer_away_from_repeats(history, messages, request, run.background)
 
 
+def hidden_tools(config: dict) -> list[str]:
+    return [*(config.get("hidden_tools") or []), *sorted(browser_apps.TOOLS)]
+
+
 def tools_for_turn(config: dict, run: AgentRun, toolless: bool, looked_up: tuple) -> list:
+    connected = app_actions.connected_apps()
     native = [models.handoff_tool(config, definition) if name == "ask_other_model" else definition
-              for name, definition in NATIVE_TOOLS.items() if not (run.background and name in BACKGROUND_ONLY_EXCLUDED)]
+              for name, definition in NATIVE_TOOLS.items()
+              if not (run.background and name in BACKGROUND_ONLY_EXCLUDED) and app_actions.is_offered(name, connected)]
     all_tools = [] if toolless or run.agent else connections.hub.tools + native
-    hidden = config.get("hidden_tools") or []
+    hidden = hidden_tools(config)
     all_tools = [t for t in all_tools if not policy.matches(t["function"]["name"], hidden)]
+    if run.allowed_tools is not None:
+        all_tools = [t for t in all_tools if t["function"]["name"] in run.allowed_tools]
+    if SEARCH_ONLY in run.skip_groups:
+        return [t for t in all_tools if t["function"]["name"] in SEARCH_ONLY_TOOLS]
     if run.skip_groups:
         # The calling app does these itself (e.g. the desktop app drives the user's own browser).
         skipped = [pattern for group in run.skip_groups for pattern in config.get("tool_groups", {}).get(group, {}).get("tools", [])]
@@ -579,6 +639,8 @@ def tools_for_turn(config: dict, run: AgentRun, toolless: bool, looked_up: tuple
 
 def steer_the_request(turn: AgentTurn):
     last_request = turn.last_request
+    if turn.is_chat and asks_to_disguise_harm(last_request):
+        steer_last_request(turn.history, HARMFUL_REWRITE_NOTE)
     if turn.is_chat and asks_how_to(last_request):
         withhold_run_tools(turn)
         steer_last_request(turn.history, HOW_TO_NOTE)
@@ -722,6 +784,10 @@ def start_draft_round(turn: AgentTurn, tools: list):
             return bool(PROMPT_LEAK.search(text)) or written_calls.has_call_markup(text)
         if PROMPT_LEAK.search(text) or TOOL_TALK.search(text) or written_calls.has_call_markup(text):
             return True
+        if ACTION_CLAIM.search(text) and not acted_for_sure(turn.tool_log, turn.context.get("failed", [])):
+            return True
+        if may_turn_down_needlessly(turn, text):
+            return True
         if may_nudge and (PROMISE.search(text) or CLAIMED.search(text)):
             return True
         return (may_nudge or may_search) and bool(CLARIFYING.search(text) or "web_search" in text)
@@ -763,6 +829,8 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
     if turn.run.background and turn.context.get("blocked"):
         return wait_for_sign_in(turn)
     if should_search_for_the_model(turn, answer):
+        if has_run_out_of_time(turn.run):
+            return out_of_time(turn)
         search_for_the_model(turn, answer)
         return None
     if claims_without_tools(turn, tools, answer):
@@ -777,6 +845,10 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
     if not answer.strip() and not turn.nudged:
         nudge_after_an_empty_reply(turn)
         return None
+    if note := needless_refusal_note(turn, answer):
+        send_back_a_needless_refusal(turn, answer, note)
+        return None
+    answer = without_an_unasked_deflection(turn, answer)
     if rewrite_unconfirmed_code(turn, answer):
         return None
     if rewrite_failing_code(turn, answer):
@@ -792,7 +864,7 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
 
 
 def page_to_check_code_against(turn: AgentTurn) -> str:
-    if not turn.is_chat or turn.code_checked or not turn.run.looked_up:
+    if not turn.is_chat or turn.run.room or turn.code_checked or not turn.run.looked_up:
         return ""
     return docs_reading.page_read_in(turn.run.looked_up[1])
 
@@ -816,7 +888,7 @@ def rewrite_unconfirmed_code(turn: AgentTurn, answer: str) -> bool:
 
 
 def sandbox_may_check(turn: AgentTurn) -> bool:
-    return turn.is_chat and code_sandbox.is_on() and coding.is_request(turn.last_request)
+    return turn.is_chat and not turn.run.room and code_sandbox.is_on() and coding.is_request(turn.last_request)
 
 
 def rewrite_failing_code(turn: AgentTurn, answer: str) -> bool:
@@ -961,6 +1033,46 @@ def nudge_to_finish_the_call(turn: AgentTurn, answer: str):
     send_back(turn, answer, HALF_WRITTEN_CALL_NOTE)
 
 
+def may_be_sent_back_for_a_refusal(turn: AgentTurn) -> bool:
+    return turn.is_chat and not turn.run.room and not turn.refusal_sent_back and turn.used_no_tools()
+
+
+def turns_down_coursework(turn: AgentTurn, answer: str) -> bool:
+    return is_needless_coursework_refusal(turn.last_request, answer, typed_by_user(turn))
+
+
+def deflects_a_plain_question(turn: AgentTurn, answer: str) -> bool:
+    return (not turn.asked_about_set_up and is_plain_identity_question(turn.last_request)
+            and has_a_deflection(answer))
+
+
+def may_turn_down_needlessly(turn: AgentTurn, text: str) -> bool:
+    return turn.is_chat and not turn.run.room and (deflects_a_plain_question(turn, text)
+                             or (may_be_sent_back_for_a_refusal(turn) and turns_down_coursework(turn, text)))
+
+
+def needless_refusal_note(turn: AgentTurn, answer: str) -> str | None:
+    if not may_be_sent_back_for_a_refusal(turn):
+        return None
+    if turns_down_coursework(turn, answer):
+        return COURSEWORK_NOTE
+    if deflects_a_plain_question(turn, answer) and is_only_a_deflection(answer):
+        return UNASKED_PRIVACY_NOTE
+    return None
+
+
+def send_back_a_needless_refusal(turn: AgentTurn, answer: str, note: str):
+    turn.refusal_sent_back = True
+    log.info("reply turned down a request it should have helped with; sent back once")
+    send_back(turn, answer, note)
+
+
+def without_an_unasked_deflection(turn: AgentTurn, answer: str) -> str:
+    if not turn.is_chat or not deflects_a_plain_question(turn, answer):
+        return answer
+    return without_deflection(answer) or answer
+
+
 def nudge_after_an_empty_reply(turn: AgentTurn):
     # Small models occasionally return nothing at all; one nudge almost always gets a real answer.
     turn.nudged = True
@@ -987,6 +1099,8 @@ def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
                 "tools_used": turn.tool_log + [c["function"]["name"] for c in client_calls], "raw": turn.raw}
     turn.add({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
     for call in calls:
+        if has_run_out_of_time(turn.run):
+            return out_of_time(turn)
         outcome = run_tool_call(turn, call, calls)
         if outcome is not None:
             return outcome
@@ -1052,26 +1166,61 @@ def run_tool_call(turn: AgentTurn, call: dict, calls: list) -> dict | None:
         log.warning("the model called %s, which it wasn't offered this turn; not run", name)
         record_tool_result(turn, name, arguments, written_calls.missing_tool_note([name], offered_names(turn)))
         return None
+    if name == "schedule_task" and not turn.run.background and not asked_to_schedule(turn):
+        log.warning("the model called schedule_task but the message didn't ask for a reminder or schedule; not run")
+        record_tool_result(turn, name, arguments, SCHEDULE_NOT_ASKED)
+        return None
     turn.tool_log.append(name)
     if name == "use_tools":
         result = unlock_groups(turn, arguments)
     elif policy.matches(name, turn.hidden):
         result = HIDDEN_TOOL_RESULT
-    elif name in NATIVE_TOOLS and (held := policy.untrusted_reason(name, arguments, turn.context, turn.rules)) \
+    elif name in app_actions.ASKS_FIRST:
+        result, outcome = run_app_action(turn, call, calls, name, arguments)
+        if outcome is not None:
+            return outcome
+    elif refused := home_network_fetch(name, arguments):
+        result = refused
+    elif turn.run.room and name in policy.WEB_READS:
+        result = ROOM_UNSEEN_LINK
+    elif (held := policy.web_read_reason(name, arguments, turn.context, own_request(turn))) \
+            and (turn.run.background or not policy.covers(turn.chat_approved, held)):
+        return wait_for_approval(turn, held, call, calls)
+    elif name in NATIVE_TOOLS and (held := policy.native_reason(name, arguments, turn.context, turn.rules)) \
             and not policy.covers(turn.chat_approved, held):
         return wait_for_approval(turn, held, call, calls)
+    elif name in NATIVE_TOOLS and held and (done_before := spent_already(turn, held)):
+        return done_before
     elif name in NATIVE_TOOLS:
         result, outcome = run_native_call(turn, name, arguments)
         if outcome is not None:
             return outcome
+        policy.remember_tool_result(turn.context, name, result, turn.rules)
     elif refused := private_upload(name, arguments):
         result = refused
     else:
         result, outcome = run_hub_call(turn, call, calls, name, arguments)
         if outcome is not None:
             return outcome
+    note_a_desktop_sign_in(turn, name, result)
     record_tool_result(turn, name, arguments, result)
     return None
+
+
+def note_a_desktop_sign_in(turn: AgentTurn, name: str, result: str):
+    if name in app_actions.TOOLS and browser_apps.needs_sign_in(result):
+        turn.tool_log.append(browser_apps.REQUEST_TOOL)
+
+
+def reply_before_the_request(messages: list) -> str:
+    last_request = max((index for index, message in enumerate(messages) if message.get("role") == "user"), default=0)
+    return message_text(next((message for message in reversed(messages[:last_request]) if message.get("role") == "assistant"), {}))
+
+
+def asked_to_schedule(turn: AgentTurn) -> bool:
+    if SCHEDULE_REQUEST.search(turn.last_request):
+        return True
+    return policy.is_plain_approval(turn.last_request) and bool(OFFERED_A_SCHEDULE.search(reply_before_the_request(turn.messages)))
 
 
 def offered_names(turn: AgentTurn) -> list[str]:
@@ -1111,14 +1260,54 @@ def run_native_call(turn: AgentTurn, name: str, arguments: dict) -> tuple[str, d
     return result, None
 
 
+def typed_by_user(turn: AgentTurn) -> list[str]:
+    typed = turn.state.get("typed")
+    if typed is None:
+        typed = [message_text(message) for message in turn.messages if message.get("role") == "user"]
+    return [without_app_notes(text) for text in typed]
+
+
+def own_request(turn: AgentTurn) -> str:
+    typed = typed_by_user(turn)
+    return typed[-1] if typed else ""
+
+
+def run_app_action(turn: AgentTurn, call: dict, calls: list, name: str, arguments: dict) -> tuple[str | None, dict | None]:
+    if turn.run.background:
+        return app_actions.BACKGROUND_REFUSAL, None
+    prepared = app_actions.prepare(name, arguments, typed_by_user(turn), turn.config)
+    if isinstance(prepared, str):
+        return prepared, None
+    if not policy.covers(turn.chat_approved, prepared.card):
+        return None, wait_for_approval(turn, prepared.card, call, calls)
+    turn.chat_approved = None
+    if done_before := spent_already(turn, prepared.card):
+        return None, done_before
+    return app_actions.carry_out(name, prepared), None
+
+
+def spent_already(turn: AgentTurn, card: str) -> dict | None:
+    try:
+        done_at = app_actions.spend_approval(app_actions.spent_key(card, turn.approval_key or ""))
+    except OSError as error:
+        log.warning("couldn't note an approval as used, so it wasn't carried out: %s", error)
+        return turn.outcome("done", answer=app_actions.CANT_NOTE_APPROVAL)
+    if done_at is None:
+        return None
+    log.warning("a yes that was already used was sent again; not carrying out the same card twice")
+    return turn.outcome("done", answer=app_actions.already_done(done_at, turn.config))
+
+
 def run_hub_call(turn: AgentTurn, call: dict, calls: list, name: str, arguments: dict) -> tuple[str | None, dict | None]:
     know_the_page(name, turn.context)
     reason = policy.approval_reason(name, arguments, turn.context, turn.rules)
     if reason and (turn.run.background or not policy.covers(turn.chat_approved, reason)):
         # Ask in Arty's own words rather than handing the model an instruction it might echo.
         return None, wait_for_approval(turn, reason, call, calls)
+    if reason and (done_before := spent_already(turn, reason)):
+        return None, done_before
     snapshot_before_desktop_work(turn, name)
-    result = connections.hub.call(name, arguments)
+    result = shopping.fetch_tool_text(arguments) if name == docs_reading.FETCH_TOOL else connections.hub.call(name, arguments)
     policy.remember_tool_result(turn.context, name, result, turn.rules)
     if reason:
         turn.chat_approved = None

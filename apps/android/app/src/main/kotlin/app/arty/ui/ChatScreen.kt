@@ -8,8 +8,10 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import android.net.Uri
 import android.speech.RecognizerIntent
-import app.arty.phone.PhoneAction
+import app.arty.phone.newCameraPhotoUri
+import app.arty.core.PhoneAction
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -98,6 +100,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.arty.core.Attachment
+import app.arty.core.MessageStamp
 import app.arty.core.ModelOption
 import app.arty.data.Conversation
 import app.arty.data.StoredMessage
@@ -358,7 +361,7 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
             MarkdownText(message.content)
             PhoneAction.fromJson(message.phoneAction)?.let { action ->
                 ArtyOutlinedButton(onClick = { vm.openPhoneAction(action) }, modifier = Modifier.padding(top = 6.dp)) {
-                    Text(action.label, color = ArtyColors.SignalText)
+                    Text(action.buttonLabel, color = ArtyColors.SignalText)
                 }
             }
             if (message.tools.isNotEmpty()) {
@@ -375,7 +378,7 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
                 ArtyIconButton(onClick = { copy(context, message.content) }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Share, "Copy", tint = ArtyColors.TextFaint, modifier = Modifier.size(16.dp))
                 }
-                Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.time)), style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
+                Text(MessageStamp.label(message.time, System.currentTimeMillis()), style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
             }
         }
     }
@@ -526,6 +529,29 @@ private fun InputBar(vm: ArtyViewModel) {
     // The system photo picker: the gallery, with no storage permission needed.
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris -> if (uris.isNotEmpty()) vm.attach(uris) }
     var attachMenu by remember { mutableStateOf(false) }
+    var photoBeingTaken by rememberSaveable { mutableStateOf<Uri?>(null) }
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
+        val photo = photoBeingTaken
+        photoBeingTaken = null
+        if (taken && photo != null) vm.attachPhoto(photo) else vm.photoNotTaken()
+    }
+    fun openCamera() {
+        val photo = newCameraPhotoUri(context)
+        photoBeingTaken = photo
+        try {
+            takePhoto.launch(photo)
+        } catch (error: ActivityNotFoundException) {
+            photoBeingTaken = null
+            vm.photoNotTaken()
+            vm.notice = "There's no camera app on this phone. Attach a photo from the gallery instead."
+        }
+    }
+    var photosHandled by rememberSaveable { mutableStateOf(vm.photoRequests) }
+    LaunchedEffect(vm.photoRequests) {
+        if (vm.photoRequests == photosHandled) return@LaunchedEffect
+        photosHandled = vm.photoRequests
+        openCamera()
+    }
     val listen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val heard = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (!heard.isNullOrBlank()) vm.send(heard, spoken = true)
@@ -558,6 +584,10 @@ private fun InputBar(vm: ArtyViewModel) {
                 Icon(ArtyIcons.Attach, "Attach a photo, video, audio or file", tint = if (thinking) ArtyColors.TextFaint else ArtyColors.TextDim)
             }
             DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }, shape = MaterialTheme.shapes.medium) {
+                DropdownMenuItem(
+                    text = { Text("Take a photo", style = MaterialTheme.typography.bodyMedium) },
+                    onClick = { attachMenu = false; vm.requestPhoto() },
+                )
                 DropdownMenuItem(
                     text = { Text("Photos & videos", style = MaterialTheme.typography.bodyMedium) },
                     onClick = {

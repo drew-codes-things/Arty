@@ -127,11 +127,15 @@
     </section>
 
     <section id="phone-code" class="phone-code" hidden>
-      <h2>Phone setup code</h2>
-      <p class="connect-help">In Arty on your phone, choose <b>Scan QR code</b> and point the camera at this. It holds your API key and Cloudflare token, so don't photograph or share it.</p>
-      <img id="phone-code-image" class="phone-code-image" alt="QR code with this computer's Arty connection">
+      <h2>Link a phone</h2>
+      <p class="connect-help">In Arty on your phone, choose <b>Scan QR code</b> and point the camera at this. Nothing to type. The code works once, for two minutes, and holds no keys: the phone and Arty make its own key between them.</p>
+      <img id="phone-code-image" class="phone-code-image" alt="QR code that links one phone to Arty">
       <div id="phone-code-status" class="connect-status" role="status"></div>
+      <h2>Linked phones</h2>
+      <p class="connect-help">Remove a phone and it can't use Arty any more. Its chats stay on the phone.</p>
+      <div id="phone-list" class="site-list"></div>
       <div class="connect-actions">
+        <button id="phone-code-new" type="button" class="cancel">New code</button>
         <button id="phone-code-close" type="button" class="add">Done</button>
       </div>
     </section>
@@ -140,6 +144,12 @@
       <h2>Chrome sites</h2>
       <p class="connect-help">Sites Arty may read and use in your Chrome. Forget one and Arty asks again before using it.</p>
       <div id="site-list" class="site-list"></div>
+      <h2>Browsers</h2>
+      <p class="connect-help">Browsers on this computer with the Arty extension. A browser that connects by itself needs no code.</p>
+      <div id="browser-list" class="site-list"></div>
+      <div class="connect-actions">
+        <button id="browsers-automatic" type="button" class="cancel"></button>
+      </div>
       <h2>Pair the Chrome extension</h2>
       <p class="connect-help">Click the Arty icon in each browser you want Arty to use and paste this code. Keep it to yourself: it lets a program drive your browser through Arty.</p>
       <code id="pairing-code" class="pairing-code"></code>
@@ -151,11 +161,12 @@
 
     <section id="starfire-link" class="starfire-link" hidden>
       <h2>Link starfire</h2>
-      <p class="connect-help">Lets starfire Desktop on this computer ask Arty to use it. In starfire Desktop's settings, switch on Link to Arty Desktop and type the code below within two minutes. Arty still asks you before each step, and nothing leaves this computer.</p>
+      <p class="connect-help">Lets starfire Desktop on this computer ask Arty to use it. When both run as you on this computer, starfire Desktop links by itself. Otherwise, in starfire Desktop's settings, switch on Link to Arty Desktop and type the code below within two minutes. Arty still asks you before each step, and nothing leaves this computer.</p>
       <code id="link-code" class="pairing-code"></code>
       <div id="link-state" class="connect-status" role="status"></div>
       <div class="connect-actions">
         <button id="link-unlink" type="button" class="cancel" hidden>Unlink</button>
+        <button id="link-automatic" type="button" class="cancel">Stop linking by itself</button>
         <button id="link-make" type="button" class="add">Make a code</button>
         <button id="link-close" type="button" class="cancel">Done</button>
       </div>
@@ -180,8 +191,10 @@
   </main>
   <script src="bridge.js"></script>
   <script src="sites.js"></script>
+  <script src="phones.js"></script>
   <script src="questions.js"></script>
   <script src="turnstatus.js"></script>
+  <script src="messagestamp.js"></script>
   <script src="presenting.js"></script>
   <script src="app.js"></script>
 </body>

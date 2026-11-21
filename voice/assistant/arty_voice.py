@@ -4,15 +4,17 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from typing import Awaitable, Callable, Protocol
 
 import aiohttp
 from faster_whisper import WhisperModel
 
+from barge_in import BargeInDetector, barge_in_from_settings
 from headset_commands import parse_volume
 from listening import WHISPER_RATE, Downsampler, Utterance, UtteranceCollector, to_float
 from live_text import LiveTextFailed
-from speaking import NOT_FOR_ME, SentenceBuffer, Voice, might_be_ignored, plain_speech
+from speaking import NOT_FOR_ME, SentenceBuffer, SpokenTurn, Voice, might_be_ignored, plain_speech, wav_seconds
 from turn_end import load_listening
 from wake_spotter import WakeSpotter, wake_spotter_from_settings
 from wake import find_switch, find_wake, has_words, is_filler
@@ -30,6 +32,9 @@ WAKE_PRIMER = "Hey Arty. Arty on. Arty off."
 LISTEN_AFTER_WAKE_SECONDS = 8
 FOLLOW_UP_SECONDS = 6
 ECHO_GUARD_SECONDS = 0.6
+LISTEN_AFTER_BARGE_SECONDS = 10
+PLAYBACK_START_SECONDS = 0.15
+STOP_TIMEOUT_SECONDS = 3
 HISTORY_SECONDS = 5 * 60
 HISTORY_MESSAGES = 8
 SLOW_ANSWER_SECONDS = 6
@@ -54,6 +59,8 @@ class Output(Protocol):
 
     async def play(self, wav: bytes) -> None: ...
 
+    async def stop(self) -> None: ...
+
     async def state(self, name: str, text: str = "", seconds: float = 0) -> None: ...
 
     async def wake_changed(self, enabled: bool) -> None: ...
@@ -69,6 +76,7 @@ class Senses:
         self.voice_lock = threading.Lock()
         self.listening = load_listening(os.environ)
         self.wake_spotter = wake_spotter_from_settings(os.environ)
+        self.barge_in = barge_in_from_settings(os.environ)
 
     def new_collector(self) -> UtteranceCollector:
         return self.listening.new_collector()
@@ -114,8 +122,14 @@ def release(utterance: bytes) -> None:
 class Assistant:
 
     def __init__(self, senses: Senses, output: Output, http: aiohttp.ClientSession, bare_wake: bool = False,
-                 act: Callable[[str], Awaitable[bool]] | None = None, wake_spotter: WakeSpotter | None = None):
+                 act: Callable[[str], Awaitable[bool]] | None = None, wake_spotter: WakeSpotter | None = None,
+                 barge: BargeInDetector | None = None):
         self.senses = senses
+        self.barge = barge
+        self.turn_task: asyncio.Task | None = None
+        self.turn: SpokenTurn | None = None
+        self.interrupted = False
+        self.prepared: deque[tuple[str, asyncio.Task]] = deque()
         self.wake_spotter = wake_spotter
         self.output = output
         self.http = http
@@ -150,11 +164,48 @@ class Assistant:
             if self.muted():
                 release(utterance)
                 continue
+            self.interrupted = False
+            self.turn_task = asyncio.create_task(self.handle_utterance(utterance))
             try:
-                await self.handle_utterance(utterance)
+                await self.turn_task
+            except asyncio.CancelledError:
+                if not self.interrupted:
+                    raise
+                await self.finish_interrupted()
             except Exception:
                 log.exception("that turn failed; still listening")
                 await self.recover_after_failed_turn()
+            finally:
+                self.turn_task = None
+
+    async def interrupt(self) -> bool:
+        task = self.turn_task
+        if task is None or task.done() or not self.speaking or self.interrupted:
+            return False
+        self.interrupted = True
+        self.speaking = False
+        self.muted_until = 0.0
+        log.info("barge-in: stopping to listen")
+        stopper = asyncio.create_task(self.output.stop())
+        task.cancel()
+        try:
+            await stopper
+        except Exception as error:
+            log.warning("couldn't tell the speakers to stop: %r", error)
+        return True
+
+    async def finish_interrupted(self) -> None:
+        self.listening_until = time.time() + LISTEN_AFTER_BARGE_SECONDS
+        self.interrupted = False
+        if self.barge:
+            self.barge.reset_turn()
+        await self.show_resting_state()
+
+    def keep_what_was_heard(self, question: str) -> None:
+        heard = self.turn.heard(time.monotonic(), PLAYBACK_START_SECONDS) if self.turn else ""
+        if heard:
+            self.conversation.remember(question, f"{heard}...")
+            log.info("kept what was heard before the interruption (%d characters)", len(heard))
 
     async def recover_after_failed_turn(self) -> None:
         self.speaking = False
@@ -259,42 +310,52 @@ class Assistant:
     async def answer(self, question: str) -> None:
         log.info("asked: %s", question)
         self.listening_until = 0.0
-        sentences = SentenceBuffer()
         spoken: asyncio.Queue[str | None] = asyncio.Queue()
+        self.turn = SpokenTurn()
         speaker = asyncio.create_task(self.speak_queue(spoken))
-        answer = ""
-        fed = 0
-        ignored = False
+        answer, ignored = "", False
         self.speaking = True
         try:
-            reminder = asyncio.create_task(self.slow_answer_reminder(spoken, lambda: answer))
             try:
-                async for delta in self.ask_brain(question):
-                    answer += delta
-                    if might_be_ignored(answer):
-                        continue
-                    for chunk in sentences.add(answer[fed:]):
-                        spoken.put_nowait(chunk)
-                    fed = len(answer)
-            finally:
-                reminder.cancel()
-            if answer.strip() == NOT_FOR_ME:
-                ignored = True
-                log.info("not meant for me; staying quiet")
-                return
-            for chunk in sentences.add(answer[fed:]) + sentences.flush():
-                spoken.put_nowait(chunk)
-            self.conversation.remember(question, answer)
-            log.info("answered (%d characters)", len(answer))
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
-            log.error("brain request failed: %s", error)
-            spoken.put_nowait("Sorry, I can't reach my brain right now.")
-        finally:
+                answer, ignored = await self.stream_reply(question, spoken)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+                log.error("brain request failed: %s", error)
+                spoken.put_nowait("Sorry, I can't reach my brain right now.")
             spoken.put_nowait(None)
-            try:
-                await speaker
-            finally:
+            await speaker
+            if answer and not ignored:
+                self.conversation.remember(question, answer)
+                log.info("answered (%d characters)", len(answer))
+        except asyncio.CancelledError:
+            speaker.cancel()
+            if self.interrupted:
+                self.keep_what_was_heard(question)
+            raise
+        finally:
+            if not self.interrupted:
                 await self.finish_speaking(follow_up=not ignored)
+
+    async def stream_reply(self, question: str, spoken: asyncio.Queue) -> tuple[str, bool]:
+        sentences = SentenceBuffer()
+        answer = ""
+        fed = 0
+        reminder = asyncio.create_task(self.slow_answer_reminder(spoken, lambda: answer))
+        try:
+            async for delta in self.ask_brain(question):
+                answer += delta
+                if might_be_ignored(answer):
+                    continue
+                for chunk in sentences.add(answer[fed:]):
+                    spoken.put_nowait(chunk)
+                fed = len(answer)
+        finally:
+            reminder.cancel()
+        if answer.strip() == NOT_FOR_ME:
+            log.info("not meant for me; staying quiet")
+            return answer, True
+        for chunk in sentences.add(answer[fed:]) + sentences.flush():
+            spoken.put_nowait(chunk)
+        return answer, False
 
     async def finish_speaking(self, follow_up: bool) -> None:
         self.speaking = False
@@ -335,11 +396,42 @@ class Assistant:
                     yield delta
 
     async def speak_queue(self, spoken: asyncio.Queue) -> None:
-        while (text := await spoken.get()) is not None:
-            try:
-                await self.say(text)
-            except Exception:
-                log.exception("couldn't speak a sentence; carrying on with the rest")
+        ready: asyncio.Queue[str | None] = asyncio.Queue()
+        feeder = asyncio.create_task(self.prepare_ahead(spoken, ready))
+        try:
+            while (text := await ready.get()) is not None:
+                try:
+                    await self.say(text)
+                except Exception:
+                    log.exception("couldn't speak a sentence; carrying on with the rest")
+        finally:
+            feeder.cancel()
+            self.drop_prepared()
+
+    async def prepare_ahead(self, spoken: asyncio.Queue, ready: asyncio.Queue) -> None:
+        while True:
+            text = await spoken.get()
+            if text is not None:
+                self.start_synthesis(text)
+            ready.put_nowait(text)
+            if text is None:
+                return
+
+    def start_synthesis(self, text: str) -> None:
+        words = plain_speech(text)
+        if words:
+            self.prepared.append((words, asyncio.create_task(asyncio.to_thread(self.senses.wav, words))))
+
+    def drop_prepared(self) -> None:
+        while self.prepared:
+            self.prepared.popleft()[1].cancel()
+
+    async def synthesis_of(self, words: str) -> bytes:
+        for index, (prepared_words, task) in enumerate(self.prepared):
+            if prepared_words == words:
+                del self.prepared[index]
+                return await task
+        return await asyncio.to_thread(self.senses.wav, words)
 
     async def say_all(self, texts: list[str], follow_up: bool = False) -> None:
         self.speaking = True
@@ -347,15 +439,22 @@ class Assistant:
             for text in texts:
                 await self.say(text)
         finally:
-            await self.finish_speaking(follow_up)
+            if not self.interrupted:
+                await self.finish_speaking(follow_up)
 
     async def say(self, text: str) -> None:
         words = plain_speech(text)
         if not words:
             return
-        wav = await asyncio.to_thread(self.senses.wav, words)
+        wav = await self.synthesis_of(words)
         await self.output.state("speaking", words)
+        if self.turn:
+            self.turn.begin(words, wav_seconds(wav, words), time.monotonic())
+        if self.barge:
+            self.barge.play(wav)
         await self.output.play(wav)
+        if self.turn:
+            self.turn.end()
 
 
 class HubOutput:
@@ -373,6 +472,15 @@ class HubOutput:
                     log.warning("hub couldn't play everywhere: %s", result)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
             log.error("couldn't send speech to the hub: %r", error)
+
+    async def stop(self) -> None:
+        try:
+            async with self.http.post(f"{HUB_URL}/assistant/stop", headers=self.headers,
+                                      timeout=aiohttp.ClientTimeout(total=STOP_TIMEOUT_SECONDS)) as response:
+                if response.status != 200:
+                    log.warning("hub couldn't stop the speakers: %s %s", response.status, (await response.text())[:200])
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            log.error("couldn't tell the hub to stop the speakers: %r", error)
 
     async def state(self, name: str, text: str = "", seconds: float = 0) -> None:
         return None
@@ -411,12 +519,26 @@ class HubLink:
                     continue
                 if message.type != aiohttp.WSMsgType.BINARY:
                     continue
+                mic = downsampler.feed(message.data)
                 if self.assistant.muted():
                     collector.reset()
+                    await self.listen_for_barge_in(mic, collector)
                     continue
-                for utterance in collector.feed(downsampler.feed(message.data)):
+                for utterance in collector.feed(mic):
                     self.assistant.hear(utterance)
         log.warning("the hub closed the mic stream")
+
+    async def listen_for_barge_in(self, mic: bytes, collector: UtteranceCollector) -> None:
+        barge = self.assistant.barge
+        if barge is None or not self.assistant.speaking:
+            return
+        found = barge.feed(mic)
+        if found is None or not await self.assistant.interrupt():
+            return
+        log.info("barge-in: her echo was found %d ms after the sound left", barge.echo_delay_ms)
+        collector.wait_longer_before_judging(barge.pause_frames)
+        for utterance in collector.feed(found.audio):
+            self.assistant.hear(utterance)
 
     async def follow_hub_settings(self, data: str) -> None:
         try:
@@ -463,6 +585,8 @@ async def room_command(assistant: Assistant, output: HubOutput, command: str) ->
         await assistant.say_all(["Sorry, I couldn't change the volume."])
         return True
     log.info("speaker volume now %s", state)
+    if assistant.barge:
+        assistant.barge.forget_room()
     if request.get("change") != "mute":
         await assistant.say_all([volume_reply(state)])
     return True
@@ -490,7 +614,7 @@ async def main() -> None:
     senses = Senses()
     async with aiohttp.ClientSession() as http:
         output = HubOutput(http)
-        server_room = Assistant(senses, output, http, wake_spotter=senses.wake_spotter)
+        server_room = Assistant(senses, output, http, wake_spotter=senses.wake_spotter, barge=senses.barge_in)
         server_room.act = lambda command: room_command(server_room, output, command)
         await asyncio.gather(keep_running("the server mic", HubLink(server_room).keep_listening),
                              keep_running("the room assistant", server_room.handle_utterances),

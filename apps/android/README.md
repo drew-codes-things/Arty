@@ -27,7 +27,7 @@ It comes in two builds from the same code:
 | APK | Package | Where it finds Arty |
 |---|---|---|
 | `release/Arty.apk` | `app.arty` | Built in from `~/.arty-android.properties` - the owner's own copy. **Keep it private**: anyone with the file can reach your Arty. |
-| `release/Arty-<version>.apk` (e.g. `Arty-1.5.8.apk`) | `app.arty.shareable` | Nothing built in. It asks on first launch, so one APK works for anyone's Arty and is safe to share. |
+| `release/Arty-<version>.apk` (e.g. `Arty-1.6.0.apk`) | `app.arty.shareable` | Nothing built in. It asks on first launch, so one APK works for anyone's Arty and is safe to share. |
 
 Both can be installed side by side.
 
@@ -38,7 +38,7 @@ Both can be installed side by side.
 ```
 Open the app
         |
-Shareable build, first time  ->  "Connect to Arty": Scan QR code (from Arty Desktop's tray menu > Phone setup code),
+Shareable build, first time  ->  "Connect to Arty": Scan QR code (from Arty Desktop's tray menu > Link a phone),
         |                        or Enter details manually: brain address, API key and the Cloudflare Access token
         |
 Test request to the brain  ->  only saved once it works
@@ -89,6 +89,13 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
   no phone notification and no sound but still appears in Updates. Each kind is also its own Android notification
   channel, so Android's own settings (sound, pop-up, off) work per kind; a kind turned off there is flagged in the app,
   and if Arty's notifications are off altogether (or the permission is denied) the page warns at the top.
+- **Phone actions** - ask Arty to text someone, set an alarm or a timer, or open an app. The phone shows its own Allow
+  card with exactly what will happen, and nothing happens until you press it. A text's recipient is picked on the
+  card from your own contacts; Arty never supplies a number. Only replies to messages you sent can ask, never
+  background tasks ([docs/connecting-a-phone.md](../../docs/connecting-a-phone.md#asking-the-phone-to-do-things)).
+- **Take a photo** - in the paperclip menu, or the **Take a photo** button Arty shows when you ask it to use the
+  camera. The phone's own camera app opens (Arty needs no camera permission); the photo comes back into the message
+  box with your question filled in, and nothing is sent until you press send.
 - **Share to Arty** - send text or files to Arty from any other app.
 - **Widget and quick tile** - talk to or call Arty without opening the app.
 
@@ -96,9 +103,9 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
 
 ## Download
 
-Download `Arty-<version>.apk` (e.g. `Arty-1.5.8.apk`) from the [Releases](../../../../releases) page, or build it into `release/` from source:
+Download `Arty-<version>.apk` (e.g. `Arty-1.6.0.apk`) from the [Releases](../../../../releases) page, or build it into `release/` from source:
 
-- Over USB: `adb install -r Arty-1.5.8.apk` (or `release/Arty.apk` for your own copy, which has your keys built in:
+- Over USB: `adb install -r Arty-1.6.0.apk` (or `release/Arty.apk` for your own copy, which has your keys built in:
   never share that one).
 - Or copy it to the phone, open it and allow installing from that app when Android asks.
 
@@ -115,7 +122,7 @@ Android 9 (API 28) or newer.
 ```
 
 The APKs land in `app/build/outputs/apk/<build>/release/`; copy them to `release/` (which isn't committed), naming the
-shareable one after its version, e.g. `Arty-1.5.8.apk`.
+shareable one after its version, e.g. `Arty-1.6.0.apk`.
 
 The personal build reads its details from `~/.arty-android.properties` (mode 600), never from this repo:
 

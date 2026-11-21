@@ -20,8 +20,10 @@ import time
 from urllib.parse import quote_plus, urlsplit
 
 from process import config
+from process import learning_pages
 
 RESULT_SECONDS = 25
+YOUR_BROWSER_PAGES = "yours"
 EXTENSION_SEEN_SECONDS = 60
 PAGE_CHARS = 6000
 MARKED_CHARS = 5200
@@ -65,6 +67,9 @@ SCROLL_DIRECTIONS = ("down", "up", "top", "bottom")
 DATA_URL_PREFIX = re.compile(r"^data:image/[a-z]+;base64,")
 PICTURE_QUALITY = 75
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+IDNA_DEVIATIONS = frozenset("\u00df\u03c2\u200c\u200d")
+DEVIATION_PROBLEM = ("that site name has a letter (such as \u00df or \u03c2) or a hidden joining mark that browsers and "
+                     "Arty spell differently, so Arty can't be sure which site it is")
 MAX_PENDING_QUESTIONS = 50
 UNKNOWN_SITE_QUESTION = "Let Arty use the page in front in your browser? It couldn't tell which site that is, so it will ask again next time."
 
@@ -295,10 +300,16 @@ def _tool(action, describe_result, wanted=None, **arguments):
         return f"Couldn't: {error}."
 
 
+def has_idna_deviation(host):
+    return any(character in IDNA_DEVIATIONS for character in str(host or "").lower())
+
+
 def site_of(url):
     try:
         parts = urlsplit(str(url or "").strip())
         host, port = parts.hostname or "", parts.port
+        if has_idna_deviation(host):
+            return ""
         host = host.encode("idna").decode("ascii") if host else ""
     except (ValueError, UnicodeError):
         return ""
@@ -309,6 +320,19 @@ def site_of(url):
     scheme = parts.scheme.lower()
     site = host if port in (None, DEFAULT_PORTS.get(scheme)) else f"{host}:{port}"
     return site if scheme == "https" else f"{scheme}://{site}"
+
+
+UNKNOWN_SITE = "unknown (Arty can't tell which site this is)"
+
+
+def site_line(url):
+    return f"site: {site_of(url) or UNKNOWN_SITE}"
+
+
+def address_lines(url, limit):
+    url = str(url or "")
+    cut = f" ... (cut short: the full address is {len(url)} characters)" if len(url) > limit else ""
+    return [f"address: {url[:limit]}{cut}", site_line(url)]
 
 
 def address_problem(url):
@@ -325,6 +349,8 @@ def address_problem(url):
         return "that address has a name and @ before the site, which hides the real site"
     if "%" in host:
         return "that address has an encoded site name"
+    if has_idna_deviation(host):
+        return DEVIATION_PROBLEM
     return None
 
 
@@ -550,6 +576,7 @@ def _ranked_listing(items):
 def _page(result):
     if not site_allowed(site_of(result.get("url"))):
         return _withheld(result)
+    learning_pages.note_page(result.get("url"), result.get("title"), result.get("text"), where=YOUR_BROWSER_PAGES)
     heading = _remember_items(result)
     text = (result.get("text") or "")[:PAGE_CHARS]
     listing = "\n".join([heading, *_ranked_listing(result.get("items", []))]) + _players_line(result)
@@ -559,6 +586,7 @@ def _page(result):
 def _found(words, result):
     if not site_allowed(site_of(result.get("url"))):
         return _withheld(result)
+    learning_pages.note_page(result.get("url"), result.get("title"), result.get("text"), where=YOUR_BROWSER_PAGES)
     _remember_items(result)
     wanted = str(words or "").lower().split()
     matches = [item for item in result.get("items", []) if all(word in str(item.get("label", "")).lower() for word in wanted)]
@@ -640,6 +668,10 @@ def chrome_open(url, new_tab=True, browser=None):
         return _opened_line(opened.get("tab")) + "\n" + _page(_ask("read", wanted=browser, tab=opened.get("tab")))
     except BrowserError as error:
         return f"Couldn't: {error}."
+
+
+def open_tab(url, wanted):
+    return _ask("open", wanted=wanted, url=url, newTab=True).get("tab")
 
 
 def chrome_read(tab=None, browser=None):
@@ -842,7 +874,9 @@ def needs_ok(name, args):
 
 def _action_question(name, args):
     if name == "chrome_type" and args.get("submit"):
-        return "Let Arty submit this form in your browser?"
+        known = _numbered_item(args.get("item")) if args.get("item") is not None else None
+        field = (known or {}).get("label") or args.get("label") or "the field"
+        return f"Let Arty type this into “{field}” and submit it in your browser?\n{args.get('text', '')}"
     if name != "chrome_click":
         return None
     if args.get("item") is not None:
@@ -853,20 +887,64 @@ def _action_question(name, args):
     return next(filter(None, map(_click_question, _items_labelled(args.get("text")))), None)
 
 
-def _click_question(item):
+def _click_question(item, where="in your browser", leaving_asks=True):
     label = str(item.get("label") or "")
     acts = item.get("acts") or ""
     shown = label if len(label) <= 80 else label[:79] + "…"
     if acts in ASKED_KINDS:
-        return f"Let Arty click “{shown}” in your browser? {ASKED_KINDS[acts]}"
-    if acts == LEAVES_THE_SITE:
+        return f"Let Arty click “{shown}” {where}? {ASKED_KINDS[acts]}"
+    if acts == LEAVES_THE_SITE and leaving_asks:
         destination = site_of(item.get("goes"))
         if not site_allowed(destination):
-            return (f"Let Arty click “{shown}” in your browser? It leads to {destination or 'another site'}, "
+            return (f"Let Arty click “{shown}” {where}? It leads to {destination or 'another site'}, "
                     "which you haven't let Arty use yet.")
     if _OUTWARD.search(f"{label} {item.get('also') or ''}"):
-        return f"Let Arty click “{shown}” in your browser? That could act in your name."
+        return f"Let Arty click “{shown}” {where}? That could act in your name."
     return None
+
+
+def outward_click_question(item, where):
+    return _click_question(item, where, leaving_asks=False)
+
+
+def remember_page(result, numbered):
+    numbered.clear()
+    for item in result.get("items", []):
+        try:
+            numbered[int(item["n"])] = item
+        except (KeyError, TypeError, ValueError):
+            continue
+
+
+def page_report(result):
+    heading = f"Title: {result.get('title', '')}\nAddress: {result.get('url', '')}"
+    text = (result.get("text") or "")[:PAGE_CHARS]
+    players = "".join(f"\n{_player_line(player)}" for player in result.get("media") or [] if isinstance(player, dict))
+    listing = "\n".join([heading, *_ranked_listing(result.get("items", []))]) + players
+    return _marked(listing + "\n\nPage text:\n" + text)
+
+
+def matching_items(words, items):
+    wanted = str(words or "").lower().split()
+    return [item for item in items if all(word in str(item.get("label", "")).lower() for word in wanted)]
+
+
+def found_report(matches):
+    lines = [f"{_result_line(item)}{GROUP_NOTES.get(item.get('group'), '')}" for item in matches[:MAX_FOUND]]
+    more = f"\n({len(matches) - MAX_FOUND} more match; use more words to narrow it.)" if len(matches) > MAX_FOUND else ""
+    return _marked("\n".join(lines)) + more
+
+
+def marked(text):
+    return _marked(text)
+
+
+def normalised_url(url):
+    return _normalised_url(url)
+
+
+def picture_for_vision(data_url):
+    return _picture_for_vision(data_url)
 
 
 def step_target(name, args):
@@ -951,7 +1029,8 @@ The first time Arty reads or uses a site the user is asked, once per site; chrom
 undoes that when they ask.
 When they name a browser ("in Firefox", "in Opera"), pass it as browser; without one, the browser used last
 is used. Only browsers with the Arty extension installed and paired can be used: for any other, tell them that
-instead of using another browser."""
+instead of using another browser. On a live graded test, exam, assessment or hiring test page, never pick, click or
+type answers: teach them the topic instead."""
 
 
 def prompt():

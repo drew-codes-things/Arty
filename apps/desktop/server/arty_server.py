@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Literal
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "server"))
@@ -33,11 +34,15 @@ from starlette.background import BackgroundTask
 
 from process import brain
 from process import browser
+from process import browser_connection
+from process import capabilities
 from process import call as phone_call
 from process import config as cfg
 from process import confirm
 from process import connection
 from process import link
+from process import link_browser
+from process import screen_control
 from process import spake2
 from process.notice import Noticer
 from process import notifications
@@ -69,13 +74,14 @@ EXTENSION_ROUTES = {("POST", "/browser/next"), ("POST", "/browser/result")}
 EXTENSION_HELLO_ROUTE = ("POST", "/browser/hello")
 OPEN_ROUTES = {("GET", "/whoami"), ("GET", "/link/proof"), ("POST", "/link/pair/start"), ("POST", "/link/pair/finish")}
 MAX_OPEN_BODY_BYTES = 4096
-LINK_ROUTES = {("GET", "/link/status"), ("POST", "/link/computer"), ("POST", "/link/screenshot"), ("POST", "/link/unlink")}
+LINK_ROUTES = {("GET", "/link/status"), ("POST", "/link/computer"), ("POST", "/link/screenshot"), ("POST", "/link/browser"),
+               ("POST", "/link/unlink")}
 LINK_TOKEN_HEADER = "x-arty-link"
 LINK_ASK_SECONDS = confirm.TIMEOUT
 CALLER_CHECK_SECONDS = 1.0
 CALLER_POLL_SECONDS = 0.05
 MAX_LINK_ARGUMENT_CHARS = link.MAX_ARGUMENT_CHARS
-starfire_link = link.Link(link.LINK_FILE)
+starfire_link = link.Link(link.LINK_FILE, offer_path=link.LOCAL_OFFER_FILE)
 link_refusals = link.RefusalPause()
 _link_computer_busy = threading.Lock()
 PAIRING_FILE = cfg.DATA_ROOT / ".arty_browser_pairing"
@@ -237,7 +243,7 @@ def _speak_segment(segment, index, speak):
     return event
 
 
-def _stream_reply(user_text, speak=True, look=False, note=""):
+def _stream_reply(user_text, speak=True, look=False, note="", arty_started=False):
     """Streams the reply a sentence at a time, synthesising as it goes. An /interrupt
     stops it, and only what was actually heard is kept in the history."""
     with _stream_lock:
@@ -261,9 +267,10 @@ def _stream_reply(user_text, speak=True, look=False, note=""):
         # Look first, every time: small models often answer from the window title instead.
         yield _ndjson({"type": "activity", "id": None, "where": "computer", "text": "looking at your screen"})
         seen = computer.computer_look(user_text)
+        tools.screen_read_before_the_reply()
         print(f"[look] {len(seen)} chars" if not seen.startswith("Looking failed") else f"[look] {seen[:200]}", flush=True)
         note = LOOK_NOTE.format(seen=seen) + note
-    generator = brain.llm_stream(user_text, note=call.note_for(note))
+    generator = brain.llm_stream(user_text, note=call.note_for(note), arty_started=arty_started)
 
     def emit(segment):
         nonlocal index
@@ -435,7 +442,8 @@ def notice_reply(body: NoticeReplyIn):
     notice = take_notice(body.id)
     if notice is None:
         return StreamingResponse(iter([_ndjson({"type": "cancelled"})]), media_type="application/x-ndjson")
-    return StreamingResponse(_stream_reply(notice.said(), body.speak, note=notice.prompt()), media_type="application/x-ndjson")
+    return StreamingResponse(_stream_reply(notice.said(), body.speak, note=notice.prompt(), arty_started=True),
+                             media_type="application/x-ndjson")
 
 
 class InterruptIn(BaseModel):
@@ -663,6 +671,50 @@ def computer_set(body: ComputerIn):
     return computer.status()
 
 
+MAX_CONTROL_WAIT_SECONDS = 55.0
+
+
+class ScreenControlIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+class ControlShownIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session: int
+
+
+def _control_state(state):
+    return {**state, "enabled": screen_control.enabled()}
+
+
+@app.get("/screen-control")
+def screen_control_get():
+    return _control_state(screen_control.control.state())
+
+
+@app.post("/screen-control")
+def screen_control_set(body: ScreenControlIn):
+    screen_control.set_enabled(body.enabled)
+    print(f"[screen control] turned {'on' if body.enabled else 'off'}", flush=True)
+    return _control_state(screen_control.control.state())
+
+
+@app.get("/control")
+def control_follow(after: int = 0, timeout: float = 25.0):
+    return _control_state(screen_control.control.wait_for_change(after, max(0.0, min(timeout, MAX_CONTROL_WAIT_SECONDS))))
+
+
+@app.post("/control/stop")
+def control_stop():
+    return {"ok": screen_control.control.stop(screen_control.STOPPED_BY_BUTTON)}
+
+
+@app.post("/control/shown")
+def control_shown(body: ControlShownIn):
+    return {"ok": screen_control.control.indicator_shown(body.session)}
+
+
 @app.get("/events")
 def events(after: int = 0, timeout: float = 55.0):
     """Long poll for notifications from other apps since `after` (the app can read them aloud)."""
@@ -733,6 +785,26 @@ class SiteIn(BaseModel):
 @app.get("/browser/pairing")
 def browser_pairing():
     return {"code": pairing_code()}
+
+
+class AutomaticIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@app.get("/browser/found")
+def browser_found():
+    return browser_connection.found_report()
+
+
+@app.post("/browser/found/automatic")
+def browser_found_automatic(body: AutomaticIn):
+    return browser_connection.set_automatic(body.enabled)
+
+
+@app.post("/browser/found/connect")
+def browser_found_connect():
+    return browser_connection.set_automatic(True)
 
 
 @app.get("/browser/sites")
@@ -874,6 +946,14 @@ def connection_set(body: ConnectionIn, request: Request):
     return JSONResponse({"ok": True, "reached": reached}, background=BackgroundTask(restart_service))
 
 
+ONLY_THE_WINDOW_LINKS_PHONES = "Only the Arty window can link phones."
+
+
+class PhoneRemoveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: int
+
+
 @app.get("/phone-setup-code")
 def phone_setup_code(request: Request):
     if not _from_arty_window(request):
@@ -882,18 +962,53 @@ def phone_setup_code(request: Request):
         return phone_setup.phone_code()
     except phone_setup.NothingToShare as problem:
         return JSONResponse({"error": str(problem)}, status_code=400)
+    except phone_setup.BrainRefused as problem:
+        return JSONResponse({"error": str(problem)}, status_code=502)
+
+
+@app.get("/phone-link/{offer}")
+def phone_link_state(offer: str, request: Request):
+    if not _from_arty_window(request):
+        return JSONResponse({"error": ONLY_THE_WINDOW_LINKS_PHONES}, status_code=403)
+    try:
+        return phone_setup.offer_status(offer)
+    except phone_setup.BrainRefused as problem:
+        return JSONResponse({"error": str(problem)}, status_code=502)
+
+
+@app.get("/linked-phones")
+def linked_phones(request: Request):
+    if not _from_arty_window(request):
+        return JSONResponse({"error": ONLY_THE_WINDOW_LINKS_PHONES}, status_code=403)
+    try:
+        return {"phones": phone_setup.linked_phones()}
+    except phone_setup.BrainRefused as problem:
+        return JSONResponse({"error": str(problem)}, status_code=502)
+
+
+@app.post("/linked-phones/remove")
+def remove_linked_phone(body: PhoneRemoveIn, request: Request):
+    if not _from_arty_window(request):
+        return JSONResponse({"error": ONLY_THE_WINDOW_LINKS_PHONES}, status_code=403)
+    try:
+        phone_setup.remove_phone(body.id)
+        return {"phones": phone_setup.linked_phones()}
+    except phone_setup.BrainRefused as problem:
+        return JSONResponse({"error": str(problem)}, status_code=502)
 
 
 class LinkPairStartIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field("", max_length=link.MAX_SENT_NAME_CHARS)
     share: str = Field(max_length=spake2.SHARE_HEX_CHARS)
+    local: bool = False
 
 
 class LinkPairFinishIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     session: str = Field(max_length=link.SESSION_BYTES * 2)
     proof: str = Field(max_length=PROOF_HEX_CHARS)
+    local: bool = False
 
 
 class LinkComputerIn(BaseModel):
@@ -921,7 +1036,7 @@ def link_pairing_start(request: Request):
 @app.post("/link/pair/start")
 def link_pair_start(body: LinkPairStartIn):
     try:
-        return starfire_link.begin_pair(body.name, body.share)
+        return starfire_link.begin_pair(body.name, body.share, local=body.local)
     except link.BadPairingShare as problem:
         print(f"[link] pairing refused: {problem}", flush=True)
         return _refused(str(problem), 400, reason="bad_request")
@@ -933,12 +1048,43 @@ def link_pair_start(body: LinkPairStartIn):
 @app.post("/link/pair/finish")
 def link_pair_finish(body: LinkPairFinishIn):
     try:
-        starfire_link.finish_pair(body.session, body.proof)
+        starfire_link.finish_pair(body.session, body.proof, local=body.local)
     except link.PairingRefused as problem:
         print(f"[link] pairing refused: {problem}", flush=True)
         return _refused(str(problem))
-    print(f"[link] paired with {starfire_link.status()['name']}", flush=True)
+    name = starfire_link.status()["name"]
+    print(f"[link] paired with {name}{' by itself (same user)' if body.local else ''}", flush=True)
+    if body.local:
+        notifications.record_linked(name)
     return {"ok": True}
+
+
+LINK_SETTING = ("link", "automatic")
+
+
+def links_by_itself():
+    return bool(cfg.setting(*LINK_SETTING, True))
+
+
+def offer_link_if_wanted():
+    if links_by_itself():
+        starfire_link.offer_locally()
+    else:
+        starfire_link.withdraw_local_offer()
+
+
+class LinkAutomaticIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@app.post("/link/automatic")
+def link_automatic(body: LinkAutomaticIn, request: Request):
+    if not _has_token(request):
+        return _refused("Only the Arty window can change this.")
+    cfg.set_value(*LINK_SETTING, body.enabled)
+    offer_link_if_wanted()
+    return {**starfire_link.status(), "links_by_itself": links_by_itself(), "automatic": links_by_itself()}
 
 
 @app.get("/link/proof")
@@ -956,14 +1102,14 @@ def link_proof(request: Request, nonce: str = ""):
 def link_state(request: Request):
     if not _has_token(request):
         return _refused("Only the Arty window can see who is linked.")
-    return starfire_link.status()
+    return {**starfire_link.status(), "links_by_itself": links_by_itself()}
 
 
 @app.get("/link/status")
 def link_status(request: Request):
     if not _is_linked_app(request):
         return _refused("Only the linked app can ask this.")
-    return {"ok": True, "computer": computer.available()}
+    return capabilities.status()
 
 
 @app.post("/link/unlink")
@@ -971,6 +1117,7 @@ def link_unlink(request: Request):
     if not (_has_token(request) or _is_linked_app(request)):
         return _refused("Only the Arty window or the linked app can unlink.")
     starfire_link.unlink()
+    offer_link_if_wanted()
     print("[link] unlinked", flush=True)
     return {"ok": True}
 
@@ -1049,6 +1196,13 @@ def _run_asked_step(name, arguments, question, request):
     return {"ok": True, "result": tools.run(name, json.dumps(arguments))}
 
 
+def _ask_and_run_step(name, arguments, question, request):
+    answer = _paused_refusal() or _run_asked_step(name, arguments, question, request)
+    if not (isinstance(answer, dict) and answer.get("ok")):
+        tools.consent_refused(name, json.dumps(arguments))
+    return answer
+
+
 @app.post("/link/computer")
 def link_computer(body: LinkComputerIn, request: Request):
     if not _is_linked_app(request):
@@ -1059,14 +1213,55 @@ def link_computer(body: LinkComputerIn, request: Request):
         return _refused(f"{body.tool or 'That'} is not one of Arty's computer tools.", 400)
     if len(json.dumps(body.arguments)) > MAX_LINK_ARGUMENT_CHARS:
         return _refused("That is too much to send in one step.", 413)
-    try:
-        question = _link_question(body.tool, body.arguments)
-    except link.StepNotShown as problem:
-        return _refused(str(problem), 400, reason="bad_request")
     if not _link_computer_busy.acquire(blocking=False):
         return _refused("Arty Desktop is already waiting on another step.", 429, reason="busy")
     try:
-        return _paused_refusal() or _run_asked_step(body.tool, body.arguments, question, request)
+        try:
+            question = _link_question(body.tool, body.arguments)
+        except link.StepNotShown as problem:
+            return _refused(str(problem), 400, reason="bad_request")
+        return _ask_and_run_step(body.tool, body.arguments, question, request)
+    finally:
+        _link_computer_busy.release()
+
+
+class LinkBrowserIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["open"]
+    url: str
+    browser: str
+
+
+def _open_refused(refusal):
+    print(f"[link] open in browser: {refusal.reason}", flush=True)
+    return _refused(str(refusal), refusal.status_code, reason=refusal.reason)
+
+
+def _open_after_asking(browser_name, url, request):
+    outcome = _ask_the_user(link_browser.card(_linked_name(), browser_name, url), request, "open in browser")
+    if outcome != "allowed":
+        return _not_allowed(outcome)
+    try:
+        return link_browser.open_page(browser_name, url)
+    except link_browser.OpenRefused as refusal:
+        return _open_refused(refusal)
+
+
+@app.post("/link/browser")
+def link_open_in_browser(body: LinkBrowserIn, request: Request):
+    if not _is_linked_app(request):
+        return _refused("Only the linked app can ask this.")
+    if not computer.available():
+        return _refused("Computer control is turned off in Arty Desktop.", reason="unavailable")
+    try:
+        url = link_browser.checked_address(body.url)
+        browser_name = link_browser.chosen_browser(body.browser, browser.connected_names())
+    except link_browser.OpenRefused as refusal:
+        return _open_refused(refusal)
+    if not _link_computer_busy.acquire(blocking=False):
+        return _refused("Arty Desktop is already waiting on another step.", 429, reason="busy")
+    try:
+        return _paused_refusal() or _open_after_asking(browser_name, url, request)
     finally:
         _link_computer_busy.release()
 
@@ -1159,6 +1354,9 @@ if __name__ == "__main__":
     import uvicorn
 
     _write_token()
+    pairing_code()
+    offer_link_if_wanted()
+    browser_connection.refresh_in_background()
     notifications.start()
     brain.watch_announcements(notifications.record_announcement)
     start_noticing()

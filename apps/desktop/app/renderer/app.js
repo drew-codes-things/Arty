@@ -5,6 +5,8 @@
 const HEALTH_EVERY_MS = 15000;
 const CALL_CHECK_TIMEOUT_MS = 5000;
 const WAKE_TIMEOUT_S = 120;
+const MS_PER_SECOND = 1000;
+const STAMP_REFRESH_MS = 60000;
 
 const $ = (id) => document.getElementById(id);
 const orb = $('orb');
@@ -337,13 +339,13 @@ function handle(event, stream) {
     case 'done':
       stream.replying = false;
       showMedia(stream.reply);
-      labelReply(stream.reply, stream.numbers);
+      labelReply(stream.reply, stream.numbers, Date.now());
       if (event.reply) notifyIfAway(event.reply);
       refreshStatus();
       break;
     case 'interrupted':
       stream.replying = false;
-      labelReply(stream.reply, stream.numbers);
+      labelReply(stream.reply, stream.numbers, Date.now());
       refreshStatus();
       break;
     default:
@@ -1086,14 +1088,29 @@ window.arty?.onTransparency((solidity) => {
   document.body.classList.toggle('see-through', solidity < 1);
 });
 
-function labelReply(element, numbers) {
+function replyTagText(sentAt, label) {
+  return [stampLabel(sentAt), label].filter(Boolean).join(' · ');
+}
+
+function labelReply(element, numbers, sentAt) {
   const label = replyModelLabel(numbers);
-  if (!element || !label) return;
+  const text = replyTagText(sentAt, label);
+  if (!element || !text) return;
   const tag = document.createElement('div');
   tag.className = 'msg-model';
-  tag.textContent = label;
+  tag.dataset.sentAt = String(sentAt);
+  tag.dataset.label = label;
+  tag.textContent = text;
   element.before(tag);
 }
+
+function refreshReplyStamps() {
+  for (const tag of log.querySelectorAll('.msg-model')) {
+    tag.textContent = replyTagText(Number(tag.dataset.sentAt), tag.dataset.label);
+  }
+}
+
+setInterval(refreshReplyStamps, STAMP_REFRESH_MS);
 
 function showStatus(messages) {
   const stats = chatStats(messages);
@@ -1132,7 +1149,7 @@ async function loadHistory() {
       if (typeof message.content !== 'string' || !message.content) continue;
       const element = add(message.role === 'user' ? 'you' : 'arty', message.content);
       if (message.role !== 'user') showMedia(element);
-      if (message.role !== 'user') labelReply(element, message.arty);
+      if (message.role !== 'user') labelReply(element, message.arty, message.time * MS_PER_SECOND);
     }
     showStatus(messages);
     if (presentation.on) markPastMessages();
@@ -1225,7 +1242,9 @@ async function saveConnection(event) {
 
 const SECONDS_PER_MINUTE = 60;
 const MILLISECONDS_PER_SECOND = 1000;
+const PHONE_LINK_CHECK_MILLISECONDS = 2000;
 let phoneCodeTimer = null;
+let phoneLinkWatch = null;
 
 function phoneCodeStatus(text, problem = false) {
   const status = $('phone-code-status');
@@ -1233,11 +1252,69 @@ function phoneCodeStatus(text, problem = false) {
   status.classList.toggle('problem', problem);
 }
 
-function hidePhoneCode() {
+function stopWatchingPhoneLink() {
+  clearInterval(phoneLinkWatch);
+  phoneLinkWatch = null;
   clearTimeout(phoneCodeTimer);
+  $('phone-code-image').removeAttribute('src');
+}
+
+function hidePhoneCode() {
+  stopWatchingPhoneLink();
   $('panel').classList.remove('showing-code');
   $('phone-code').hidden = true;
-  $('phone-code-image').removeAttribute('src');
+}
+
+async function showLinkedPhones() {
+  try {
+    const { phones } = await answerOf(await api('/linked-phones'));
+    fillPhoneList($('phone-list'), phones, removeLinkedPhone);
+  } catch (error) {
+    phoneCodeStatus(`Couldn't list the linked phones: ${error.message}`, true);
+  }
+}
+
+async function removeLinkedPhone(phone) {
+  try {
+    const { phones } = await answerOf(await api('/linked-phones/remove', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: phone.id }),
+    }));
+    fillPhoneList($('phone-list'), phones, removeLinkedPhone);
+    phoneCodeStatus(`Removed ${phone.name}. It can't use Arty any more.`);
+  } catch (error) {
+    phoneCodeStatus(`Couldn't remove ${phone.name}: ${error.message}`, true);
+  }
+}
+
+async function checkPhoneLink(offer) {
+  try {
+    const state = await answerOf(await api(`/phone-link/${encodeURIComponent(offer)}`));
+    if (state.state === 'waiting') return;
+    stopWatchingPhoneLink();
+    phoneCodeStatus(phoneLinkLine(state), state.state !== 'linked');
+    if (state.state === 'linked') showLinkedPhones();
+  } catch (error) {
+    phoneCodeStatus(`Couldn't check the code: ${error.message}`, true);
+  }
+}
+
+function endPhoneCode() {
+  stopWatchingPhoneLink();
+  phoneCodeStatus(phoneLinkLine({ state: 'gone' }), true);
+}
+
+async function makePhoneCode() {
+  stopWatchingPhoneLink();
+  phoneCodeStatus('Making the code…');
+  try {
+    const answer = await answerOf(await api('/phone-setup-code'));
+    $('phone-code-image').src = answer.image;
+    phoneCodeStatus(`For ${answer.address}. It stops working after ${Math.round(answer.seconds / SECONDS_PER_MINUTE)} minutes or once a phone uses it.`);
+    phoneCodeTimer = setTimeout(endPhoneCode, answer.seconds * MILLISECONDS_PER_SECOND);
+    phoneLinkWatch = setInterval(() => checkPhoneLink(answer.offer), PHONE_LINK_CHECK_MILLISECONDS);
+  } catch (error) {
+    phoneCodeStatus(error.message, true);
+  }
 }
 
 async function showPhoneCode() {
@@ -1246,23 +1323,12 @@ async function showPhoneCode() {
   hideStarfireLink();
   $('panel').classList.add('showing-code');
   $('phone-code').hidden = false;
-  phoneCodeStatus('Making the code…');
-  try {
-    const response = await api('/phone-setup-code');
-    const answer = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      phoneCodeStatus(answer.error || `Arty's local service answered ${response.status}.`, true);
-      return;
-    }
-    $('phone-code-image').src = answer.image;
-    phoneCodeStatus(`For ${answer.address}. It closes by itself after ${Math.round(answer.seconds / SECONDS_PER_MINUTE)} minutes.`);
-    phoneCodeTimer = setTimeout(hidePhoneCode, answer.seconds * MILLISECONDS_PER_SECOND);
-  } catch (error) {
-    phoneCodeStatus(`Couldn't reach Arty's local service: ${error.message}`, true);
-  }
+  await makePhoneCode();
+  showLinkedPhones();
 }
 
 $('phone-code-close').addEventListener('click', hidePhoneCode);
+$('phone-code-new').addEventListener('click', makePhoneCode);
 window.arty?.onPhoneCode(whenNotPresenting(showPhoneCode));
 
 function chromeSitesStatus(text, problem = false) {
@@ -1295,6 +1361,34 @@ async function forgetChromeSite(site) {
   }
 }
 
+async function connectBrowser(name) {
+  try {
+    showBrowsers(await answerOf(await api('/browser/found/connect', { method: 'POST' })));
+    chromeSitesStatus(`Set up ${name} to connect by itself. If it is open, it connects within half a minute.`);
+  } catch (error) {
+    chromeSitesStatus(`Couldn't connect ${name}: ${error.message}`, true);
+  }
+}
+
+function showBrowsers(found) {
+  fillBrowserList($('browser-list'), found.browsers || [], connectBrowser);
+  const button = $('browsers-automatic');
+  button.textContent = automaticButtonLabel(found.automatic === true);
+  button.dataset.automatic = found.automatic === true ? 'on' : 'off';
+}
+
+async function switchAutomaticBrowsers() {
+  const enabled = $('browsers-automatic').dataset.automatic !== 'on';
+  try {
+    showBrowsers(await answerOf(await api('/browser/found/automatic', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+    })));
+    chromeSitesStatus(enabled ? 'Browsers with the extension now connect by themselves.' : 'Browsers now need the pairing code.');
+  } catch (error) {
+    chromeSitesStatus(`Couldn't change that: ${error.message}`, true);
+  }
+}
+
 async function showChromeSites() {
   hidePhoneCode();
   hideStarfireLink();
@@ -1302,8 +1396,10 @@ async function showChromeSites() {
   $('chrome-sites').hidden = false;
   chromeSitesStatus('Loading…');
   try {
-    const [{ sites }, { code }] = await Promise.all([answerOf(await api('/browser/sites')), answerOf(await api('/browser/pairing'))]);
+    const [{ sites }, { code }, found] = await Promise.all([answerOf(await api('/browser/sites')), answerOf(await api('/browser/pairing')),
+      answerOf(await api('/browser/found'))]);
     fillSiteList($('site-list'), sites, forgetChromeSite);
+    showBrowsers(found);
     $('pairing-code').textContent = code;
     chromeSitesStatus('');
   } catch (error) {
@@ -1312,6 +1408,7 @@ async function showChromeSites() {
 }
 
 $('chrome-sites-close').addEventListener('click', hideChromeSites);
+$('browsers-automatic').addEventListener('click', switchAutomaticBrowsers);
 window.arty?.onChromeSites(whenNotPresenting(showChromeSites));
 $('connect-form').addEventListener('submit', saveConnection);
 $('connect-cancel').addEventListener('click', hideConnect);
@@ -1365,7 +1462,22 @@ function groupedCode(code) {
 async function refreshLink() {
   const state = await answerOf(await api('/link'));
   $('link-unlink').hidden = !state.linked;
-  linkStatus(state.linked ? `Linked with ${state.name}.` : 'Not linked yet.');
+  const automatic = $('link-automatic');
+  automatic.textContent = linkAutomaticLabel(state.links_by_itself === true);
+  automatic.dataset.automatic = state.links_by_itself === true ? 'on' : 'off';
+  linkStatus(linkStateLine(state));
+}
+
+async function switchAutomaticLink() {
+  const enabled = $('link-automatic').dataset.automatic !== 'on';
+  try {
+    await answerOf(await api('/link/automatic', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+    }));
+    await refreshLink();
+  } catch (error) {
+    linkStatus(`Couldn't change that: ${error.message}`, true);
+  }
 }
 
 async function showStarfireLink() {
@@ -1404,6 +1516,7 @@ async function unlinkStarfire() {
 }
 
 $('link-make').addEventListener('click', makeLinkCode);
+$('link-automatic').addEventListener('click', switchAutomaticLink);
 $('link-unlink').addEventListener('click', unlinkStarfire);
 $('link-close').addEventListener('click', hideStarfireLink);
 window.arty?.onStarfireLink(whenNotPresenting(showStarfireLink));

@@ -1,6 +1,7 @@
 """Quick actions: which everyday requests code handles directly, and what it takes from them.
 Run from brain/: python3 -m unittest discover tests"""
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,13 @@ class Sums(unittest.TestCase):
         for text in ["who won the 2026 world cup", "what's the best way to learn python", "remind me at 6", "what is 42",
                      "is CT 204 running", "1 divided by 0", "9 to the power of 99999"]:
             self.assertIsNone(quick.calculate(text), text)
+
+    def test_huge_sums_left_to_the_model_quickly(self):
+        for text in ["what is (((9^100)^100)^100)^3", "what is " + "9^99*" * 60 + "9", "what is (-8)^0.5",
+                     "what is 1" + " + 1" * 400, "what is " + "9" * 5000 + "%"]:
+            started = time.perf_counter()
+            self.assertIsNone(quick.calculate(text), text[:40])
+            self.assertLess(time.perf_counter() - started, 0.5, text[:40])
 
 
 class Addresses(unittest.TestCase):

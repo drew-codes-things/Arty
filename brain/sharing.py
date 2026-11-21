@@ -16,7 +16,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import connections
 import media
+import web_host
 
 sys.path.insert(0, os.environ.get("ARTY_MCP_DIR", str(Path(__file__).resolve().parent.parent / "mcp")))
 remote = importlib.import_module("remote")
@@ -35,13 +37,15 @@ RECORDING_GRACE_SECONDS = 60
 SCREENSHOT_TIMEOUT_SECONDS = 30
 FILE_TIMEOUT_SECONDS = 180
 WEB_TIMEOUT_SECONDS = 20
+OWN_APP_REFUSAL = "{host} is one of your own apps behind the starfire sign-in, so Arty never downloads from it"
+OWN_APPS_UNREADABLE = "the list of your own app addresses can't be read, so Arty downloads nothing until it is fixed"
 MAX_WEB_BYTES = 25 * 1024 * 1024
 PICTURE_CANDIDATES = 6
 MAX_PICTURE_BYTES = 3 * 1024 * 1024
 PICTURE_EDGE = 2048
 PRIVATE_FOLDERS = (".ssh", ".gnupg", ".password-store", ".local/share/keyrings", ".config/chromium", ".config/google-chrome",
                    ".mozilla", ".pki", ".aws", ".kube", ".docker", ".config/gh", ".mcp", ".gmail-chrome", ".browser-profile",
-                   ".local/browser-agent")
+                   ".apps-browser-profile", ".local/browser-agent")
 PRIVATE_NAMES = (".env", ".netrc", ".git-credentials", ".pem", ".key", "id_rsa", "id_ed25519", "id_ecdsa", "cookies",
                  "credentials", "token", "secret", "password")
 DOCUMENTS_FOLDER = "~/Documents/Arty"
@@ -185,25 +189,34 @@ def is_private(path: str) -> bool:
     return any(f"/{folder}/" in f"{lowered}/" for folder in PRIVATE_FOLDERS) or any(part in name for part in PRIVATE_NAMES)
 
 
-def send_file(path) -> str:
+def desktop_file(path, source: str = "desktop file") -> tuple[dict, str]:
     if not str(path or "").strip():
-        return "Say which file to send, e.g. ~/Pictures/cat.jpg."
+        raise ShareError("Say which file, e.g. ~/Pictures/cat.jpg.")
     code, real = remote.text(f"realpath -e {remote.quoted(remote.expand(str(path)))}")
     target = real.strip()
     if code != 0 or not target:
-        return f"There's no file at {path} on my desktop."
+        raise ShareError(f"There's no file at {path} on my desktop.")
     if is_private(target):
-        return f"I won't send {target}: it's private (keys, passwords or a browser profile)."
+        raise ShareError(f"I won't open {target}: it's private (keys, passwords or a browser profile).")
     code, size = remote.text(f"stat -c %s {remote.quoted(target)}")
     if code != 0 or not size.strip().isdigit():
-        return f"There's no file at {target} on my desktop."
+        raise ShareError(f"There's no file at {target} on my desktop.")
     if int(size) > media.MAX_UPLOAD_BYTES:
-        return f"{target} is too big to send ({int(size) // (1024 * 1024)} MB; the limit is {media.MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."
+        raise ShareError(f"{target} is too big to send ({int(size) // (1024 * 1024)} MB; the limit is {media.MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
     code, data = remote.ssh(f"cat {remote.quoted(target)}", timeout=FILE_TIMEOUT_SECONDS)
     if code != 0:
-        return f"Couldn't read {target}: {data[:300].decode('utf-8', errors='replace')}"
+        raise ShareError(f"Couldn't read {target}: {data[:300].decode('utf-8', errors='replace')}")
     name = target.rstrip("/").rsplit("/", 1)[-1] or "file"
-    meta = media.save_bytes(data, name, media.guess_mime(name), "desktop file")
+    return media.save_bytes(data, name, media.guess_mime(name), source), name
+
+
+def send_file(path) -> str:
+    if not str(path or "").strip():
+        return "Say which file to send, e.g. ~/Pictures/cat.jpg."
+    try:
+        meta, name = desktop_file(path)
+    except ShareError as error:
+        return str(error)
     return _sent(meta, name)
 
 
@@ -249,10 +262,22 @@ class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(PinnedHTTPSConnection, request)
 
 
+def check_outside_own_apps(url: str):
+    try:
+        is_own_app = connections.is_own_app_address(url, connections.own_app_hosts_or_refuse())
+    except connections.UnreadableOwnApps:
+        raise ShareError(OWN_APPS_UNREADABLE) from None
+    except web_host.UnclearAddress as error:
+        raise ShareError(str(error)) from None
+    if is_own_app:
+        raise ShareError(OWN_APP_REFUSAL.format(host=connections.host_of(url)))
+
+
 def check_public_url(url: str):
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ShareError(f"not a web address: {url}")
+    check_outside_own_apps(url)
     if not is_public_host(parts.hostname):
         raise ShareError(f"{parts.hostname} isn't a public website")
 

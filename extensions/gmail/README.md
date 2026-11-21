@@ -4,7 +4,7 @@
 
 # Arty Gmail Reader
 
-**A small Chrome extension that lets Arty read your Gmail through an ordinary, signed-in Chrome window on its own PC - no app passwords, no IMAP, and nothing it can send or delete.**
+**A small Chrome extension that lets Arty read your Gmail through an ordinary, signed-in Chrome window on its own PC, and send an email you approved - no app passwords, no IMAP, and nothing it can delete.**
 
 [![Chrome](https://img.shields.io/badge/chrome-manifest%20v3-4285F4?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions)
 [![JavaScript](https://img.shields.io/badge/javascript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
@@ -34,7 +34,13 @@ This extension (long-polling the agent)  ->  runs the Gmail search in the signed
 Reads the results list back  ->  Arty sorts what matters and answers
 ```
 
-It only reads: it can open a search and read the results, but can't send, delete, archive or change anything.
+It reads: it can open a search and read the results. It can't delete, archive or change anything.
+
+It sends one email only when the brain asks after you said yes to exactly that email in Arty's chat
+([how that works](../../docs/acting-in-your-apps.md)). It opens a new email with the approved addresses, subject and
+text, reads every field back, and presses Send only if they all match (no other addresses, no Bcc, exactly one Send
+button). Then it waits for Gmail's "Message sent", or finds the email in Sent. It never sends twice: if it can't tell
+whether the email went, it says so and you look in Sent. Your Gmail signature, if you have one, is added by Gmail.
 
 The agent only answers requests that carry its key. On every start it copies the key into this folder as `agent-token.json` (readable only by its owner); the extension reads it from its own files, which web pages can't do, and sends it with each request.
 
@@ -55,8 +61,8 @@ and reopen the window.
 
 ## Usage
 
-Ask Arty "any new emails?", "check my email" or "find the email from ...". The window has to stay open and signed
-in - if it isn't, Arty says it couldn't check your email and asks you to sign in again. The morning briefing lists
+Ask Arty "any new emails?", "check my email", "find the email from ..." or "email sam@example.org to say ...". The
+window has to stay open and signed in - if it isn't, Arty says it couldn't check your email and asks you to sign in again. The morning briefing lists
 your important unread emails the same way.
 
 ---

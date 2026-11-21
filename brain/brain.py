@@ -24,6 +24,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import auto_choice
+import browser_apps
 import calendar_feed
 import code_sandbox
 import connections
@@ -33,8 +34,10 @@ import drafts
 import email_watch
 import greetings
 import hidden_notes
+import inbox_tidy
 import keepalive
 import lectures
+import mail_box
 import media
 import memory_edits
 import model_choice
@@ -42,12 +45,15 @@ import models
 import notify
 import personal
 import phone
+import phone_link
 import policy
 import private_text
 import quick
 import remote_sessions
 import research
+import room
 import safety
+import said_to_them
 import sharing
 import store
 import style
@@ -71,17 +77,18 @@ from memory_facts import (remember_reply, forget_reply, restore_memory_reply, ex
 from model_choice import (MODEL_ID, ENGINE_DOWN, VISION_KEEP_ALIVE, VISION_MAIN_RETURN_SECONDS, chosen_model,
     session_keep_alive, use_requested_model, arty_description, chat_model, main_model_return)
 from native_calls import NATIVE_TOOL_ERRORS, look_up_first, declined_reply, run_native, convert_attachment
-from attachments import vision_model, expand_attachments, has_new_picture, to_engine_messages
+from attachments import vision_model, expand_attachments, has_new_picture, to_engine_messages, typed_texts
 from agent_loop import (know_the_page, private_upload, turn_rounds, WindowOverflow, MessageTooLong, AgentRun, run_agent,
                         ROUNDS_KEY)
 from honesty import client_tool_runs, empty_reply, be_honest
-from shortcuts import (addressed_to_arty, TALKED_ABOUT, recap_conversations, phone_action, asks_for_something_else,
-    quick_action, judge_answer, researched_answer, solo_turn)
+from shortcuts import (addressed_to_arty, TALKED_ABOUT, recap_conversations, phone_action, camera_action, asks_for_something_else,
+    quick_action, judge_answer, researched_answer, solo_turn, said_aloud)
 from agent_turns import agent_turn
 from scheduler import gather_writing, scheduler_loop
 from background_tasks import worker_loop, decide_task, public_task
 from alerts import record_alert
-from api_keys import issue_device_key, make_device_key, is_main_key, is_device_key, remote_caller
+from api_keys import (issue_device_key, make_device_key, is_main_key, is_device_key, is_room_key, remote_caller, add_phone,
+                      refuse_a_shared_room_key)
 
 
 __all__ = ["APP_NOTES", "AgentRun", "NOT_A_FACT", "OFFER_SENTENCE", "ARTY_ENGINE_URL", "REMEMBER_REQUEST", "ROUNDS_KEY",
@@ -136,11 +143,21 @@ def private_text_of_turn(messages: list, client_tools) -> private_text.HiddenTex
 
 
 def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
-             agent=False, on_thinking=None, on_model=None):
+             agent=False, on_thinking=None, on_model=None, early_text_replaced=False):
     """One chat turn. Returns (answer, tools_used, raw, client_calls); client_calls is set when the
     model wants the calling app to run one of its own tools, and answer is then whatever text came with it.
-    on_text gets the answer's first sentences early (see drafts.py); the answer always starts with them.
+    on_text gets the answer's first sentences early (see drafts.py); the answer starts with them unless
+    early_text_replaced (the app shows the answer in their place) and a false claim among them was taken back.
     client names the calling app when it says ("phone": the Arty phone app, which can open calls and texts)."""
+    with owner_activity.chatting():
+        answer, tools_used, raw, client_calls = turn_answer(messages, requested_model, client_tools, skip_groups, on_text,
+                                                            client, any_installed, agent, on_thinking, on_model,
+                                                            early_text_replaced)
+    return phone.only_from_code(answer, tools_used), tools_used, raw, client_calls
+
+
+def turn_answer(messages, requested_model, client_tools, skip_groups, on_text, client, any_installed, agent, on_thinking,
+                on_model, early_text_replaced=False):
     if solo := models.solo_choice(requested_model):
         return solo_turn(solo["name"], messages, client)
     try:
@@ -149,15 +166,19 @@ def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on
         private = private_text_of_turn(messages, client_tools)
         stream = private_text.GuardedStream(on_text, private) if on_text else None
         answer, tools_used, raw, client_calls = arty_turn(messages, requested_model, client_tools, skip_groups, stream, client,
-                                                          any_installed, agent, on_thinking, on_model)
+                                                          any_installed, agent, on_thinking, on_model, early_text_replaced)
     except MessageTooLong as too_long:
         return str(too_long), [], {}, None
     kept = stream.kept(answer or "") if stream else 0
     return private_text.without_hidden_text(answer, private, kept), tools_used, raw, client_calls
 
 
+def system_text_of(messages: list) -> str:
+    return "\n".join(message_text(m) for m in messages if m.get("role") == "system").strip()
+
+
 def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
-              agent=False, on_thinking=None, on_model=None):
+              agent=False, on_thinking=None, on_model=None, early_text_replaced=False):
     if agent:
         return agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking, client)
     config = connections.load_config()
@@ -187,10 +208,21 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
             reply = tidy_answer(recap_conversations(config, said))
             archive_turn(config, said, reply, ["recall_conversations"])
             return reply, ["recall_conversations"], {}, None
-        if action := phone_action(said):
+        if action := phone_action(said, client):
             reply = phone.reply(action, client)
             archive_turn(config, said, phone.without_action(reply), [f"phone_{action['kind']}"])
             return reply, [f"phone_{action['kind']}"], {}, None
+        if told := said_to_them.tell_request(said):
+            reply = said_aloud(told, client, system_text_of(messages), config.get("user_name", "").strip())
+            archive_turn(config, said, reply, [])
+            return reply, [], {}, None
+        if client in phone.PHONE_CLIENTS and (shot := camera_action(said)):
+            reply = phone.camera_reply(shot, client)
+            archive_turn(config, said, phone.without_action(reply), ["phone_camera"])
+            return reply, ["phone_camera"], {}, None
+        if asked := quick.unclear_request(said):
+            archive_turn(config, said, asked, [])
+            return asked, [], {}, None
         if not quick.refers_back(said) and (done := quick_action(said, after_a_question=greetings.answers_a_question(messages))):
             reply, tool = done
             archive_turn(config, said, reply, [tool])
@@ -247,11 +279,13 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
             answer = tidy_answer(answer)
             archive_turn(config, said, answer, used)
             return answer, used, {}, None
+    typed = typed_texts(messages)
     messages, attached = expand_attachments(messages, look_keep_alive(config, on_routed_model))
     conversation = to_engine_messages([m for m in messages if m.get("role") != "system"])
-    client_system = "\n".join(message_text(m) for m in messages if m.get("role") == "system").strip()
+    client_system = system_text_of(messages)
     # With an attachment in the chat, the conversion tool is always on offer, however few tools the model gets.
-    state = {"messages": conversation, "context": {}, "groups": ["files"] if attached else []}
+    state = {"messages": conversation, "context": policy.starting_context(attached), "groups": ["files"] if attached else [],
+             "typed": typed}
     # A "remind me" answer may be replaced whole by ensure_reminder, so it isn't sent early.
     users = [m for m in conversation if m.get("role") == "user"]
     draft = drafts.Draft(on_text, tidy_answer, OFFER_SENTENCE.search) \
@@ -286,6 +320,8 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
         return content, outcome["tools_used"], outcome["raw"], outcome["calls"]
     if outcome["status"] == "waiting":  # can't happen in chat mode, but never lose the turn
         outcome = {"answer": outcome["waiting"]["message"], "tools_used": outcome["tools_used"], "raw": outcome["raw"]}
+    if outcome.get("asks_approval"):
+        return approval_reply(config, conversation, client, draft, outcome)
     answer = tidy_answer(trim_offers(outcome["answer"]))
     fallback = ""
     if not answer:
@@ -297,12 +333,13 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
     answer = reminded
     answer = HASHTAG_LINE.sub("", answer)  # hashtags belong in drafted posts, not in answers
     client_used, client_failed = client_tool_runs(conversation)
+    honest = answer
     if answer != fallback:
-        answer = be_honest(answer, client_used + outcome["tools_used"], client_failed + state.get("context", {}).get("failed", []),
-                           draft.everything() if draft else "", said if last_user is not None else "", config["model"],
-                           config.get("keep_alive"), state.get("prefix"), outcome.get("sandbox_line", ""))
-    if draft:
-        answer = draft.finish(answer)
+        honest = be_honest(answer, client_used + outcome["tools_used"], client_failed + state.get("context", {}).get("failed", []),
+                           draft.everything() if draft and not early_text_replaced else "", said if last_user is not None else "",
+                           config["model"], config.get("keep_alive"), state.get("prefix"), outcome.get("sandbox_line", ""))
+    took_back_early_text = early_text_replaced and honest != answer
+    answer = draft.finish(honest) if draft and not took_back_early_text else honest
     # Small models sometimes describe the conversion but drop the link; never lose a file the user asked for.
     conversions = [message_text(m) for m in conversation if m.get("role") == "tool" and m.get("tool_name") in SENDS_FILES]
     for result in conversions + ([converted] if converted else []):
@@ -322,6 +359,15 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
     return answer, outcome["tools_used"], outcome["raw"], None
 
 
+def approval_reply(config, conversation, client, draft, outcome):
+    answer = draft.finish(outcome["answer"]) if draft else outcome["answer"]
+    user_messages = [m for m in conversation if m.get("role") == "user"]
+    user_text = user_words(message_text(user_messages[-1]), client) if user_messages else ""
+    if user_text:
+        archive_turn(config, user_text, answer, outcome["tools_used"])
+    return answer, outcome["tools_used"], outcome["raw"], None
+
+
 # ---------- HTTP API ----------
 
 
@@ -329,7 +375,8 @@ class ChatJobs:
     """Chat turns run in the background for clients behind Cloudflare, which cuts off any request
     that waits over 100 seconds: POST starts a turn and returns an id, GET polls it.
     Kept in memory only (a brain restart forgets unfinished jobs) and pruned after an hour.
-    While it runs, "partial" holds the answer's first sentences (the final answer starts with them)."""
+    While it runs, "partial" holds the answer's first sentences; the final answer starts with them unless a false claim
+    among them was taken back, which the apps allow as they show the answer in place of "partial"."""
     KEEP_SECONDS = 3600
 
     class Busy(Exception):
@@ -365,7 +412,8 @@ class ChatJobs:
         chosen = {}
         try:
             answer, tools_used, raw, _ = run_turn(messages, model, on_text=lambda text: self._add_partial(job_id, text),
-                                                  client=client, on_model=lambda pick: self._set_model(job_id, chosen, pick))
+                                                  client=client, on_model=lambda pick: self._set_model(job_id, chosen, pick),
+                                                  early_text_replaced=True)
             outcome = {"status": "done", "answer": answer, "tools_used": tools_used,
                        "arty": auto_choice.turn_report(chosen, raw, tools_used)}
         except Exception:
@@ -399,8 +447,11 @@ class ChatJobs:
 
 chat_jobs = ChatJobs()
 device_requests = devices.Requests()
+phone_offers = phone_link.Offers()
 remote = remote_sessions.Sessions()
 direct_chat_slots = threading.BoundedSemaphore(MAX_DIRECT_CHATS)
+owner_activity = room.OwnerActivity()
+room_gate = room.Gate(owner=owner_activity)
 
 
 def logged_request_line(line: str) -> str:
@@ -519,6 +570,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.download(segments)
         if segments[:1] == [web_app.PREFIX]:
             return self.web_app_file(segments)
+        if is_room_key(self.headers.get("Authorization", "")):
+            return self.room_request("GET", segments)
         if not self.authorised():
             return
         try:
@@ -533,6 +586,26 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("request failed")
             self.send_json(500, {"error": {"message": GENERIC_ERROR}})
 
+    def room_request(self, method, segments):
+        try:
+            room.admit(room_gate, self.caller_address())
+            if method == "GET" and segments in (["v1", "models"], ["models"]):
+                return self.send_json(200, room.model_list())
+            if method != "POST" or segments not in (["v1", "chat", "completions"], ["chat", "completions"]):
+                raise ApiError(403, room.NOT_A_ROOM_PATH)
+            messages = valid_messages(self.body(room.MAX_ROOM_BODY_BYTES).get("messages"))
+            with room_gate.turn():
+                answer, tools_used = room.room_turn(messages, room_gate.owner)
+            log.info("answered the room after %s", ", ".join(tools_used) or "no steps")
+            return self.send_json(200, room.completion(answer))
+        except ApiError as error:
+            return self.send_json(error.status, {"error": {"message": str(error)}})
+        except CLIENT_DROPPED_ERRORS:
+            log.info("%s hung up before the room answer", self.address_string())
+        except Exception:
+            log.exception("room request failed")
+            return self.send_json(500, {"error": {"message": GENERIC_ERROR}})
+
     def relay(self, method, segments, query, body):
         try:
             caller = remote_caller(self.headers.get("Authorization", ""))
@@ -546,6 +619,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.relay("GET", segments, query, {})
         if segments == ["v1", "devices"]:
             return self.send_json(200, {"devices": store.list_devices()})
+        if len(segments) == 4 and segments[:3] == ["v1", "phone-link", "offers"]:
+            self.require_main_key("only Arty's own key can follow a phone link code")
+            return self.send_json(200, phone_offers.status(segments[3]))
         if segments == ["v1", "device", "pending"]:
             waiting = device_requests.pending((query.get("code") or [""])[0])
             if waiting is None:
@@ -662,6 +738,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.hook("POST")
         if segments[:2] == ["v1", "device"] and segments[2:] in (["start"], ["token"]):
             return self.unkeyed_device(segments[2])
+        if segments[:2] == ["link", "phone"] and segments[2:] in (["begin"], ["finish"]):
+            return self.phone_link_step(segments[2])
+        if is_room_key(self.headers.get("Authorization", "")):
+            return self.room_request("POST", segments)
         if not self.authorised():
             return
         try:
@@ -734,9 +814,33 @@ class Handler(BaseHTTPRequestHandler):
         except devices.DeviceError as error:
             return self.send_json(error.status, {"error": {"message": str(error)}})
 
+    def require_main_key(self, refusal: str) -> None:
+        if not is_main_key(self.headers.get("Authorization", "")):
+            raise ApiError(403, refusal)
+
+    def phone_link_step(self, step: str):
+        try:
+            body = self.body(UNKEYED_BODY_BYTES)
+            address = self.caller_address()
+            if step == "begin":
+                return self.send_json(200, phone_offers.begin(body.get("offer"), text_field(body, "name"), body.get("share"), address))
+            finished = phone_offers.finish(body.get("offer"), body.get("session"), body.get("proof"),
+                                           lambda name, key: add_phone(name, address, key), body.get("seal"))
+            return self.send_json(200, finished)
+        except ApiError as error:
+            return self.send_json(error.status, {"error": {"message": str(error)}})
+        except phone_link.LinkRefused as error:
+            return self.send_json(error.status, {"error": {"message": str(error)}})
+
     def dispatch_post(self, segments, request):
         if segments[:2] == ["v1", "remote"]:
             return self.relay("POST", segments, {}, request)
+        if segments == ["v1", "phone-link", "offers"]:
+            self.require_main_key("only Arty's own key can make a phone link code")
+            try:
+                return self.send_json(201, phone_offers.create(request.get("access")))
+            except phone_link.LinkRefused as error:
+                raise ApiError(error.status, str(error)) from None
         if len(segments) == 4 and segments[:2] == ["v1", "devices"] and segments[3] == "remote-control":
             return self.switch_remote_control(segments[2], request)
         if segments == ["v1", "devices"]:
@@ -779,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
             messages = valid_messages(request.get("messages"))
             try:
                 # "client": "phone" from the Arty phone app, which can open calls and texts (phone.py).
-                job_id = chat_jobs.start(messages, str(request.get("model") or ""), client_name(request))
+                job_id = chat_jobs.start(messages, str(request.get("model") or ""), calling_client(request))
             except ChatJobs.Busy:
                 raise ApiError(503, "Arty is busy with other answers; try again in a moment") from None
             return self.send_json(202, {"id": job_id, "status": "running"})
@@ -819,6 +923,8 @@ class Handler(BaseHTTPRequestHandler):
             except NATIVE_TOOL_ERRORS as error:
                 raise ApiError(400, f"{name} couldn't use those arguments ({type(error).__name__})") from None
             return self.send_json(200, {"result": result})
+        if name in browser_apps.TOOLS:
+            raise ApiError(400, f"{name} only works inside a conversation")
         connections.hub.refresh()
         if name not in connections.hub.routes:
             raise ApiError(404, f"unknown tool {name}")
@@ -951,7 +1057,7 @@ class Handler(BaseHTTPRequestHandler):
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
         turn = (messages, requested_model, client_tools, skip_groups)
-        client = client_name(request)
+        client = calling_client(request)
         chosen = {}
         if not request.get("stream"):
             try:
@@ -1061,10 +1167,20 @@ def load_local_addon():
 local_addon = load_local_addon()
 
 
+def calling_client(request: dict) -> str:
+    return phone.client_for(client_name(request), request.get("features"))
+
+
+def connect_inbox_tidy():
+    inbox_tidy.connect(mail_box.TidyMailbox())
+
+
 if __name__ == "__main__":
+    refuse_a_shared_room_key()
     init_storage(connections.load_config())
     code_sandbox.warn_about_a_missing_token()
     notify.listeners.append(record_announcement)
+    connect_inbox_tidy()
     threading.Thread(target=lectures.worker, args=(complete_text, notify.send), name="lectures", daemon=True).start()
     threading.Thread(target=worker_loop, name="worker", daemon=True).start()
     threading.Thread(target=scheduler_loop, name="scheduler", daemon=True).start()

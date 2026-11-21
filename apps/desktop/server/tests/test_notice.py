@@ -137,8 +137,8 @@ def test_linux_without_either_cannot_tell():
 def test_a_notice_is_offered_to_the_window_and_answered_by_arty(monkeypatch):
     sent, saved = [], []
 
-    def llm_stream(user_input, extra_system=None, note=""):
-        sent.append((user_input, note))
+    def llm_stream(user_input, extra_system=None, note="", arty_started=False):
+        sent.append((user_input, note) if not arty_started else (user_input, note, "started by Arty"))
         yield "Welcome back."
 
     monkeypatch.setattr(arty_server.brain, "llm_stream", llm_stream)
@@ -150,7 +150,7 @@ def test_a_notice_is_offered_to_the_window_and_answered_by_arty(monkeypatch):
     response = client.post("/notice/reply", json={"id": notice_id, "speak": False}, headers=HEADERS)
     lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
     assert lines[-1]["reply"] == "Welcome back."
-    assert sent == [(Notice("back", 35).said(), Notice("back", 35).prompt())]
+    assert sent == [(Notice("back", 35).said(), Notice("back", 35).prompt(), "started by Arty")]
     assert saved == [(Notice("back", 35).said(), "Welcome back.")]
     again = client.post("/notice/reply", json={"id": notice_id, "speak": False}, headers=HEADERS)
     assert json.loads(again.text.splitlines()[0])["type"] == "cancelled"

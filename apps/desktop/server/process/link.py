@@ -11,9 +11,14 @@ from process import config as cfg
 from process import shown_text, spake2
 
 LINK_FILE = cfg.DATA_ROOT / ".arty_link"
+LOCAL_OFFER_NAME = ".arty_link_offer"
+LOCAL_OFFER_FILE = cfg.DATA_ROOT / LOCAL_OFFER_NAME
+LOCAL_SECRET_BYTES = 16
 CODE_DIGITS = 6
 CODE_LIFETIME_SECONDS = 120
 MAX_WRONG_CODES = 5
+MAX_LOCAL_SESSIONS = 8
+LOCAL_SESSION_SECONDS = 30
 NAME_CHARS = 40
 MAX_SENT_NAME_CHARS = 200
 NAME_MARKS = set(" .,-_'()&+")
@@ -113,11 +118,45 @@ class RefusalPause:
 
 
 class Link:
-    def __init__(self, path, clock=time.monotonic):
+    def __init__(self, path, offer_path=None, clock=time.monotonic):
         self._path = path
+        self.offer_path = offer_path
         self._clock = clock
         self._lock = threading.Lock()
         self._pairing = None
+        self._local = None
+
+    def offer_locally(self):
+        with self._lock:
+            if self.offer_path is None:
+                return False
+            if self._load().get("fingerprint"):
+                self._drop_local_offer()
+                return False
+            self._write_local_offer()
+            return True
+
+    def withdraw_local_offer(self):
+        with self._lock:
+            self._drop_local_offer()
+
+    def _write_local_offer(self):
+        code = secrets.token_hex(LOCAL_SECRET_BYTES)
+        self.offer_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_private(self.offer_path, code)
+        self._local = {"code": code, "sessions": {}}
+
+    def _drop_local_offer(self):
+        self._local = None
+        if self.offer_path is not None:
+            self.offer_path.unlink(missing_ok=True)
+
+    def _pairing_for(self, local):
+        if not local:
+            return self._usable_pairing()
+        if self._local is None:
+            raise PairingRefused("Arty Desktop isn't offering to link by itself right now. Use a code instead.")
+        return self._local
 
     def start_pairing(self):
         with self._lock:
@@ -125,39 +164,65 @@ class Link:
             self._pairing = {"code": code, "expires": self._clock() + CODE_LIFETIME_SECONDS, "wrong": 0, "session": None}
         return {"code": code, "expires_in": CODE_LIFETIME_SECONDS}
 
-    def begin_pair(self, name, app_share):
+    def begin_pair(self, name, app_share, local=False):
         try:
             spake2.element_from_hex(app_share)
         except spake2.BadShare as problem:
             raise BadPairingShare(str(problem))
         with self._lock:
-            pairing = self._usable_pairing()
-            if pairing["wrong"] >= MAX_WRONG_CODES:
-                self._pairing = None
-                raise PairingRefused("Too many tries. Make a new code in Arty Desktop.")
-            pairing["wrong"] += 1
+            pairing = self._pairing_for(local)
+            if not local:
+                self._count_a_code_try(pairing)
             secret = spake2.new_secret()
             arty_share = spake2.share_hex(secret, pairing["code"], spake2.ARTY)
             key = spake2.shared_key(secret, pairing["code"], spake2.ARTY, app_share, arty_share)
-            session = secrets.token_hex(SESSION_BYTES)
-            pairing["session"] = {"id": session, "key": key, "name": name}
-            return {"session": session, "share": arty_share, "proof": spake2.proof(key, spake2.ARTY)}
+            session = {"id": secrets.token_hex(SESSION_BYTES), "key": key, "name": name, "started": self._clock()}
+            if local:
+                self._keep_local_session(pairing, session)
+            else:
+                pairing["session"] = session
+            return {"session": session["id"], "share": arty_share, "proof": spake2.proof(key, spake2.ARTY)}
 
-    def finish_pair(self, session_id, app_proof):
+    def _count_a_code_try(self, pairing):
+        if pairing["wrong"] >= MAX_WRONG_CODES:
+            self._pairing = None
+            raise PairingRefused("Too many tries. Make a new code in Arty Desktop.")
+        pairing["wrong"] += 1
+
+    def _keep_local_session(self, pairing, session):
+        sessions = pairing["sessions"]
+        for stale in [sid for sid, kept in sessions.items() if self._clock() - kept["started"] > LOCAL_SESSION_SECONDS]:
+            del sessions[stale]
+        while len(sessions) >= MAX_LOCAL_SESSIONS:
+            del sessions[next(iter(sessions))]
+        sessions[session["id"]] = session
+
+    def _started_session(self, pairing, session_id, local):
+        if not isinstance(session_id, str):
+            return None
+        if not local:
+            session, pairing["session"] = pairing["session"], None
+            same = session is not None and hmac.compare_digest(session_id.encode(), session["id"].encode())
+            return session if same else None
+        session = pairing["sessions"].pop(session_id, None)
+        if session is None or self._clock() - session["started"] > LOCAL_SESSION_SECONDS:
+            return None
+        return session
+
+    def finish_pair(self, session_id, app_proof, local=False):
         with self._lock:
-            pairing = self._usable_pairing()
-            session = pairing["session"]
-            pairing["session"] = None
-            is_this_session = (session is not None and isinstance(session_id, str)
-                               and hmac.compare_digest(session_id.encode(), session["id"].encode()))
-            if not is_this_session:
+            pairing = self._pairing_for(local)
+            session = self._started_session(pairing, session_id, local)
+            if session is None:
                 raise PairingRefused("That pairing was not started here, or a newer one replaced it. Try again.")
             expected = spake2.proof(session["key"], spake2.APP)
             if not isinstance(app_proof, str) or not hmac.compare_digest(app_proof.encode(), expected.encode()):
                 raise PairingRefused("That code is not right.")
             self._pairing = None
+            self._drop_local_offer()
             token = spake2.link_token(session["key"])
-            self._save({"name": _clean_name(session["name"]), "fingerprint": fingerprint(token), "linked": int(time.time())})
+            self._save({"name": _clean_name(session["name"]), "fingerprint": fingerprint(token), "linked": int(time.time()),
+                        "automatic": bool(local)})
 
     def _usable_pairing(self):
         pairing = self._pairing
@@ -184,7 +249,8 @@ class Link:
         record = self._load()
         if not record.get("fingerprint"):
             return {"linked": False}
-        return {"linked": True, "name": _clean_name(record.get("name")), "since": record.get("linked")}
+        return {"linked": True, "name": _clean_name(record.get("name")), "since": record.get("linked"),
+                "automatic": record.get("automatic") is True}
 
     def unlink(self):
         with self._lock:

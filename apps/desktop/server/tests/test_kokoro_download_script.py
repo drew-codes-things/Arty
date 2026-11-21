@@ -1,11 +1,13 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 DESKTOP = Path(__file__).resolve().parents[2]
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="download-kokoro.sh is the Linux downloader; Windows uses the .ps1")
 FAKE_CURL = """#!/usr/bin/env bash
 while [ "$#" -gt 0 ]; do
   case "$1" in

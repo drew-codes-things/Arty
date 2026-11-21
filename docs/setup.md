@@ -177,15 +177,15 @@ Follow [arty-pc/README.md](../arty-pc/README.md) to sign Arty's browser in to th
 | App | First start |
 |---|---|
 | [Arty Desktop](../apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](../apps/android/README.md) | Install `Arty-1.5.8.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](../apps/android/README.md) | Install `Arty-1.6.0.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](../apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](../apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |
 | [Arty Code](../apps/beta/code/README.md) (beta, being replaced) | `pipx install ./apps/beta/code`, then `arty-code setup` asks for the same details as Arty Desktop |
-| [Arty for your browser](../extensions/browser/README.md) | Lets Arty Desktop use your own browsers: Chrome, Edge, Brave, Chromium or Firefox. Choosing one by name, and Opera and Vivaldi, come with extension 1.6 and Arty Desktop 1.5.9, which are not released yet |
+| [Arty for your browser](../extensions/browser/README.md) | Lets Arty Desktop use your own browsers: Chrome, Edge, Brave, Chromium or Firefox. Choosing one by name, and Opera and Vivaldi, need extension 1.6 and Arty Desktop 1.5.9 or newer; pairing without a code needs extension 1.7 and Arty Desktop 1.6.0 |
 
 Away from home, the phone apps need [the Cloudflare link](cloudflare.md). To set a phone up, scan the QR code
-from Arty Desktop's tray menu > **Phone setup code…**, or type the details in
+from Arty Desktop's tray menu > **Link a phone…**, or type the details in
 ([connecting-a-phone.md](connecting-a-phone.md)).
 
 ### 8. Optional
@@ -232,6 +232,7 @@ is not set (Proxmox, Uptime Kuma, Nextcloud, PufferPanel, Arty's PC) simply says
 | `HOMELAB_NAMES` | `/srv/ai/secrets/brain.env` | Comma-separated names of your Proxmox host and guests: a message naming one gets the server status looked up first |
 | `BRAIN_TRUSTED_PROXIES` | `/srv/ai/secrets/brain.env` | Comma-separated addresses of the proxy in front of the brain (the Cloudflare tunnel's machine), the only ones whose `Cf-Connecting-Ip` is believed |
 | `BRAIN_STARFIRE_URL` | `/srv/ai/secrets/brain.env` | starfire's address (for example `https://<STARFIRE_ADDRESS>`). When a computer asks to be approved in a browser with no Arty key, the approve page links to starfire's Arty devices page with a QR code. Leave it out and the page only offers pasting a key |
+| `ROOM_API_KEY`, `ROOM_ADDRESSES` | `/srv/ai/secrets/brain.env` | A separate key for a shared AI chat room app, and the comma-separated addresses it may come from. That key only gets the room chat (see [API.md](API.md#shared-chat-room)); it must differ from every other key or the brain won't start; leave both out to turn it off |
 | `BRAIN_URL`, `HUB_URL` | the voice assistant's environment | The brain and the voice hub ([voice/](../voice/README.md)) |
 | `BRAIN_URL` | each chat bot's environment | The brain ([chat-bots/](../chat-bots/)) |
 

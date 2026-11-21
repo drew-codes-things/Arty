@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import wave
 from pathlib import Path
 
@@ -99,7 +100,12 @@ class WindowsMicOutput:
             self.stream = None
 
 
+PLAYER_LOCK = threading.Lock()
+PLAYER: subprocess.Popen | None = None
+
+
 def play_wav(wav: bytes) -> None:
+    global PLAYER
     if WINDOWS:
         import numpy
         import sounddevice
@@ -111,7 +117,31 @@ def play_wav(wav: bytes) -> None:
     with tempfile.NamedTemporaryFile(suffix=".wav") as f:
         f.write(wav)
         f.flush()
-        subprocess.run(["paplay", f.name], check=False)
+        with PLAYER_LOCK:
+            PLAYER = subprocess.Popen(["paplay", f.name])
+            player = PLAYER
+        player.wait()
+        with PLAYER_LOCK:
+            if PLAYER is player:
+                PLAYER = None
+
+
+def stop_playback() -> None:
+    if WINDOWS:
+        import sounddevice
+        sounddevice.stop()
+        return
+    with PLAYER_LOCK:
+        player = PLAYER
+    if player is not None and player.poll() is None:
+        player.terminate()
+
+
+def is_stop_message(message: str) -> bool:
+    try:
+        return json.loads(message).get("type") == "stop"
+    except (ValueError, AttributeError):
+        return False
 
 
 async def run_forever(name: str, session) -> None:
@@ -149,13 +179,27 @@ async def mic_session() -> None:
             output.close()
 
 
+async def play_queued(waiting: asyncio.Queue) -> None:
+    while True:
+        await asyncio.to_thread(play_wav, await waiting.get())
+
+
 async def speaker_session() -> None:
     async with websockets.connect(hub_socket_url("/ws/speaker"), additional_headers=headers(),
                                   max_size=32 * 2 ** 20) as ws:
         log.info("speaker: connected, Arty's voice will play here")
-        async for message in ws:
-            if isinstance(message, bytes):
-                await asyncio.to_thread(play_wav, message)
+        waiting: asyncio.Queue[bytes] = asyncio.Queue()
+        player = asyncio.create_task(play_queued(waiting))
+        try:
+            async for message in ws:
+                if isinstance(message, bytes):
+                    waiting.put_nowait(message)
+                elif is_stop_message(message):
+                    while not waiting.empty():
+                        waiting.get_nowait()
+                    await asyncio.to_thread(stop_playback)
+        finally:
+            player.cancel()
 
 
 async def main() -> None:

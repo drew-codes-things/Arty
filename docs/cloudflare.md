@@ -71,6 +71,19 @@ files need their own Access application that lets them through:
 
 Check it: `/ios/` loads without the token, and `/v1/models` still gets Cloudflare's 401/403 without it.
 
+### Linking phones by QR code
+
+A phone that scans the link code from Arty Desktop has no token yet, so the two link steps need their own way in:
+
+8. **Access application for linking.** Zero Trust > Access controls > Applications > Add > Self-hosted, named "Arty
+   phone link", on `arty.<your domain>` with path `link/phone`. One policy, action **Bypass** for Everyone. Only
+   `POST /link/phone/begin` and `/link/phone/finish` live there: they take a one-use offer that runs out after two
+   minutes, refuse a phone that can't prove it scanned the code, and give out the service token only after that
+   proof. See [connecting-a-phone.md](connecting-a-phone.md).
+
+Check it: `curl -X POST https://arty.<your domain>/link/phone/begin -d '{}'` gets the brain's own 400 (not
+Cloudflare's 403), and `/v1/models` still gets Cloudflare's 401/403 without the token.
+
 ## Things to Know
 
 - Cloudflare ends any request that waits more than 100 seconds, so the app starts chat turns as jobs and polls them

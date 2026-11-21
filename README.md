@@ -77,30 +77,28 @@ together: [how to link them](docs/arty-cli-and-starfire.md).
 
 ## Download
 
-Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.5.8**
-([release notes](docs/release-notes-2026-11-19-1.5.8.md)):
+Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.6.0**
+([release notes](docs/release-notes-2026-11-21-1.6.0.md)):
 
 | Download | What it is |
 |---|---|
-| `Arty-1.5.8-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.5.8.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.5.8.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
-
-The browser extension is not part of the 1.5.8 release. Its latest release is 1.5.1, attached to the
-[1.5.1 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.5.1):
-
-| Download | What it is |
-|---|---|
-| `Arty-Browser-Extension-1.5.1.zip` | [Arty for your browser](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
-| `Arty-Browser-Extension-1.5.1.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
+| `Arty-1.6.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.6.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.6.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-Browser-Extension-1.7.zip` | [Arty for your browser](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
+| `Arty-Browser-Extension-1.7.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 
 The iPhone app needs no download: your own brain serves it at `/ios/`. The Quest app is built from source while it's
 in beta. The brain itself is installed from this repository (see the quick start).
 
-**Coming, not released yet:** Arty Desktop 1.5.9 and the browser extension 1.6 are in this source. Together they let
-Arty use a named browser ("open the BBC in Firefox") and add Opera and Vivaldi. The pages that describe them say so.
+**New in 1.6.0:** Arty Desktop 1.6.0 and the browser extension 1.7 let Arty use a named browser ("open the BBC in
+Firefox"), add Opera and Vivaldi, connect browsers and starfire Desktop without a code, give Arty a browser of its own,
+let it control the screen when you turn that on (asking before every message it sends), and help with general
+quizzes. The pages that describe them:
+[Arty's own browser, screen control and quizzes](docs/desktop-control.md) and
+[Linking Arty Desktop to starfire Desktop](docs/desktop-starfire-link.md).
 
 Earlier release notes: [all releases](docs/README.md#release-notes).
 

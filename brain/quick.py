@@ -3,6 +3,7 @@ fill in a tool call (it mangles the arguments, then says it worked anyway). Each
 of a request it recognises, or None to leave the request to the model. brain.quick_action does the work.
 """
 import ast
+import math
 import operator
 import re
 
@@ -21,6 +22,10 @@ SUM_WORDS = [(r"\bmultiplied by\b|\btimes\b|[x×]", "*"), (r"\bdivided by\b|÷",
 DATE_OR_RANGE = re.compile(r"\d{1,4}\s*[-/]\s*\d{1,2}(?:\s*[-/]\s*\d{1,4})?")
 PERCENT_OF = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)")
 MAX_POWER = 100
+MAX_POWER_BITS = 20_000
+MAX_NUMBER_BITS = 13_300
+MAX_EXPRESSION_CHARS = 500
+ARITHMETIC_ERRORS = (ValueError, SyntaxError, ZeroDivisionError, OverflowError, TypeError, MemoryError, RecursionError)
 # "what are the IPs of my servers", "what's the IP address of the minecraft server"
 IP_QUESTION = re.compile(r"\b(ips?|ip address(es)?)\b", re.IGNORECASE)
 ABOUT_THE_SERVERS = re.compile(r"\b(servers?|homelab|guests?|containers?|vms?|cts?|lxcs?|proxmox|nodes?|machines)\b", re.IGNORECASE)
@@ -51,6 +56,22 @@ def refers_back(text: str) -> bool:
     return bool(REFERS_BACK.search(text)) or "\n" in text.strip() or len(text) > PASTED_TEXT_CHARS
 
 
+SHORT_ASK = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please\s+)?(?:can|could|would|will) you\s+(?:please\s+)?"
+                       r"(?P<heard>[^\W\d_][\w'’]*(?:\s+(?!please\b)[^\W\d_][\w'’]*)?)(?:\s+please)?[\s?.!]*$", re.IGNORECASE)
+CLEAR_SHORT_ASKS = {
+    "add", "answer", "be", "book", "buy", "call", "calm", "cancel", "change", "check", "close", "code", "come", "continue",
+    "cook", "count", "cry", "dance", "delete", "do", "draw", "dream", "drink", "drive", "eat", "email", "explain", "feel",
+    "find", "finish", "fix", "fly", "focus", "forget", "get", "give", "go", "guess", "hear", "help", "hurry", "imagine",
+    "install", "joke", "keep", "laugh", "learn", "leave", "lie", "listen", "look", "love", "make", "message", "move", "not",
+    "open", "order", "pause", "play", "pray", "pretend", "print", "read", "relax", "remember", "remind", "remove", "repeat",
+    "reply", "respond", "restart", "resume", "rhyme", "run", "save", "say", "search", "see", "send", "set", "show", "sing",
+    "skip", "sleep", "smell", "smile", "speak", "spell", "start", "stop", "summarise", "summarize", "swear", "swim",
+    "switch", "talk", "taste", "teach", "tell", "text", "think", "translate", "try", "turn", "type", "understand", "undo",
+    "update", "wait", "wake", "walk", "watch", "work", "write",
+}
+DIDNT_CATCH = "Sorry, I didn't catch that: \"{heard}\". What would you like me to do?"
+
+
 MORE_THAN_ONE_THING = re.compile(r"\b(and then|then also|also)\b|;", re.IGNORECASE)
 
 
@@ -64,16 +85,44 @@ def _evaluate(node):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in operators:
         left, right = _evaluate(node.left), _evaluate(node.right)
-        if isinstance(node.op, ast.Pow) and abs(right) > MAX_POWER:
+        if isinstance(node.op, ast.Pow) and _is_too_big_a_power(left, right):
             raise ValueError("too big")
-        return operators[type(node.op)](left, right)
+        return _within_size(operators[type(node.op)](left, right))
     if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
-        return operators[type(node.op)](_evaluate(node.operand))
+        return _within_size(operators[type(node.op)](_evaluate(node.operand)))
     raise ValueError("not arithmetic")
+
+
+def _is_too_big_a_power(base, exponent) -> bool:
+    if abs(exponent) > MAX_POWER:
+        return True
+    return isinstance(base, int) and isinstance(exponent, int) and abs(base).bit_length() * exponent > MAX_POWER_BITS
+
+
+def _within_size(value):
+    if isinstance(value, complex):
+        raise ValueError("not a real number")
+    if isinstance(value, int) and abs(value).bit_length() > MAX_NUMBER_BITS:
+        raise ValueError("too big")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("too big")
+    return value
+
+
+def evaluate_arithmetic(expression: str):
+    if len(expression) > MAX_EXPRESSION_CHARS:
+        raise ValueError("too long")
+    return _evaluate(ast.parse(expression, mode="eval"))
+
+
+def show_number(value) -> str:
+    return f"{value:,.10g}" if isinstance(value, float) and not value.is_integer() else f"{int(value):,}"
 
 
 def calculate(text: str) -> str | None:
     """"12 × 15 = 180" for a plain arithmetic question, or None for anything else."""
+    if len(text or "") > MAX_EXPRESSION_CHARS:
+        return None
     match = SUM_QUESTION.search(text or "")
     if not match or (DATE_OR_RANGE.fullmatch(match["sum"].strip()) and not match["asked"]):
         return None
@@ -83,10 +132,9 @@ def calculate(text: str) -> str | None:
     if not re.fullmatch(r"[\d.\s()+*/-]+", expression) or not re.search(r"\d\s*(\*\*|[+*/-])\s*[\d(-]", expression):
         return None
     try:
-        value = _evaluate(ast.parse(expression, mode="eval"))
-    except (ValueError, SyntaxError, ZeroDivisionError, OverflowError):
+        shown = show_number(evaluate_arithmetic(expression))
+    except ARITHMETIC_ERRORS:
         return None
-    shown = f"{value:,.10g}" if isinstance(value, float) and not value.is_integer() else f"{int(value):,}"
     return f"{match['sum'].strip()} = {shown}"
 
 
@@ -116,6 +164,16 @@ def list_add(text: str) -> tuple[str, str] | None:
     if not match or MORE_THAN_ONE_THING.search(text):
         return None
     return match["items"].strip(), match["list"].strip()
+
+
+def unclear_request(text: str) -> str | None:
+    found = SHORT_ASK.match(text or "")
+    if not found:
+        return None
+    heard = found.group("heard")
+    if any(word.lower() in CLEAR_SHORT_ASKS for word in heard.split()):
+        return None
+    return DIDNT_CATCH.format(heard=heard)
 
 
 def cant_do(text: str) -> str | None:

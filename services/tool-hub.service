@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 EnvironmentFile=/srv/ai/secrets/mcpo.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/opt/ai-hub/bin/python /srv/ai/hub/tool_hub.py --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/tool-hub.json
+ExecStart=/opt/ai-hub/bin/python /srv/ai/hub/tool_hub.py --host 127.0.0.1 --port 8000 --config /srv/ai/mcp/tool-hub.json --own-apps /srv/ai/brain/own-apps.json
 Restart=on-failure
 RestartSec=5
 

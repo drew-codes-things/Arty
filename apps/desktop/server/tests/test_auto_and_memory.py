@@ -79,7 +79,7 @@ def test_the_stream_to_the_window_carries_the_numbers_and_the_turn_keeps_them(mo
     monkeypatch.setattr(brain, "_history_path", lambda: tmp_path / "history.json")
     report = {**CODE_PICK, "steps": 2, "usage": USAGE}
 
-    def reply(user_text, note=""):
+    def reply(user_text, note="", arty_started=False):
         yield "Fixed it."
         yield brain.TurnNumbers(report)
 
@@ -87,7 +87,8 @@ def test_the_stream_to_the_window_carries_the_numbers_and_the_turn_keeps_them(mo
     events = [json.loads(line) for line in arty_server._stream_reply("fix my script", speak=False)]
     assert {"type": "numbers", "arty": report} in events
     assert events[-1]["type"] == "done" and events[-1]["reply"] == "Fixed it."
-    assert brain.load_history()[-1] == {"role": "assistant", "content": "Fixed it.", "arty": report}
+    saved = brain.load_history()[-1]
+    assert (saved["role"], saved["content"], saved["arty"]) == ("assistant", "Fixed it.", report)
 
 
 def test_the_picker_is_arty_auto_then_each_model_once():

@@ -102,6 +102,8 @@ echo "==> Copying the backend and its assets"
 rsync -a --exclude '__pycache__' --exclude 'tests' --exclude '.pytest_cache' --exclude '.mypy_cache' --exclude '.ruff_cache' server "$STAGE/"
 rsync -a "${KOKORO_EXCLUDES[@]}" models/kokoro "$STAGE/models/"
 cp arty_config.example.yaml "$STAGE/arty_config.example.yaml"
+mkdir -p "$STAGE/extension"
+cp ../../extensions/browser/background.js "$STAGE/extension/background.js"
 
 echo "==> Packing the app"
 ( cd app && npx electron-builder --linux dir "--$BUILD_ARCH" )

@@ -1,0 +1,27 @@
+#!/bin/sh
+set -u
+AGENT="$HOME/.local/browser-agent"
+PROFILE="$HOME/.apps-browser-profile"
+APPS_LIST=/etc/arty/own-apps.json
+CHROME=/usr/bin/google-chrome
+FLAG="$AGENT/apps-signing-in"
+[ -x "$CHROME" ] || { notify-send "Sign in to Starfire apps" "Google Chrome not found" 2>/dev/null; exit 1; }
+[ -r "$APPS_LIST" ] || { notify-send "Sign in to Starfire apps" "No app addresses on this desktop yet: deploy first" 2>/dev/null; exit 1; }
+
+mkdir -p "$AGENT"
+echo $$ > "$FLAG"
+trap 'rm -f "$FLAG"' EXIT INT TERM
+for _ in $(seq 1 60); do pgrep -f -- "[u]ser-data-dir=$PROFILE" >/dev/null || break; sleep 0.5; done
+
+set -- $(python3 -I -c '
+import json, sys, urllib.parse
+listed = json.load(open(sys.argv[1]))
+for name in ("starfire", "drive", "calendar"):
+    address = str(listed.get(name) or "") if isinstance(listed, dict) else ""
+    parts = urllib.parse.urlsplit(address)
+    if parts.scheme == "https" and parts.hostname and not (parts.path or parts.query or parts.fragment or parts.username):
+        print(address)
+' "$APPS_LIST")
+[ "$#" -gt 0 ] || { notify-send "Sign in to Starfire apps" "No app addresses on this desktop yet: deploy first" 2>/dev/null; exit 1; }
+
+"$CHROME" --user-data-dir="$PROFILE" --password-store=basic --no-first-run --start-maximized "$@"

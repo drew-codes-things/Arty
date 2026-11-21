@@ -14,6 +14,10 @@ class ToolHubService(unittest.TestCase):
                       "--config /srv/ai/mcp/tool-hub.json", unit)
         self.assertIn("EnvironmentFile=/srv/ai/secrets/mcpo.env", unit)
 
+    def test_the_hub_reads_the_own_app_list_the_deploy_writes(self):
+        self.assertIn("--own-apps /srv/ai/brain/own-apps.json", UNIT.read_text())
+        self.assertIn("install -m 644 deploy/own-apps.json /srv/ai/brain/own-apps.json", DEPLOY.read_text())
+
     def test_the_key_never_goes_on_the_command_line(self):
         exec_line = next(line for line in UNIT.read_text().splitlines() if line.startswith("ExecStart="))
         self.assertNotIn("KEY", exec_line.upper())

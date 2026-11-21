@@ -1,5 +1,7 @@
 import re
 
+import safety
+
 
 # Trailing offers the user asked not to get ("Would you like...?", "Let me know if..."); small models add them anyway.
 OFFER_SENTENCE = re.compile(
@@ -91,7 +93,25 @@ def reminder_from(text: str) -> tuple[str, str] | None:
     return None
 
 
+SCHEDULE_REQUEST = re.compile(
+    r"\b(?:remind\w*|schedul\w*|alarms?|timers?|every\s+\w+|daily|weekly|monthly|hourly|tomorrow|tonight|later|"
+    r"(?:at|by|until|till|from)\s+\d|\d\s*(?:am|pm)|\d[:.]\d\d|o'?clock|noon|midnight|"
+    r"in\s+(?:a|an|\d+|half|one|two|three|four|five|ten|fifteen|twenty|thirty|a few|a couple of)\s+(?:\w+\s+)?"
+    r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)|"
+    r"(?:on|next|this)\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|next\s+(?:week|month|year)|"
+    r"this\s+(?:morning|afternoon|evening|weekend)|don'?t let me forget|ping me|nudge me|"
+    r"let me know (?:at|when|in|tomorrow|tonight)|check (?:back|in) (?:later|in|at|tomorrow)|recurring|repeat(?:ing|edly)?|"
+    r"each\s+(?:day|morning|evening|night|week|month))\b", re.IGNORECASE)
+OFFERED_A_SCHEDULE = re.compile(r"\b(?:remind\w*|schedul\w*|alarm|timer|every\s+\w+|daily|weekly)\b", re.IGNORECASE)
+SCHEDULE_NOT_ASKED = ("Blocked: nothing was scheduled, because the user's message doesn't ask for a reminder or a schedule. "
+                      "Don't guess what they wanted: ask them what they meant.")
 PROMISE = re.compile(r"\b(I'll|I will|I've|I have|I'm going to)\s+(remind|set (up )?(a |the |your )?(reminder|alarm|schedule)|schedule|start(ed)? (a |the )?(background )?task)", re.IGNORECASE)
+ACTION_CLAIM = re.compile(
+    r"\bI(?:'ll|'ve|'m going to| will| have| am going to| just)\s+(?:just\s+|now\s+|already\s+|go(?:ne)? ahead and\s+)?"
+    r"(?:pass(?:ed)?|sen[dt]|tell|told|let|messag(?:e|ed)|text(?:ed)?|e-?mail(?:ed)?|forward(?:ed)?|post(?:ed)?|call(?:ed)?|"
+    r"set|book(?:ed)?|order(?:ed)?|add(?:ed)?|sav(?:e|ed)|not(?:e|ed)|remind(?:ed)?|schedul(?:e|ed)|creat(?:e|ed)|ma(?:k|d)e|"
+    r"turn(?:ed)?|start(?:ed)?|cancel(?:l?ed)?|delet(?:e|ed)|remov(?:e|ed)|chang(?:e|ed)|updat(?:e|ed)|open(?:ed)?|"
+    r"shar(?:e|ed)|deliver(?:ed)?|contact(?:ed)?|reach(?:ed)? out|ping(?:ed)?)\b", re.IGNORECASE)
 # Talking about its tools ("let's use the `homelab__service_status` function", "I'll run this command"):
 # the user never needs to see that, so it isn't sent early (see run_agent).
 TOOL_TALK = re.compile(r"\b\w+__\w+|\bfunction\b|\btool\b|I'll run|let me (run|use|call)|let's (use|run|call)", re.I)
@@ -100,6 +120,261 @@ TOOL_TALK = re.compile(r"\b\w+__\w+|\bfunction\b|\btool\b|I'll run|let me (run|u
 DO_REQUEST = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:(?:please|can you|could you|would you|will you|i want you to|"
                         r"i need you to)\s+)*(add|put|book|schedule|set|create|make|remind|cancel|delete|remove|move|change|update|"
                         r"send|save|note|mark|tick|clear|rename|turn|start|stop|restart|open|close|play|pause)\b", re.I)
+
+COURSEWORK_WORK = (r"course ?work|home ?work|assignments?|essays?|dissertations?|thesis|theses|lab reports?|"
+                   r"literature reviews?|exams?|tests?|quiz(?:zes)?")
+COURSEWORK_REQUEST = re.compile(
+    r"\b(?:" + COURSEWORK_WORK + r"|assess(?:ed|ments?)|graded|marked|plagiari[sz]\w*|hand (?:it )?in|submit\w*)\b", re.I)
+COURSEWORK_DECLINE = re.compile(
+    r"\bI(?:['\u2019]m| am)?\s+(?:really\s+)?(?:can['\u2019]?t|cannot|can not|won['\u2019]t|will not|unable to|not able to|"
+    r"not going to)\s+(?:help|write|rewrite|reword|paraphrase|rephrase|do|complete|answer|provide|produce|create|assist|"
+    r"finish|solve|give)\b", re.I)
+ACADEMIC_REASON = re.compile(
+    r"\bacademic (?:integrity|dishonesty|honesty|misconduct|polic(?:y|ies)|work|assignments?)\b|\bcheat\w*|"
+    r"\bplagiari[sz]\w*|\byour own (?:work|words|understanding)\b|\bas your own\b|\byour work yourself\b", re.I)
+HARM_TOPICS = (r"drugs?|narcotics?|controlled substances?|methamphetamine|meth|cocaine|heroin|fentanyl|malware|"
+               r"ransomware|viruse?s?|keylog\w*|spy\w*|stalk\w*|tracking|surveil\w*|consent|child\w*|minors?|underage|"
+               r"kids?|teen\w*|\d+[- ]years?[- ]olds?|groom\w*|sexual\w*|nudes?|naked|abus\w*|forg(?:e|ed|ery|ing)|"
+               r"counterfeit\w*|fraud\w*|scam\w*|phish\w*|threat\w*|intimidat\w*|blackmail\w*|harass\w*|extort\w*|theft|"
+               r"steal\w*|stolen|poison\w*|toxic|explosi\w*|bombs?|kill\w*|murder\w*|suicid\w*|self-harm|terror\w*|"
+               r"hate|hateful|racis\w*|personal data")
+HARM_REASON = re.compile(r"\b(?:illegal|unlawful|against the law|crime|criminal|harm\w*|hurt|danger\w*|unsafe|violen\w*|"
+                         r"weapons?|attack\w*|misuse|" + HARM_TOPICS + r")\b", re.I)
+REFUSAL_OPENING_CHARS = 300
+REWORDING = r"rewrit\w*|re-?word\w*|paraphras\w*|rephras\w*|spin|in (?:my|other|different|new) words"
+SIMILARITY_CHECKERS = (r"plagiari[sz]\w*|similarity|turnitin|originality|copyleaks|gptzero|zerogpt|"
+                       r"ai(?:[- ]writing)?[- ]detect\w*")
+CHECKER_REWRITE_REQUEST = re.compile(
+    rf"\b(?:{REWORDING})\b.*\b(?:{SIMILARITY_CHECKERS})|\b(?:{SIMILARITY_CHECKERS}).*\b(?:{REWORDING})\b", re.I | re.S)
+REWORDING_REQUEST = re.compile(rf"\b(?:{REWORDING})\b", re.I)
+AUTHOR_HIDING = re.compile(r"\bcan(?:['’]t|not) (?:prove|tell|trace|link|match|show)\b|"
+                           r"\b(?:trac|link|match|tie)\w* (?:it|this|them|that) (?:back )?to (?:me|my)\b|"
+                           r"\b(?:doesn['’]?t|don['’]?t|won['’]?t) match my (?:writing|style)\b", re.I)
+THREAT_TEXT = re.compile(r"\b(?:threat\w*|ransom (?:notes?|letters?|messages?|demands?))\b", re.I)
+SIMILARITY_CHECKERS_ALONE = (r"\b(?:similarity|turnitin|originality|copyleaks|gptzero|zerogpt|"
+                             r"ai(?:[- ]writing)?[- ]detect\w*)\b")
+COPYRIGHT_REASON = re.compile(r"\bcopyright\w*|\bintellectual property\b", re.I)
+INTEGRITY_REASON = re.compile(
+    ACADEMIC_REASON.pattern + "|" + COPYRIGHT_REASON.pattern + r"|\boriginal (?:authors?|work|writers?)\b|"
+    r"\bsomeone else['’]s (?:work|words|writing|essays?|text|ideas)\b|\bnot your own\b|"
+    r"\b(?:" + SIMILARITY_CHECKERS + r")", re.I)
+AGAINST_THE_LAW = re.compile(r"\b(?:illegal|unlawful|against the law)\b", re.I)
+REAL_HARM_REASON = re.compile(
+    r"\b(?:hurt\w*|danger\w*|unsafe|violen\w*|weapons?|attack\w*|crime|criminal|"
+    r"harm (?:to )?(?:others|people|someone|anyone)|" + HARM_TOPICS + r")\b", re.I)
+PERSON = r"(?:someone|somebody|anyone|people|a person|him|her|them|my \w+|his \w+|her \w+|their \w+|a (?:man|woman|girl|boy))"
+MINOR = (r"(?:child(?:ren)?|kids?|minors?|underage|pre-?teens?|teen(?:age(?:rs?)?|s)?|school ?(?:girls?|boys?)|"
+         r"\d{1,2}[- ](?:years?|yrs?)[- ]olds?)")
+SEXUAL = r"(?:sex\w*|nudes?|naked|porn\w*|explicit|lewd|intimate|groom\w*)"
+ILLICIT_DRUG = r"(?:methamphetamine|meth|crystal meth|crack|cocaine|heroin|fentanyl|mdma|lsd|ketamine|ghb|steroids?)"
+HARD_DRUG = r"(?:methamphetamine|meth|crystal meth|crack cocaine|cocaine|heroin|fentanyl|mdma|lsd|ketamine|ghb)"
+DOCTORS_NOTE = r"(?:sick|doctor['’]?s?|gp['’]?s?|fit|medical|hospital) (?:notes?|letters?|certificates?)"
+FORGED = r"(?:fake[ds]?|faking|forg(?:ed|ing)|bogus|doctored|falsified|made[- ]up)"
+HARMFUL_REQUEST = re.compile(r"\b(?:" + "|".join((
+    HARD_DRUG,
+    r"(?:synthesi[sz]\w*|cook\w*|mak(?:e|ing)|produc\w*|manufactur\w*|extract\w*|grow\w*|get|buy\w*|sell\w*|dose)\s+"
+    r"(?:\w+\s+){0,3}?" + ILLICIT_DRUG,
+    r"(?:synthesi[sz]\w*|cook\w*|mak(?:e|ing)|extract\w*|grow\w*)\s+(?:\w+\s+){0,3}?(?:drugs?|narcotics?|opioids?)",
+    r"controlled (?:drugs?|substances?) (?:at home|without)",
+    r"(?:write|writing|build\w*|mak(?:e|ing)|creat\w*|develop\w*|cod(?:e|ing)|deploy\w*|spread\w*|install\w*|plant\w*)\s+"
+    r"(?:\w+\s+){0,3}?(?:malware|ransomware|viruse?s?|keylog\w*|spyware|stalkerware|botnets?|rootkits?|backdoors?|"
+    r"trojans?|exploits?|worms?)",
+    r"keygens?|crack\w* (?:\w+ ){0,3}?(?:passwords?|licen[cs]e\w*|activation|drm|serials?|software|wi-?fi)|"
+    r"(?:working|run\w*|launch\w*|perform\w*|carry out|use|using|try\w*) (?:an? |the |some )?sql injection|"
+    r"sql injection (?:attacks? |payloads? |strings? )?(?:on|against|into)|sql injection payloads?|"
+    r"zero-?days? (?:exploits?|for)|exploit (?:code|kits?)",
+    r"hack\w* (?:into|someone|her|his|their|my|an? (?:account|phone|computer|network))",
+    r"(?:launch|run|do|start|carry out|perform)\w* (?:\w+ ){0,2}?ddos|take (?:\w+ ){0,3}?down (?:\w+ ){0,2}?"
+    r"(?:site|website|server|network)s?|flood\w* (?:\w+ ){0,3}?(?:site|website|server|network)",
+    r"stalk(?:ing)? " + PERSON + r"|spy(?:ing)? on|track\w* (?:\w+ ){0,2}?(?:phone|location|car|whereabouts)|"
+    r"without (?:my |his |her |their |them |someone(?:['’]s)? |anyone |the (?:owner|person|victim)(?:['’]s)? )"
+    r"(?:\w+ )?(?:knowing|knowledge|consent|noticing|permission)",
+    SEXUAL + r"[^.?!\n]{0,60}\b" + MINOR + r"|" + MINOR + r"[^.?!\n]{0,60}\b" + SEXUAL,
+    r"(?:send|messag\w*|text\w*|contact\w*|meet\w*|groom\w*|get|talk(?:ing)? to|chat(?:ting)? (?:to|with)|befriend\w*|"
+    r"lure|luring|convinc\w*|persuad\w*|pick(?:ing)? up)\s+(?:\w+\s+){0,3}?" + MINOR,
+    r"nudes? of|naked (?:photos?|pictures?|pics|images?|videos?) of|(?:private|intimate|explicit) (?:photos?|pictures?|"
+    r"pics|images?|videos?)|revenge porn|deepfake (?:porn|nudes?)",
+    r"(?:drunk|passed out|unconscious|drugged|asleep)\s+(?:\w+\s+){0,2}?(?:into bed|to have sex|to sleep with)|"
+    r"spik\w* (?:\w+ ){0,2}?drinks?|date rape",
+    r"forg(?:e|ing) (?:an? |my |his |her |their |the |some )?\w+|counterfeit (?:money|notes|cash|bills|goods)|"
+    r"(?:make|print|produce|buy|sell|spend|pass)\w* (?:\w+ ){0,2}?counterfeit|fake (?:\w+ ){0,2}?(?:notes?|ids?|identity|"
+    r"passports?|certificates?|licen[cs]es?|invoices?|receipts?|prescriptions?|signatures?|degrees?|diplomas?|documents?|"
+    r"transcripts?|references?|reviews?|cheques?|money)",
+    FORGED + r" (?:\w+ ){0,2}?(?:" + DOCTORS_NOTE + r"|ids?|passports?|certificates?|prescriptions?|signatures?)|"
+    + DOCTORS_NOTE + r"[^.?!\n]{0,40}\b(?:fak(?:e|ed|ing)|forg(?:e|ed|ing)|made (?:it |this |that )?up)",
+    r"(?:commit|run|do|pull off|carry out|get away with)\w*\s+(?:\w+\s+){0,2}?(?:fraud|scams?|money laundering)|"
+    r"launder\w* (?:\w+ ){0,2}?money|(?:scam|phish|con|defraud)\w* (?:someone|people|old|elderly|my|his|her|a |an )|"
+    r"scam (?:e-?mails?|messages?|texts?|letters?|calls?|sites?|websites?|pages?|scripts?)|"
+    r"phishing (?:e-?mails?|messages?|texts?|pages?|sites?|kits?|campaigns?|links?)\b(?! (?:awareness|training|"
+    r"detection|filters?))|(?:bank|card|account) (?:details|pins?|numbers?|logins?|passwords?)|"
+    r"someone(?:['’]s| else['’]s) (?:password|account|login)",
+    r"(?:threaten|blackmail|harass|intimidat|extort|dox)\w* " + PERSON + r"|threatening (?:letters?|messages?|e-?mails?|"
+    r"texts?|notes?|posts?)|blackmail\w* (?:\w+ ){0,2}?(?:with|into)|dox\w*|extort\w* money|"
+    r"(?:this|that|my) threats? (?:to|against|for) (?:my|his|her|their|him|them)|can(?:['’]t|not) (?:prove|tell|know|"
+    r"show) (?:that )?(?:it (?:was|is|came from) me|i (?:wrote|sent|posted) (?:it|this|that|them))",
+    r"steal\w* (?:from|a |an |my |someone|his |her |their |money|cars?|bikes?|phones?|cards?|data|identit\w*)|"
+    r"shoplift\w*|break(?:ing)? into|burgl\w*|sell\w* (?:\w+ ){0,2}?stolen|stolen (?:\w+ ){0,2}?(?:cards?|credit|goods|"
+    r"data|database|details|records|passwords?|logins?|accounts?)|pick(?:ing)? (?:the |a |my |his |her |their )?locks?|"
+    r"rob(?:bing)? (?:a |an |the |my |someone|his |her |their |people)",
+    r"(?:make|build|making|building|assembl\w*|3d[- ]print\w*) (?:\w+ ){0,2}?(?:bombs?|guns?|firearms?|weapons?)|"
+    r"(?:buy|get|obtain)\w* (?:an? |some )?(?:guns?|firearms?|weapons?) without|"
+    r"pipe bombs?|explosives?|ghost guns?|bioweapons?|toxic (?:gas|fumes)|nerve agents?|hide a body|thermite|napalm",
+    r"(?:poison|kill|murder|hurt|attack|stab|shoot|kidnap|abduct)\w* " + PERSON + r"|"
+    r"set(?:ting)? fire to (?:an? |the |my |his |her |their |someone)|burn(?:ing)? down (?:an? |the |my |his |her |their |"
+    r"someone)|arson",
+    r"self-?harm|suicid\w* (?:methods?|notes?|plans?)|kill myself|lethal (?:doses?|amounts?)|"
+    r"(?:dose|doses|amount|much|many) (?:\w+ ){0,4}?(?:is |are |would be |to be )?(?:lethal|fatal|deadly)|overdose guides?",
+    r"(?:plan|carry out|commit|join|fund)\w* (?:an? |the )?(?:terror\w*|mass shootings?)|shoot up|"
+    r"recruit\w* (?:\w+ ){0,3}?(?:into|for|to) (?:an? |the )?(?:[\w-]+ )?(?:group|gang|cell|militia|movement)|"
+    r"extremist (?:recruitment|propaganda|leaflets?|manifestos?)",
+    r"(?:racist|antisemitic|homophobic|transphobic|islamophobic|sexist|bigoted|hateful) (?:\w+ )?(?:rants?|jokes?|"
+    r"messages?|posts?|abuse|content|chants?|slogans?|essays?|articles?|propaganda|leaflets?)|slurs? (?:about|for|against)",
+    r"revenge (?:on|against)|(?:post|share|publish|leak)\w* (?:\w+ ){0,3}?(?:home )?address|(?:his|her|their|my ex['’]?s?|"
+    r"someone['’]?s?) (?:home )?address",
+    r"leaked (?:\w+ ){0,2}?(?:records?|data|documents?|files?|databases?|dumps?|e-?mails?|credentials|passwords?)|"
+    r"confidential (?:\w+ ){0,2}?records?|patient records?|(?:hacked|breached) (?:\w+ ){0,2}?(?:databases?|dumps?)|"
+    r"(?:password|credential|customer|user) dumps?|(?:dumps?|records|e-?mails|passwords|"
+    r"credentials|details) from (?:the|a|that|this) (?:\w+ )?breach|(?:link|trac|tie)\w* (?:it|this|them|that) "
+    r"(?:back )?to (?:the |a |an )?(?:original |same )?(?:\w+ )?breach",
+    r"defamatory|libel\w*|(?:is|was) a (?:paedophile|pedophile|rapist|murderer)",
+)) + r")\b", re.I)
+SAFE_HOW_TO = (r"(?:defend|protect|prevent|spot|recogni[sz]e|detect|report|stop|avoid being|stay safe|keep safe|support|"
+               r"help|treat|cope|identify|solve|calculate|work out|find|prove|derive|write|structure|plan|reference|cite|"
+               r"answer|revise|improve|start|conclude|introduce|integrate|differentiate|factori[sz]e|simplify|balance|draw|"
+               r"label|read|learn|remember|spell|pronounce|play|use|do|make sense|understand|explain|describe|analy[sz]e|"
+               r"compare|evaluate|argue|discuss|summari[sz]e|reword|rewrite|paraphrase|rephrase)\b")
+INSTRUCTIONS = re.compile(
+    r"\b(?:how (?:to|do i|can i|could i|would i|should i|do you|can you|would you|can one|does one|do we|can we|might i)"
+    r"(?! " + SAFE_HOW_TO + r")\s+\w+|step[- ]by[- ]step|how-to (?:for|on)|"
+    r"(?:practical|step|beginner['’]?s?|how-to|complete|detailed|"
+    r"easy) guide|(?:best|easiest|quickest|fastest|cheapest|safest|simplest|surest|most effective) (?:ways?|methods?|means|"
+    r"techniques?|places?) (?:to|of|for)|instructions (?:for|on|to)|recipe for)\b", re.I)
+CONCEALMENT = re.compile(
+    r"\b(?:without (?:getting|being) (?:caught|seen|noticed|traced)|get(?:ting)? away with|avoid(?:ing)? (?:the )?(?:police|"
+    r"cops|detection|getting caught|being caught)|without (?:a |an )?(?:background checks?|prescriptions?|licen[cs]es?|"
+    r"permits?)|undetect\w*|untrace\w*|hid(?:e|es|ing) from (?:the )?anti-?virus|evad\w* (?:the )?anti-?virus|"
+    r"can(?:['’]t|not) (?:prove|trace)|without (?:them|him|her) (?:knowing|noticing))\b",
+    re.I)
+HARM_TOPIC = re.compile(
+    r"\b(?:drugs?|narcotics?|controlled substances?|methamphetamine|meth|cocaine|heroin|fentanyl|cannabis|steroids?|"
+    r"malware|ransomware|keylog\w*|spyware|stalk\w*|groom\w*|nudes?|naked|porn\w*|forg(?:e|ed|ery|ing)|counterfeit\w*|"
+    r"fraud\w*|scam\w*|phish\w*|threaten\w*|intimidat\w*|blackmail\w*|harass\w*|extort\w*|theft|steal\w*|stolen|"
+    r"shoplift\w*|poison\w*|explosives?|bombs?|kill\w*|murder\w*|suicid\w*|self-harm|terror\w*|weapons?|guns?|"
+    r"firearms?|hack\w*|rob|robb\w*|burgl\w*|arson|lethal|fatal|overdos\w*|hurt\w*|kidnap\w*|abduct\w*|launder\w*|"
+    r"bull(?:y|ying|ied)|revenge|brute[- ]?forc\w*|deauth\w*|nitroglycerine?|chloroform|napalm|thermite|molotov\w*|"
+    r"ricin|gunpowder|mdma|lsd|ketamine|ghb|psilocybin|magic mushrooms?|opioids?|opiates?|sedatives?|knife|knives|"
+    r"alcohol|silencers?|suppressors?|pepper spray|breathal[yi][sz]er\w*|hmrc|tax evasion|explod\w*|detonat\w*|"
+    r"clon(?:e|ed|es|ing) (?:\w+ ){0,3}?cards?|card clon\w*|skimm(?:ing|ers?)|skim (?:\w+ ){0,2}?(?:cards?|atms?|"
+    r"cash machines?)|deepfakes?|swat(?:s|ting|ted)?|tamper\w*|drunk|(?:web|school|content) filters?|"
+    r"keystroke (?:recorders?|loggers?)|blind(?:s|ing)? (?:someone|somebody|people|him|her|them))\b", re.I)
+SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+OWN_TEXT = re.compile(
+    r"\b(?:my (?:own |old |earlier |first )?(?:essays?|dissertations?|thesis|reports?|coursework|assignments?|homework|"
+    r"work|writing|drafts?|paragraphs?|text|words|notes|answers?|lab reports?|literature reviews?|chapters?|papers?|"
+    r"articles?|sentences?)|I (?:wrote|have written|['’]ve written|drafted|have drafted))\b", re.I)
+CHECKER_NAME_ONLY = (r"\bplagiari[sz]\w*(?= (?:checkers?|check(?:s|ing)?|detect\w*|tools?|software|scanners?|scores?|"
+                     r"reports?|filters?|services?)\b)")
+PLAIN_IDENTITY_QUESTION = re.compile(
+    r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:what(?:['\u2019]s| is) your name|who are you|what are you|"
+    r"are you (?:an? )?(?:ai|bot|robot|machine|person|human|real(?: person)?)"
+    r"(?: or (?:an? )?(?:ai|bot|robot|machine|person|human))?|"
+    r"what (?:kinds? of things |else )?can you (?:do|help(?: me)? with)|what do you do)\W*$", re.I)
+DEFLECTION = re.compile(
+    r"\(?[^.!?\n()]{0,200}\b(?:I keep my (?:own )?(?:instructions|set-?up|system prompt) (?:private|to myself)|"
+    r"my (?:own )?instructions are (?:private|confidential))\b[^.!?\n()]{0,200}[.!?]?\)?", re.I)
+DEFLECTION_REPLY_CHARS = 600
+CHECKER_REQUEST_WINDOW_CHARS = 2000
+
+
+def is_coursework_request(text: str) -> bool:
+    return bool(COURSEWORK_REQUEST.search(text or ""))
+
+
+def refuses_coursework(reply: str) -> bool:
+    opening = (reply or "")[:REFUSAL_OPENING_CHARS]
+    return bool(COURSEWORK_DECLINE.search(opening) and ACADEMIC_REASON.search(opening) and not HARM_REASON.search(opening))
+
+
+def ends_of(text: str, window: int) -> str:
+    return text if len(text) <= 2 * window else f"{text[:window]}\n{text[-window:]}"
+
+
+def is_checker_rewrite_request(text: str) -> bool:
+    return bool(CHECKER_REWRITE_REQUEST.search(ends_of(text or "", CHECKER_REQUEST_WINDOW_CHARS)))
+
+
+def names_a_real_harm(opening: str) -> bool:
+    if REAL_HARM_REASON.search(opening):
+        return True
+    return bool(AGAINST_THE_LAW.search(opening)) and not COPYRIGHT_REASON.search(opening)
+
+
+def gives_a_real_integrity_reason(opening: str) -> bool:
+    without_checker_names = re.sub(CHECKER_NAME_ONLY, "", re.sub(SIMILARITY_CHECKERS_ALONE, "", opening, flags=re.I),
+                                   flags=re.I)
+    return bool(INTEGRITY_REASON.search(without_checker_names))
+
+
+def refuses_checker_rewrite(reply: str, own_text: bool = True) -> bool:
+    opening = (reply or "")[:REFUSAL_OPENING_CHARS]
+    reason_given = INTEGRITY_REASON.search(opening) if own_text else gives_a_real_integrity_reason(opening)
+    return bool(COURSEWORK_DECLINE.search(opening) and reason_given and not names_a_real_harm(opening))
+
+
+def names_a_harmful_request(text: str) -> bool:
+    text = text or ""
+    return bool(safety.check(text) or HARMFUL_REQUEST.search(text))
+
+
+def asks_for_harmful_steps(text: str) -> bool:
+    return any((INSTRUCTIONS.search(sentence) or CONCEALMENT.search(sentence)) and HARM_TOPIC.search(sentence)
+               for sentence in SENTENCE_BREAK.split(text or ""))
+
+
+def asks_for_harm(request: str) -> bool:
+    return names_a_harmful_request(request) or asks_for_harmful_steps(request)
+
+
+def rewords_to_hide_the_author(text: str) -> bool:
+    return bool(REWORDING_REQUEST.search(text) and AUTHOR_HIDING.search(text))
+
+
+def asks_to_disguise_harm(request: str) -> bool:
+    request = request or ""
+    if not (is_checker_rewrite_request(request) or rewords_to_hide_the_author(request)):
+        return False
+    return asks_for_harm(request) or (rewords_to_hide_the_author(request) and bool(THREAT_TEXT.search(request)))
+
+
+def is_own_text(request: str) -> bool:
+    return bool(OWN_TEXT.search(request or ""))
+
+
+def is_needless_coursework_refusal(request: str, reply: str, earlier_requests=()) -> bool:
+    if asks_to_disguise_harm(request) or any(asks_for_harm(text) for text in (request, *earlier_requests)):
+        return False
+    if is_checker_rewrite_request(request):
+        return refuses_checker_rewrite(reply, is_own_text(request))
+    return is_coursework_request(request) and refuses_coursework(reply)
+
+
+def is_plain_identity_question(text: str) -> bool:
+    return bool(PLAIN_IDENTITY_QUESTION.match((text or "").strip()))
+
+
+def has_a_deflection(reply: str) -> bool:
+    return len(reply or "") <= DEFLECTION_REPLY_CHARS and bool(DEFLECTION.search(reply or ""))
+
+
+def without_deflection(reply: str) -> str:
+    if not has_a_deflection(reply):
+        return (reply or "").strip()
+    return re.sub(r"[ \t]{2,}", " ", DEFLECTION.sub("", reply)).strip()
+
+
+def is_only_a_deflection(reply: str) -> bool:
+    return has_a_deflection(reply) and not without_trailing_offers(without_deflection(reply))
+
 
 # A reply that plays at using tools (made-up JSON results, "using the `homelab__x` function") instead of answering.
 PRETEND_TOOLS = re.compile(r"```json|\b[a-z]+__[a-z_]+\b|<tool_call>", re.I)
@@ -148,6 +423,7 @@ LOOK_ONLY_TOOLS = {"chrome_tabs", "chrome_read", "chrome_find", "chrome_scroll",
                    "desktop_windows", "desktop_notifications", "system_status", "code_sandbox"}
 NOT_FOR_ME = "(not for me)"
 VOICE_MODE = "(voice mode)"
+ON_A_PHONE_CALL = "on a voice call with you"
 ADDRESSED_PROMPT = ("A home voice assistant called Arty heard this through a room microphone, either right after its "
                     "wake word or in the few seconds after it last spoke. Decide whether the person was talking TO Arty "
                     "(a question, request, command, or a reply to what Arty just said) or whether it was overheard: "
@@ -164,7 +440,7 @@ TOOLLESS_NOTE = ("You are running on a model without tool support: you can't use
 # Notes an app attaches to a message for this turn only (the desktop app's <context> and <screen>):
 # useful to answer it, but not what the user said, so they're kept out of the archive and memory.
 APP_NOTES = re.compile(r"\s*<(context|screen)>.*?</\1>", re.DOTALL)
-NOTE_CLIENTS = frozenset({"desktop", "phone"})
+NOTE_CLIENTS = frozenset({"desktop", "phone", "android"})
 NOTE_TAGS = ("context", "screen")
 
 

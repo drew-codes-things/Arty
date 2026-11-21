@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+PROXMOX=${PROXMOX:-proxmox}
+CT=${CT:-104}
+SECRETS_FILE=/srv/ai/secrets/own-apps.env
+
+ask() {
+  local prompt=$1 default=${2:-} answer
+  read -rp "$prompt${default:+ [$default]}: " answer
+  printf '%s' "${answer:-$default}"
+}
+
+echo "Connects Arty to your own Starfire Calendar and Starfire Drive apps. Leave a URL empty to skip that app. Secrets are never printed."
+echo
+echo "Calendar: switch on CalDAV in the Starfire Calendar app and make an app password in its Settings first."
+calendar_url=$(ask "CalDAV address of the calendar Arty may change (ends in /dav/<you>/<calendar>/)" "")
+calendar_user=""
+calendar_password=""
+if [ -n "$calendar_url" ]; then
+  calendar_user=$(ask "Calendar user name")
+  read -rsp "Starfire Calendar app password (hidden): " calendar_password
+  echo
+fi
+echo
+echo "Drive: Arty signs in the way the sign-in proxy does, so the Starfire Drive app must trust this container's address."
+drive_url=$(ask "Drive address Arty can reach, e.g. http://<server>:<port>" "")
+drive_user=""
+drive_secret=""
+drive_public=""
+if [ -n "$drive_url" ]; then
+  drive_user=$(ask "Drive user name (the one the sign-in proxy passes)")
+  read -rsp "Drive proxy secret (hidden): " drive_secret
+  echo
+  drive_public=$(ask "Public Drive address for share links" "$drive_url")
+fi
+
+printf '%s\n' "OWN_CALENDAR_URL=$calendar_url" "OWN_CALENDAR_USER=$calendar_user" "OWN_CALENDAR_PASSWORD=$calendar_password" \
+  "OWN_DRIVE_URL=$drive_url" "OWN_DRIVE_USER=$drive_user" "OWN_DRIVE_PROXY_SECRET=$drive_secret" \
+  "OWN_DRIVE_PUBLIC_URL=$drive_public" |
+  ssh "$PROXMOX" "pct exec $CT -- bash -c 'umask 077; cat > $SECRETS_FILE.tmp && mv $SECRETS_FILE.tmp $SECRETS_FILE'"
+echo "Saved on CT $CT (root only)."
+if [ -n "$calendar_url" ]; then
+  echo "Checking Arty can read the calendar:"
+  ssh "$PROXMOX" "pct exec $CT -- bash -c '. /srv/ai/secrets/brain.env; curl -s -X POST -H \"Authorization: Bearer \$ARTY_API_KEY\" -H \"Content-Type: application/json\" -d \"{\\\"arguments\\\":{\\\"days\\\":1}}\" http://127.0.0.1:8081/v1/tools/calendar_app_events'" | python3 -c 'import sys, json; lines = (json.load(sys.stdin).get("result") or "no answer").splitlines(); events = [line for line in lines if line.startswith("#")]; print(f"read {len(events)} events for today" if events or lines[0].startswith("Nothing") or lines[0].startswith("[") else lines[0])'
+fi

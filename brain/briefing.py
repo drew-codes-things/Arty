@@ -8,6 +8,7 @@ those here instead of to the model (see brain.scheduler).
 import logging
 import re
 import time
+import unicodedata
 from datetime import date, datetime, timedelta
 
 import calendar_feed
@@ -22,6 +23,14 @@ DEADLINE_DAYS = {"morning": 7, "evening": 2}
 OFF_BY_DESIGN = re.compile(r"^test-", re.IGNORECASE)
 GUEST = re.compile(r"^(?P<kind>CT|VM) (?P<id>\d+) (?P<name>\S+)(?: \([^)]*\))?: (?P<state>\w+)", re.MULTILINE)
 DAY = 86400
+NEWS_TOOL = "research__web_search"
+NEWS_QUERY = "top news headlines today"
+NEWS_RESULTS = 6
+MAX_HEADLINES = 5
+HEADLINE_CHARS = 120
+SEARCH_TITLE = re.compile(r"^\d+\.\s+(?P<title>\S.*?)(?:\s+\(\d{4}-\d{2}-\d{2}\))?\s*$")
+SEARCH_FAILED = re.compile(r"^(search is unavailable|no results for|unknown tool|tool error|tool unavailable|blocked)", re.IGNORECASE)
+UNTRUSTED_PARTS = ("news",)
 
 log = logging.getLogger("brain.briefing")
 
@@ -97,20 +106,61 @@ def section(heading: str, lines: list[str]) -> str:
     return f"{heading}\n" + "\n".join(lines) if lines else ""
 
 
-def build(kind: str, call_tool, complete, place: dict | None = None, now: float | None = None) -> str:
-    """The briefing's text. Sections with nothing in them are left out."""
+def plain_headline(text: str) -> str:
+    kept = "".join(" " if character.isspace() else character for character in text
+                   if character.isspace() or not unicodedata.category(character).startswith("C"))
+    return " ".join(kept.split())[:HEADLINE_CHARS]
+
+
+def headlines(call_tool, query: str) -> tuple[list[str], list[str]]:
+    result = str(call_tool(NEWS_TOOL, {"query": query, "results": NEWS_RESULTS, "recent": "day"}))
+    titles = []
+    for line in ([] if SEARCH_FAILED.match(result.strip()) else result.splitlines()):
+        found = SEARCH_TITLE.match(line)
+        title = plain_headline(found["title"]) if found else ""
+        if title and title not in titles:
+            titles.append(title)
+    if not titles:
+        return [], ["I couldn't get the news headlines just now."]
+    return [f"- {title}" for title in titles[:MAX_HEADLINES]], []
+
+
+def unread_count(call_tool) -> tuple[list[str], list[str]]:
+    emails, problem = email_watch.fetch(call_tool, email_watch.UNREAD_QUERY)
+    if problem:
+        return [], [f"I couldn't count your unread email ({problem})."]
+    if not emails:
+        return ["No unread email."], []
+    count = f"{len(emails)} or more" if len(emails) >= email_watch.MAX_EMAILS else str(len(emails))
+    return [f"Unread email: {count}."], []
+
+
+def compose(kind: str, call_tool, complete, place: dict | None = None, now: float | None = None,
+            extras: frozenset = frozenset(), news_query: str = NEWS_QUERY) -> list[tuple[str, str]]:
     now = time.time() if now is None else now
     today = date.fromtimestamp(now)
     day = today if kind == "morning" else today + timedelta(days=1)
     events, problems = calendar(day)
     important, email_problems = email(call_tool, complete) if kind == "morning" else ([], [])
+    unread, unread_problems = unread_count(call_tool) if "unread" in extras else ([], [])
+    news, news_problems = headlines(call_tool, news_query) if "news" in extras else ([], [])
     parts = [
-        "Good morning. Here's your day." if kind == "morning" else "Good evening. Here's tomorrow.",
-        " ".join(servers(call_tool) + weather_line(day, place) + problems + email_problems),
-        section("Calendar:", events),
-        section("Reminders:", reminders(day)),
-        section("Deadlines coming up:", deadlines(DEADLINE_DAYS[kind], now)),
-        section("Important email:", important),
-        section("Done today:", done_today(now)) if kind == "evening" else "",
+        ("greeting", "Good morning. Here's your day." if kind == "morning" else "Good evening. Here's tomorrow."),
+        ("summary", " ".join(servers(call_tool) + weather_line(day, place) + unread + problems + email_problems
+                             + unread_problems + news_problems)),
+        ("calendar", section("Calendar:", events)),
+        ("reminders", section("Reminders:", reminders(day))),
+        ("deadlines", section("Deadlines coming up:", deadlines(DEADLINE_DAYS[kind], now))),
+        ("email", section("Important email:", important)),
+        ("news", section("News headlines:", news)),
+        ("done", section("Done today:", done_today(now)) if kind == "evening" else ""),
     ]
-    return "\n\n".join(part for part in parts if part)
+    return [(name, text) for name, text in parts if text]
+
+
+def joined(parts: list[tuple[str, str]], leave_out: tuple[str, ...] = ()) -> str:
+    return "\n\n".join(text for name, text in parts if name not in leave_out)
+
+
+def build(kind: str, call_tool, complete, place: dict | None = None, now: float | None = None) -> str:
+    return joined(compose(kind, call_tool, complete, place, now))

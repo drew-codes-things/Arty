@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -13,6 +14,8 @@ from test_code_in_the_reply import COMPUTER, CODE_REQUESTS, COMPUTER_REQUESTS  #
 from test_review_tonight import FakeHub, FakeEngine, calls, run_agent, said, tool  # noqa: E402
 
 import run_requests  # noqa: E402
+
+DEPLOYED_WINDOW = json.loads((Path(__file__).resolve().parents[1] / "brain.json").read_text())["options"]["num_ctx"]
 
 DESKTOP_WORK_TOOLS = {"computer_run_command", "computer_read_file", "computer_write_file", "computer_edit_file",
                       "computer_list_files", "computer_search", "computer_find_files"}
@@ -54,7 +57,8 @@ class DesktopToolsFollowTheCodeRule(unittest.TestCase):
         replies = [calls(("workspace__run_command", {"command": "rm -rf ~/projects/old-logs"})),
                    said("```go\nfunc Reverse(s string) string { return s }\n```")] * 2
         engine = FakeEngine(replies)
-        outcome, hub = run_agent(engine, [{"role": "user", "content": CODE_REQUESTS[3]}], hub=FakeHub(COMPUTER))
+        outcome, hub = run_agent(engine, [{"role": "user", "content": CODE_REQUESTS[3]}], hub=FakeHub(COMPUTER),
+                                 options={"num_ctx": DEPLOYED_WINDOW})
         self.assertEqual([], hub.calls)
         self.assertIn("no tool called workspace__run_command", engine.chat_bodies[1]["messages"][-1]["content"])
 

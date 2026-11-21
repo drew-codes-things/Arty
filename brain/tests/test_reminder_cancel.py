@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import sys
 import tempfile
 import time
@@ -142,7 +141,7 @@ class Reminders(unittest.TestCase):
 class ListingReminders(unittest.TestCase):
     def rule_tools(self, said):
         rules = json.loads(CONFIG_FILE.read_text())["lookups"]
-        return [rule["tool"] for rule in rules if rule["tool"] in steering.LOOKUP_TOOLS and re.search(rule["pattern"], said, re.I)
+        return [rule["tool"] for rule in rules if rule["tool"] in steering.LOOKUP_TOOLS and steering.rule_applies(rule, said)
                 and not (rule.get("skip_for_changes") and reply_rules.DO_REQUEST.search(said))]
 
     def test_asking_what_reminders_there_are_looks_up_the_schedule(self):

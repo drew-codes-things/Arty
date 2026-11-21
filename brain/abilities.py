@@ -11,9 +11,12 @@ QUESTION = re.compile(r"\bwhat (?:else )?(?:can|could) you do\b|\bwhat are you (
 
 # How each tool group (brain.json "tool_groups") reads to the user. A group not here uses its own description.
 FOR_THE_USER = {
-    "email": "Gmail: pick out the important emails and tell you about new ones, search and read them, and draft "
-             "replies (I never send anything)",
-    "calendar": "your calendar: what's on, and adding, moving or removing events",
+    "email": "email: pick out the important emails and tell you about new ones, search and read them, draft replies, "
+             "and, once your mailbox is connected, send or reply only after you say yes to the exact email",
+    "calendar": "your calendar: what's on, and adding, moving or removing events (in your own Starfire Calendar app once it's "
+                "connected, only after you say yes)",
+    "drive": "your own Starfire Drive app, once it's connected: save files or make share links, only after you say yes",
+    "app_undo": "undo the last change I made in your Starfire Calendar or Starfire Drive app (after you say yes)",
     "lists": "lists: shopping, to-do or any other list",
     "notes": "notes: save things and find them again",
     "study": "study: deadlines with reminders, and revision quizzes with flashcards",

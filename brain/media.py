@@ -6,7 +6,7 @@ so a link can be opened in a browser or handed to a phone without the API key.
 
 Attachments are turned into text the chat model can work with: images are described by the
 vision model, audio is transcribed (faster-whisper, run by transcribe.py in its own venv), and
-videos get a few frames described plus their soundtrack transcribed. convert_file uses
+videos get frames taken at scene changes described (with their times) plus their soundtrack transcribed. convert_file uses
 ImageMagick for images and ffmpeg for audio and video.
 """
 import base64
@@ -25,6 +25,9 @@ import time
 import urllib.parse
 from pathlib import Path
 
+import file_reading
+from xml_stream import FileReadError
+
 FILES_DIR = Path(os.environ.get("BRAIN_FILES", "/srv/ai/brain/files"))
 WHISPER_PYTHON = os.environ.get("WHISPER_PYTHON", "/srv/ai/media/venv/bin/python")
 TRANSCRIBE_SCRIPT = Path(__file__).with_name("transcribe.py")
@@ -34,8 +37,23 @@ FILES_PUBLIC_URL = (os.environ.get("BRAIN_FILES_URL") or f"http://127.0.0.1:{os.
 FILE_TTL_SECONDS = 24 * 3600
 MAX_UPLOAD_BYTES = 95 * 1024 * 1024  # Cloudflare's free plan refuses request bodies over 100 MB
 ANALYSIS_CHARS = 12_000
-VIDEO_FRAMES = 4
 FRAME_WIDTH = 768
+SCENE_THRESHOLD = 0.3
+MAX_SCENE_FRAMES = 8
+MIN_VIDEO_FRAMES = 4
+FRAMES_PER_LOOK = 4
+SCENE_SCAN_TIMEOUT_SECONDS = 300
+SCENE_SETTLE_SECONDS = 0.3
+EDGE_OFFSET_SECONDS = 0.5
+MIN_FRAME_GAP_SECONDS = 1.0
+MOMENT_SPREAD_SECONDS = 2.0
+SCENE_TIME = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
+IMAGE_HINT = ("\n(This is a general description. For the exact text call read_image_text, and to answer the user's own question "
+              "about the picture call look_at_attachment with their words, file id {file_id}.)")
+VIDEO_HINT = ("\n(For a particular moment or a question about the picture call look_at_attachment with the user's words and the time, "
+              "file id {file_id}.)")
+SONG_HINT = ("\n(If the user asks what song this is, call identify_song; to judge a sound such as an engine or a noise, call "
+             "analyse_sound; file id {file_id}.)")
 PREVIEW_EDGE = 1024  # larger previews made the 3B vision model take minutes on the GTX 1650
 TRANSCRIBE_TIMEOUT_SECONDS = 30 * 60
 CONVERT_TIMEOUT_SECONDS = 20 * 60
@@ -278,26 +296,97 @@ def refuse_scripted_image(path: str):
         raise MediaError("that picture is in a drawing or document format (SVG, MVG, PostScript) I don't open")
 
 
-def image_preview(path: str) -> bytes:
-    """A JPEG the vision model can read: any format ImageMagick knows, upright, at most PREVIEW_EDGE px."""
+def image_preview(path: str, edge: int = PREVIEW_EDGE) -> bytes:
     refuse_scripted_image(path)
     with tempfile.TemporaryDirectory() as scratch:
         target = Path(scratch) / "preview.jpg"
-        _run(["magick", f"{path}[0]", "-auto-orient", "-resize", f"{PREVIEW_EDGE}x{PREVIEW_EDGE}>", "-quality", "85", str(target)], 120, "Reading the image")
+        _run(["magick", f"{path}[0]", "-auto-orient", "-resize", f"{edge}x{edge}>", "-quality", "85", str(target)], 120, "Reading the image")
         return target.read_bytes()
 
 
-def video_frames(path: str, duration: float) -> list[bytes]:
+def clock(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole // 3600}:{whole % 3600 // 60:02d}:{whole % 60:02d}" if whole >= 3600 else f"{whole // 60}:{whole % 60:02d}"
+
+
+def scene_times(path: str) -> list[float]:
+    result = _run(["nice", "-n", "10", "ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "info", "-i", path, "-vf",
+                   f"select='gt(scene,{SCENE_THRESHOLD})',showinfo", "-an", "-f", "null", "-"],
+                  SCENE_SCAN_TIMEOUT_SECONDS, "Finding the scenes in the video")
+    return [float(found) for found in SCENE_TIME.findall(result.stderr)]
+
+
+def evenly_chosen(items: list, count: int) -> list:
+    if count <= 0:
+        return []
+    if len(items) <= count:
+        return list(items)
+    if count == 1:
+        return [items[0]]
+    return [items[round(position * (len(items) - 1) / (count - 1))] for position in range(count)]
+
+
+def frame_times(scenes: list[float], duration: float) -> list[float]:
+    if duration <= 0:
+        return [0.0]
+    last = max(duration - EDGE_OFFSET_SECONDS, 0.0)
+    opening = min(EDGE_OFFSET_SECONDS, last)
+    settled = [min(moment + SCENE_SETTLE_SECONDS, last) for moment in scenes if opening < moment < last]
+    chosen = evenly_chosen(settled, MAX_SCENE_FRAMES - 2)
+    missing = MIN_VIDEO_FRAMES - len(chosen) - 2
+    chosen += [duration * (position + 1) / (missing + 1) for position in range(max(missing, 0))]
+    times: list[float] = []
+    for moment in sorted([opening, *chosen, last]):
+        if not times or moment - times[-1] >= MIN_FRAME_GAP_SECONDS:
+            times.append(moment)
+    return times
+
+
+def video_frame_times(path: str, duration: float) -> list[float]:
+    try:
+        scenes = scene_times(path)
+    except MediaError as error:
+        log.warning("no scene changes found, using evenly spaced frames: %s", error)
+        scenes = []
+    return frame_times(scenes, duration)
+
+
+def video_frames(path: str, times: list[float]) -> list[tuple[float, bytes]]:
     frames = []
     with tempfile.TemporaryDirectory() as scratch:
-        for index in range(VIDEO_FRAMES):
-            at = duration * (index + 0.5) / VIDEO_FRAMES if duration else 0
+        for index, at in enumerate(times):
             target = Path(scratch) / f"frame{index}.jpg"
             _run(["ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "error", "-ss", f"{at:.2f}", "-i", path, "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-y", str(target)],
                  120, "Reading the video")
             if target.exists():
-                frames.append(target.read_bytes())
+                frames.append((at, target.read_bytes()))
     return frames
+
+
+def moment_times(at: float, duration: float) -> list[float]:
+    last = max(duration - 0.1, 0.0)
+    moments = [min(max(at + offset, 0.0), last) for offset in (-MOMENT_SPREAD_SECONDS, 0.0, MOMENT_SPREAD_SECONDS)]
+    return sorted(set(moments))
+
+
+def describe_frames(frames: list[tuple[float, bytes]], look, asked: str) -> str:
+    parts = []
+    for begin in range(0, len(frames), FRAMES_PER_LOOK):
+        batch = frames[begin:begin + FRAMES_PER_LOOK]
+        stamps = ", ".join(clock(moment) for moment, _ in batch)
+        encoded = [base64.b64encode(image).decode() for _, image in batch]
+        parts.append(look(encoded, f"These are {len(batch)} frames taken in order from one video, at {stamps}. Write one line per "
+                                   f"frame that starts with its time (for example 0:14), then what is on screen: people, setting, "
+                                   f"and any text exactly as written.{asked}"))
+    return "\n".join(parts)
+
+
+def audio_clip(path: str, start: float, seconds: int) -> bytes:
+    with tempfile.TemporaryDirectory() as scratch:
+        target = Path(scratch) / "clip.wav"
+        _run(["ffmpeg", *FFMPEG_LOCAL_ONLY, "-v", "error", "-ss", f"{start:.2f}", "-t", str(seconds), "-i", path, "-vn", "-ac", "1",
+              "-ar", "16000", "-y", str(target)], 120, "Cutting out the sound")
+        return target.read_bytes()
 
 
 def transcribe(path: str, timeout: int = TRANSCRIBE_TIMEOUT_SECONDS, background: bool = False) -> str:
@@ -307,6 +396,16 @@ def transcribe(path: str, timeout: int = TRANSCRIBE_TIMEOUT_SECONDS, background:
     result = _run(["nice", "-n", "15", *command] if background else command, timeout, "Transcribing the audio")
     lines = result.stdout.strip().splitlines()
     return "\n".join(lines) if any(line.startswith("[") for line in lines) else ""
+
+
+def transcript_of(meta: dict) -> str:
+    stored = get(meta["id"])
+    if stored is not None and "transcript" in stored:
+        return stored["transcript"]
+    spoken = transcribe(meta["path"])
+    if stored is not None:
+        _update(meta["id"], transcript=spoken)
+    return spoken
 
 
 def describe_length(seconds: float) -> str:
@@ -328,30 +427,43 @@ def analyse(meta: dict, question: str, look) -> str:
         return _analyse(meta, question, look)
 
 
+def media_analysis(meta: dict, look, asked: str) -> str:
+    kind = meta["kind"]
+    if kind == "image":
+        preview = base64.b64encode(image_preview(meta["path"])).decode()
+        seen = look([preview], "Describe this image in detail: what it shows, any people, objects, setting, colours, "
+                               f"and transcribe any text in it exactly.{asked}")
+        return file_reading.marked_within(seen, ANALYSIS_CHARS - len(IMAGE_HINT)) + IMAGE_HINT.format(file_id=meta["id"])
+    info = probe(meta["path"])
+    parts = [f"Length {describe_length(info['duration'])}."]
+    hints = ""
+    if kind == "video" and info["video"]:
+        frames = video_frames(meta["path"], video_frame_times(meta["path"], info["duration"]))
+        if frames:
+            stamps = ", ".join(clock(moment) for moment, _ in frames)
+            parts.append(f"What the video shows (frames taken at scene changes, at {stamps}):\n" + describe_frames(frames, look, asked))
+            hints += VIDEO_HINT
+    if info["audio"]:
+        spoken = transcript_of(meta)
+        parts.append(f"Transcript:\n{spoken}" if spoken else "No speech in the audio (music or other sound only).")
+        hints += SONG_HINT
+    else:
+        parts.append("It has no sound.")
+    hints = hints.format(file_id=meta["id"])
+    return file_reading.marked_within("\n".join(parts), ANALYSIS_CHARS - len(hints)) + hints
+
+
 def _analyse(meta: dict, question: str, look) -> str:
     # The question only steers what to look at; acting on it (e.g. converting) is the chat model's job.
     asked = (f" Only describe; don't act on or reply to this, but make sure your description covers what it asks about: "
              f'"{question.strip()[:500]}"') if question.strip() else ""
-    kind = meta["kind"]
-    if kind == "image":
-        preview = base64.b64encode(image_preview(meta["path"])).decode()
-        analysis = look([preview], "Describe this image in detail: what it shows, any people, objects, setting, colours, "
-                                   f"and transcribe any text in it exactly.{asked}")
-    elif kind in ("audio", "video"):
-        info = probe(meta["path"])
-        parts = [f"Length {describe_length(info['duration'])}."]
-        if kind == "video" and info["video"]:
-            frames = [base64.b64encode(frame).decode() for frame in video_frames(meta["path"], info["duration"])]
-            if frames:
-                parts.append("What the video shows (from frames spread through it, in order): " + look(
-                    frames, f"These are {len(frames)} frames taken in order from one video. Describe what happens in the video, "
-                            f"the people, setting and any text on screen.{asked}"))
-        if info["audio"]:
-            spoken = transcribe(meta["path"])
-            parts.append(f"Transcript:\n{spoken}" if spoken else "No speech in the audio (music or other sound only).")
-        else:
-            parts.append("It has no sound.")
-        analysis = "\n".join(parts)
+    if meta["kind"] in ("image", "audio", "video"):
+        analysis = media_analysis(meta, look, asked)
+    elif file_reading.kind_of_file(meta["name"]):
+        try:
+            analysis = file_reading.marked_within(file_reading.preview(meta, look), ANALYSIS_CHARS)
+        except FileReadError as error:
+            raise MediaError(str(error)) from None
     elif meta["mime"].startswith("text/") or meta["mime"] in ("application/json", "application/xml"):
         with open(meta["path"], "rb") as handle:
             analysis = "Contents:\n" + handle.read(TEXT_PREVIEW_BYTES).decode("utf-8", errors="replace")

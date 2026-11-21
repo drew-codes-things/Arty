@@ -10,12 +10,20 @@ import connections
 import desktop_look
 import email_watch
 import expiry
+import inbox_tidy
+import jobs
 import memory_tidy
 import notify
+import shopping
 import store
 import style
 import timing
+import watchers
+import web_pages
 
+from archive import archive_turn
+from job_gate import GpuGate
+from job_types import Services
 from reply_rules import APP_NOTES
 from schedules import send_reminder, guarded, due_schedules_now, send_calendar_and_deadline_reminders
 from connections import complete_text
@@ -67,6 +75,9 @@ def run_schedule(schedule: dict, now: datetime):
         # A plain reminder: send the exact text, no model needed (and nothing to get wrong).
         send_reminder(schedule, now)
         return
+    if jobs.job_of(schedule):
+        threading.Thread(target=run_job, args=(schedule, now), name="job", daemon=True).start()
+        return
     if kind := briefing.kind_of(schedule["instructions"]):
         # Built by code from the real data (the model made up placeholder events); in the background.
         threading.Thread(target=send_briefing, args=(schedule["title"], kind), name="briefing", daemon=True).start()
@@ -74,6 +85,31 @@ def run_schedule(schedule: dict, now: datetime):
     created = store.create_task(schedule["title"], schedule["instructions"], "schedule", schedule["id"])
     store.update_schedule(schedule["id"], last_task_id=created["id"])
     log.info("schedule %s queued task %s", schedule["id"], created["id"])
+
+
+JOB_RESULT_CHARS = 60000
+
+
+def job_tool_call(name: str, arguments: dict) -> str:
+    if name == watchers.PAGE_TOOL:
+        return shopping.fetch_tool_text(arguments, budget=web_pages.ReplyBudget(1))
+    return connections.hub.call(name, arguments, limit=JOB_RESULT_CHARS)
+
+
+def job_services() -> Services:
+    config = connections.load_config()
+    settings = config.get("jobs") or {}
+    if not connections.hub.routes:
+        connections.hub.refresh()
+    return Services(call_tool=job_tool_call,
+                    complete=complete_text, send=notify.send,
+                    record_chat=lambda user_text, answer: archive_turn(config, user_text, answer, []),
+                    settings=settings, gate=GpuGate.from_settings(settings), mailbox=inbox_tidy.connected(),
+                    place=config.get("weather"), read_price=shopping.read_price)
+
+
+def run_job(schedule: dict, now: datetime):
+    guarded(f"job {schedule['id']}", lambda: jobs.run(schedule, job_services(), now))
 
 
 def start_style_refresh():

@@ -311,3 +311,18 @@ def test_real_smart_turn_ends_a_whole_request_sooner_than_the_old_rule():
     while not collector.feed(silence(FRAME_SECONDS)):
         waited += 1
         assert waited < END_SILENCE_FRAMES
+
+
+def test_the_first_end_of_request_check_can_be_set_later_or_is_refused_when_silly():
+    from turn_end import turn_pause_frames
+    assert turn_pause_frames({}, TURN_WAIT_FRAMES) == PAUSE_FRAMES
+    assert turn_pause_frames({"VOICE_TURN_PAUSE_MS": "600"}, TURN_WAIT_FRAMES) == 20
+    for bad in ("soon", "0", "1600", "9000"):
+        with pytest.raises(ValueError, match="VOICE_TURN_PAUSE_MS"):
+            turn_pause_frames({"VOICE_TURN_PAUSE_MS": bad}, TURN_WAIT_FRAMES)
+
+
+def test_the_listening_setup_hands_its_first_check_to_every_collector(tmp_path):
+    from turn_end import Listening
+    listening = Listening(WebrtcSpeech, None, pause_frames=20)
+    assert listening.new_collector().pause_frames == 20

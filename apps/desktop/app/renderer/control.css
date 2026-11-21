@@ -1,0 +1,7 @@
+:root { --bar: #8f1d1d; --text: #ffffff; --button: #ffffff; --button-text: #8f1d1d; }
+html, body { margin: 0; height: 100%; background: var(--bar); color: var(--text); font: 14px system-ui, sans-serif; overflow: hidden; }
+.bar { display: flex; align-items: center; gap: 10px; height: 100%; padding: 0 12px; box-sizing: border-box; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text); flex: none; }
+.words { flex: 1; }
+#stop { background: var(--button); color: var(--button-text); border: 0; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
+.hotkey { opacity: 0.85; font-size: 12px; }

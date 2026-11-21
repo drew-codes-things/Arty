@@ -1,4 +1,3 @@
-import ast
 import calendar
 import json
 import re
@@ -197,13 +196,14 @@ def currency_facts(text) -> str:
     return convert_currency(match.group("amount").replace(",", ""), source, target)
 
 def calculate(expression) -> str:
+    if len(str(expression or "")) > quick.MAX_EXPRESSION_CHARS:
+        return "Can't work that out (too long). Use numbers with + - * / ** ^ and brackets, or 'N% of M'."
     text = quick.PERCENT_OF.sub(r"(\1/100*\2)", str(expression or "")).replace("^", "**").replace("×", "*").replace("÷", "/")
     text = text.replace(",", "")
     try:
-        value = quick._evaluate(ast.parse(text, mode="eval"))
-    except (ValueError, SyntaxError, ZeroDivisionError, OverflowError) as error:
+        shown = quick.show_number(quick.evaluate_arithmetic(text))
+    except quick.ARITHMETIC_ERRORS as error:
         return f"Can't work that out ({error}). Use numbers with + - * / ** ^ and brackets, or 'N% of M'."
-    shown = f"{value:,.10g}" if isinstance(value, float) and not value.is_integer() else f"{int(value):,}"
     return f"{expression} = {shown}"
 
 

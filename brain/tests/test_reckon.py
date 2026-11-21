@@ -1,4 +1,5 @@
 import sys
+import time
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -119,6 +120,19 @@ class Calculate(unittest.TestCase):
     def test_rejects_code(self):
         self.assertIn("Can't work that out", reckon.calculate("__import__('os')"))
         self.assertIn("Can't work that out", reckon.calculate("1/0"))
+
+    def test_refuses_huge_numbers_quickly(self):
+        for expression in ["(((9^100)^100)^100)^3", "((9^100)^100)^100", "9^99*" * 60 + "9", "(9^100)^50",
+                           "9" * 5000, "-" * 50000 + "1", "-" * 900 + "1", "1" + "+1" * 400, "(-8)^0.5", "1e308*10"]:
+            started = time.perf_counter()
+            answer = reckon.calculate(expression)
+            self.assertLess(time.perf_counter() - started, 0.5, expression[:40])
+            self.assertIn("Can't work that out", answer, expression[:40])
+
+    def test_large_but_fair_numbers_still_work(self):
+        self.assertTrue(reckon.calculate("2^100").endswith("= 1,267,650,600,228,229,401,496,703,205,376"))
+        self.assertIn(" = ", reckon.calculate("(2^100)^100"))
+        self.assertIn(" = ", reckon.calculate("9^99*9^99"))
 
 
 class Currency(unittest.TestCase):

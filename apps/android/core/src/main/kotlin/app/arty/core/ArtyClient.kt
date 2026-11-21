@@ -43,7 +43,9 @@ class ArtyClient(
         val history = JSONArray()
         messages.forEach { history.put(JSONObject().put("role", it.role).put("content", it.contentJson())) }
         // "client": the brain then knows this app can open calls and texts for the user.
-        return request("POST", "/v1/chat/jobs", JSONObject().put("model", model).put("messages", history).put("client", "phone")).getString("id")
+        val body = JSONObject().put("model", model).put("messages", history).put("client", "phone")
+            .put("features", JSONArray(listOf("device_actions", "camera")))
+        return request("POST", "/v1/chat/jobs", body).getString("id")
     }
 
     /** Uploads one file for use in chat (POST /v1/files). [size] must be exact; the brain refuses over [MAX_UPLOAD_BYTES]. */

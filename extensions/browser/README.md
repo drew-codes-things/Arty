@@ -12,10 +12,11 @@
 
 </div>
 
-> **Latest release.** Version 1.6 is attached to the
-> [1.5.9 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.5.9). It tells Arty Desktop which browser
-> it is in so Arty can use a browser by name, and adds the Opera and Vivaldi steps below. Choosing a browser by name
-> needs Arty Desktop 1.5.9.
+> **Latest release.** Version 1.7 is attached to the
+> [1.6.0 release](https://github.com/drew-codes-things/Arty/releases/tag/v1.6.0). It pairs with Arty Desktop by itself
+> (see [Pairing by itself](#pairing-by-itself)) and needs Arty Desktop 1.6.0 for that. Version 1.6 tells Arty Desktop
+> which browser it is in so Arty can use a browser by name, and added the Opera and Vivaldi steps below; choosing a
+> browser by name needs Arty Desktop 1.5.9 or newer.
 
 ---
 
@@ -111,6 +112,33 @@ on it.
    browser's toolbar (in Firefox and Edge it may be under the puzzle-piece extensions button) and paste the pairing
    code shown there. Until it is paired the icon shows a red **!** and the extension does nothing.
    The same screen lists the sites Arty may use, each with a **Forget** button.
+   With version 1.7 and Arty Desktop 1.6.0 or newer this step is usually not needed: see
+   [Pairing by itself](#pairing-by-itself).
+
+### Pairing by itself
+
+Version 1.7 asks Arty Desktop for the pairing code through the browser's native messaging, so a browser with the
+extension connects without pasting anything. Arty Desktop looks for browsers that have the extension (by its fixed id
+in Chrome, Chromium, Edge, Brave, Opera and Vivaldi, by `arty-browser@arty.home` in Firefox) each time it starts, and
+for each one writes a small connector (`app.arty.desktop`) into your own user folders only: a manifest in the
+browser's `NativeMessagingHosts` folder on Linux, a key under `HKEY_CURRENT_USER` on Windows. No administrator rights
+are used. The connector is a short standalone Python script in Arty Desktop's data folder. It answers only the Arty
+extension (the browser starts it only for the extension id or add-on id named in its manifest, and the script checks
+that again before reading anything), takes one message of at most 4 KB, and replies with the pairing code or with
+"unavailable". The extension still checks that Arty Desktop holds the code before it sends it, as in 1.5.
+
+The code is the same one a program running as you could already read from Arty Desktop's data folder, so this does
+not let anything new in. As with the Origin check, a copy of the extension loaded unpacked (or as a temporary
+add-on in Firefox) with the same id gets the code too: only load the extension from this folder or a release.
+
+Browsers installed as a Snap or Flatpak can't start programs outside their sandbox, so they keep using the pasted
+code. The **Browsers** section under **Chrome sites…** in Arty Desktop shows each browser it found, whether it is
+connected, and whether it connects by itself, in one line each. A browser that isn't connected but could connect by
+itself has a **Connect** button, which turns connecting by itself on and writes its connector again; if the browser
+is open it connects within half a minute. The button under the list switches connecting by itself off (which
+removes every connector Arty wrote) and on again. On Linux, switch it off there before deleting the Arty AppImage; the Windows
+uninstaller removes the connector by itself. Opera and Vivaldi on Windows read Chrome's key, and on Linux the
+connector is written into their own config folders: both are not tested yet.
 
 After pulling a newer version, click the reload icon on its card. Version 1.2 has a fixed extension id that Arty
 Desktop checks, so when updating from 1.1 remove the old card and choose **Load unpacked** again; Arty Desktop
@@ -121,7 +149,8 @@ Desktop its icon shows the red **!**. Version 1.6 tells Arty Desktop which brows
 browser by name; it is now called Arty for your browser, with the same extension id, so updating is a reload. It
 needs Arty Desktop 1.5.9 or newer for choosing by name; with an older Arty Desktop it works as 1.5 did. A browser
 still on 1.5 or older stays usable but can't be chosen by name, and Arty lists it as one that doesn't say which
-browser it is.
+browser it is. Version 1.7 adds the `nativeMessaging` permission and pairs by itself (above); the browser asks you to
+accept the new permission when it updates, and pasting a code still works.
 
 ## Usage
 

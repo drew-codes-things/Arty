@@ -82,6 +82,7 @@ def _refresh_installed() -> list[dict]:
             "billions": _parameter_billions(shown.get("details") or entry.get("details") or {}),
             "tools": "tools" in capabilities,
             "vision": "vision" in capabilities,
+            "audio": "audio" in capabilities,
             "embedding": "embedding" in capabilities,
             "thinking": "thinking" in capabilities,
             "context_length": trained_context(shown.get("model_info") or {}),

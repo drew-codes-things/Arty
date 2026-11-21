@@ -5,13 +5,14 @@ import desktop_look
 import drafts
 import hidden_notes
 import model_choice
+import policy
 import safety
 
 from archive import message_text
 from reply_rules import user_words
 from replies import as_written, never_an_offer
 from model_choice import AGENT_QUIET_SECONDS, use_requested_model, agent_model
-from attachments import expand_attachments, to_engine_messages
+from attachments import expand_attachments, to_engine_messages, typed_texts
 from agent_loop import ROUNDS_KEY, AgentRun, run_agent
 from honesty import client_tool_runs, some_tool_worked, refused_a_step, be_honest
 
@@ -38,10 +39,12 @@ def agent_reply(config, messages, client_tools, on_text, on_thinking, client="")
             kind, reply = declined
             log.info("declined a %s request from an agent", kind)
             return reply, [f"safety_{kind}"], {}, None
-    messages, _ = expand_attachments(messages)
+    typed = typed_texts(messages)
+    messages, attached = expand_attachments(messages)
     conversation = to_engine_messages([m for m in messages if m.get("role") != "system"])
     client_system = "\n".join(message_text(m) for m in messages if m.get("role") == "system").strip()
-    state = {"messages": conversation, "context": {}, "groups": []}
+    state = {"messages": conversation, "context": policy.starting_context(attached), "groups": ["files"] if attached else [],
+             "typed": typed}
     draft = drafts.Draft(on_text, as_written, never_an_offer) if on_text else None
     connections.hub.refresh()
     outcome = run_agent(config, state, run=AgentRun(client_system=client_system, client_tools=client_tools, draft=draft,

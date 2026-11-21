@@ -29,21 +29,21 @@ data class SetupCode(val address: String, val apiKey: String, val accessClientId
             return code
         }
 
-        private fun readObject(scanned: String): JSONObject = try {
+        internal fun readObject(scanned: String): JSONObject = try {
             JSONObject(scanned.trim())
         } catch (error: JSONException) {
             throw SetupCodeException(NOT_A_SETUP_CODE)
         }
 
-        private fun hasUsername(address: String): Boolean =
+        internal fun hasUsername(address: String): Boolean =
             address.trim().substringAfter("://", "").substringBefore('/').substringBefore('?').substringBefore('#').contains('@')
 
-        private fun wholeNumber(value: Any?): Int {
+        internal fun wholeNumber(value: Any?): Int {
             val number = (value as? Number)?.toDouble() ?: return 0
             if (number.isNaN() || number != Math.floor(number) || number < 0) return 0
             return number.coerceAtMost(Int.MAX_VALUE.toDouble()).toInt()
         }
 
-        private fun field(json: JSONObject, name: String): String = (json.opt(name) as? String)?.trim().orEmpty()
+        internal fun field(json: JSONObject, name: String): String = (json.opt(name) as? String)?.trim().orEmpty()
     }
 }

@@ -65,6 +65,7 @@ _ROOT_ID_LINE = re.compile(r"^[ \t]*Root window id:[ \t]*(0x[0-9a-fA-F]+)", re.M
 _PARENT_ID_LINE = re.compile(r"^[ \t]*Parent window id:[ \t]*(0x[0-9a-fA-F]+)", re.M)
 _HIDDEN_MAP_STATE = re.compile(r"^[ \t]*Map State:[ \t]*(IsUnMapped|IsUnviewable)[ \t]*$", re.M)
 MAX_FRAME_DEPTH = 8
+ACTIVATE_SECONDS = 3.0
 _QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
@@ -111,6 +112,29 @@ def front_window():
     return None
 
 
+def front_window_id():
+    if kind() == "windows":
+        return win_desktop.front_window_id()
+    if kind() == "x11":
+        found = _WINDOW_ID.search(run(["xprop", "-root", "_NET_ACTIVE_WINDOW"]) or "")
+        return found.group().lower() if found and int(found.group(), 16) else None
+    if kind() == "wayland" and have("kdotool"):
+        return run(["kdotool", "getactivewindow"]) or None
+    return None
+
+
+def activate_window(window_id):
+    if kind() == "windows":
+        return win_desktop.activate_window(window_id)
+    if kind() == "x11" and have("xdotool"):
+        return run(["xdotool", "windowactivate", "--sync", window_id], timeout=ACTIVATE_SECONDS) is not None
+    if kind() == "x11" and have("wmctrl"):
+        return run(["wmctrl", "-i", "-a", window_id], timeout=ACTIVATE_SECONDS) is not None
+    if kind() == "wayland" and have("kdotool"):
+        return run(["kdotool", "windowactivate", window_id], timeout=ACTIVATE_SECONDS) is not None
+    return False
+
+
 def window_titles():
     """Titles of the open windows by app, {} where the desktop won't say."""
     if kind() == "windows":
@@ -128,6 +152,20 @@ def _x11_client_titles():
         if window and window[1]:
             out.setdefault(window[0], []).append(window[1])
     return out
+
+
+def open_windows_with_ids():
+    if kind() == "windows":
+        return win_desktop.open_windows_with_ids()
+    if kind() != "x11":
+        return []
+    listing = run(["xprop", "-root", "_NET_CLIENT_LIST"])
+    found = []
+    for window_id in _WINDOW_ID.findall(listing or ""):
+        window = _x11_window(window_id)
+        if window:
+            found.append((window_id.lower(), window[0], window[1]))
+    return found
 
 
 def window_listing():

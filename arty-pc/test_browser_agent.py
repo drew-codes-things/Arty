@@ -669,6 +669,7 @@ class FakeContext:
     def __init__(self, open_tabs=1):
         self.pages = []
         self.handlers = {}
+        self.routes = []
         for _ in range(open_tabs):
             self.pages.append(FakeTab(self, "https://www.example.org/"))
 
@@ -687,6 +688,12 @@ class FakeContext:
 
     def new_cdp_session(self, tab):
         return FakeTabSession(tab)
+
+    def route(self, pattern, handler):
+        self.routes.append((pattern, handler))
+
+    def unroute(self, pattern, handler):
+        self.routes.remove((pattern, handler))
 
 
 class FakeTabSession:
@@ -855,3 +862,195 @@ class TestChromeStart:
         monkeypatch.setattr(agent, "chrome_listening", lambda: True)
         agent.start_chrome()
         assert "--hide-crash-restore-bubble" in started[0]
+
+
+OWN_APPS = {"drive": "https://drive.example.org", "calendar": "https://calendar.example.org",
+            "starfire": "https://starfire.example.org"}
+
+
+class FakeResponse:
+    def __init__(self, status, headers=None, body=b"file", url=None):
+        self.url = url
+        self.status = status
+        self.ok = 200 <= status < 300
+        self.status_text = ""
+        self.headers = headers or {}
+        self.data = body
+
+    def body(self):
+        return self.data
+
+
+class FakeRequests:
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked = []
+
+    def get(self, url, timeout=None, max_redirects=None):
+        self.asked.append(url)
+        answer = self.answers[url]
+        answer.url = answer.url or url
+        return answer
+
+
+class FakeRoute:
+    def __init__(self):
+        self.aborted = None
+
+    def abort(self, reason):
+        self.aborted = reason
+
+
+@pytest.fixture
+def own_apps_listed(tmp_path, monkeypatch):
+    listed = tmp_path / "own-apps.json"
+    listed.write_text(json.dumps(OWN_APPS))
+    monkeypatch.setattr(agent, "OWN_APPS_FILE", str(listed))
+    monkeypatch.setattr(agent, "DOWNLOADS", str(tmp_path / "Downloads"))
+    return listed
+
+
+class TestOwnAppsStayOutOfArtysBrowser:
+    @pytest.mark.parametrize("url", ["https://drive.example.org/", "drive.example.org/api/session",
+                                     "https://STARFIRE.example.org/login", "https://x.calendar.example.org/",
+                                     "http://drive.example.org:8443/", "https://drive.example.org./api/session"])
+    def test_opening_an_own_app_is_refused_and_nothing_loads(self, attached_browser, own_apps_listed, url):
+        browser, context = attached_browser
+        before = context.pages[-1].url
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle("open", {"url": url})
+        assert context.pages[-1].url == before
+
+    @pytest.mark.parametrize("url", ["https://user@drive.example.org/", "https://drive.example.org%2f@evil.example/"])
+    def test_an_address_with_a_sign_in_part_is_refused_and_nothing_loads(self, attached_browser, own_apps_listed, url):
+        browser, context = attached_browser
+        before = context.pages[-1].url
+        with pytest.raises(ValueError):
+            browser.handle("open", {"url": url})
+        assert context.pages[-1].url == before
+
+    def test_a_lookalike_address_still_opens(self, attached_browser, own_apps_listed):
+        browser, _ = attached_browser
+        assert browser.handle("open", {"url": "https://drive.example.org.evil.example/"})["url"] == \
+            "https://drive.example.org.evil.example/"
+
+    @pytest.mark.parametrize("action, args", [
+        ("read", {}), ("click", {"target": "Delete forever"}), ("click", {"target": "7"}),
+        ("type", {"target": "Name", "text": "x", "submit": True}), ("press", {"keys": "Enter"}), ("scroll", {}),
+        ("download", {"target": "plan.pdf"}), ("upload", {"target": "Upload", "path": __file__}), ("back", {}),
+        ("play_media", {})])
+    def test_nothing_is_done_on_an_own_app_page_left_open(self, attached_browser, own_apps_listed, action, args):
+        browser, context = attached_browser
+        context.pages[-1].url = "https://drive.example.org/files/0"
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle(action, args)
+
+    def test_a_click_that_lands_on_an_own_app_is_refused_and_the_page_is_left(self, attached_browser, own_apps_listed,
+                                                                            monkeypatch):
+        browser, context = attached_browser
+        tab = context.pages[-1]
+
+        class Link:
+            def click(self):
+                tab.url = "https://starfire.example.org/api/session"
+        monkeypatch.setattr(browser, "locate", lambda page, target: Link())
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle("click", {"target": "Continue"})
+        assert tab.url == "about:blank"
+
+    def test_a_download_link_to_an_own_app_is_refused_before_any_request(self, attached_browser, own_apps_listed):
+        browser, context = attached_browser
+        context.request = FakeRequests({})
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle("download", {"target": "https://drive.example.org/api/files/2/content"})
+        assert context.request.asked == []
+
+    def test_a_download_sent_on_into_an_own_app_is_refused(self, attached_browser, own_apps_listed):
+        browser, context = attached_browser
+        context.request = FakeRequests({
+            "https://files.example/report.pdf": FakeResponse(302, {"location": "https://drive.example.org/api/files/2/content"})})
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle("download", {"target": "https://files.example/report.pdf"})
+        assert context.request.asked == ["https://files.example/report.pdf"]
+
+    @pytest.mark.parametrize("url", ["https://drive.example.org\\api/files/2/content",
+                                     "https://\uff44rive.example.org/api/files/2/content",
+                                     "https://drive\u3002example\u3002org/api/files/2/content",
+                                     "https://dri\tve.example.org/api/files/2/content",
+                                     "https://drive%2Eexample.org/api/files/2/content"])
+    def test_a_download_written_so_a_browser_reads_an_own_app_is_refused_before_any_request(
+            self, attached_browser, own_apps_listed, url):
+        browser, context = attached_browser
+        context.request = FakeRequests({})
+        with pytest.raises(ValueError, match="own apps|backslash|plainly"):
+            browser.handle("download", {"target": url})
+        assert context.request.asked == []
+
+    @pytest.mark.parametrize("url", ["https://\uff44rive.example.org/", "https://drive\u3002example\u3002org/x",
+                                     "https://drive.example.org\\@evil.example/x",
+                                     "https:\\\\drive.example.org/api/session"])
+    def test_opening_an_own_app_written_another_way_is_refused(self, attached_browser, own_apps_listed, url):
+        browser, context = attached_browser
+        before = context.pages[-1].url
+        with pytest.raises(ValueError, match="own apps|backslash|plainly"):
+            browser.handle("open", {"url": url})
+        assert context.pages[-1].url == before
+
+    def test_a_download_the_browser_sent_to_an_own_app_is_not_saved(self, attached_browser, own_apps_listed):
+        browser, context = attached_browser
+        context.request = FakeRequests({
+            "https://files.example/report.pdf": FakeResponse(200, url="https://drive.example.org/api/files/2/content")})
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle("download", {"target": "https://files.example/report.pdf"})
+        assert not os.path.exists(agent.DOWNLOADS) or os.listdir(agent.DOWNLOADS) == []
+
+    def test_an_ordinary_redirected_download_is_saved(self, attached_browser, own_apps_listed):
+        browser, context = attached_browser
+        context.request = FakeRequests({
+            "https://files.example/report": FakeResponse(302, {"location": "/files/report.pdf"}),
+            "https://files.example/files/report.pdf": FakeResponse(200)})
+        result = browser.handle("download", {"target": "https://files.example/report"})
+        assert result["saved"].endswith("report.pdf")
+
+    def test_linkedin_reading_never_goes_to_an_own_app(self, attached_browser, own_apps_listed):
+        browser, _ = attached_browser
+        with pytest.raises(ValueError, match="own apps"):
+            browser.handle("linkedin_posts", {"profile": "https://drive.example.org/in/x"})
+
+    def test_requests_from_any_page_to_an_own_app_are_aborted(self, attached_browser, own_apps_listed):
+        browser, context = attached_browser
+        browser.handle("read", {})
+        [(pattern, handler)] = context.routes
+        for url in ("https://drive.example.org/api/session", "wss://starfire.example.org/live",
+                    "https://u@calendar.example.org:443/x", "https://a.drive.example.org/", "https://DRIVE.example.org"):
+            assert pattern.search(url), url
+        for url in ("https://drive.example.org.evil.example/", "https://evil.example/?u=https://drive.example.org/",
+                    "https://notdrive.example.org/"):
+            assert not pattern.search(url), url
+        route = FakeRoute()
+        handler(route)
+        assert route.aborted == "blockedbyclient"
+
+    def test_the_route_follows_the_list_when_it_changes(self, attached_browser, own_apps_listed):
+        browser, context = attached_browser
+        browser.handle("read", {})
+        own_apps_listed.write_text(json.dumps({"drive": "https://files.example.net"}))
+        browser.handle("read", {})
+        [(pattern, _)] = context.routes
+        assert pattern.search("https://files.example.net/") and not pattern.search("https://drive.example.org/")
+
+    def test_an_unreadable_list_refuses_instead_of_browsing_unguarded(self, attached_browser, own_apps_listed):
+        browser, _ = attached_browser
+        own_apps_listed.write_text("{not json")
+        with pytest.raises(ValueError, match="can't be read"):
+            browser.handle("open", {"url": "https://docs.example/"})
+
+    def test_without_own_apps_browsing_is_unchanged(self, attached_browser, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "OWN_APPS_FILE", str(tmp_path / "missing.json"))
+        browser, context = attached_browser
+        assert browser.handle("open", {"url": "https://docs.example/"})["url"] == "https://docs.example/"
+        assert context.routes == []
+
+    def test_the_apps_profile_is_private(self):
+        assert agent.APPS_PROFILE in agent.PRIVATE_FOLDERS
+        assert agent.APPS_PROFILE not in (agent.PROFILE, agent.GMAIL_PROFILE)

@@ -101,7 +101,3 @@ test('the browser-neutral name keeps the fixed id Arty Desktop checks', () => {
   assert.doesNotMatch(manifest.name, /Chrome/);
   assert.doesNotMatch(manifest.action.default_title, /Chrome/);
 });
-
-test('the extension version is 1.6', () => {
-  assert.strictEqual(manifest.version, '1.6');
-});

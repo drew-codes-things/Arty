@@ -175,7 +175,7 @@ def test_h4_after_a_page_was_read_in_this_reply_commands_files_and_opening_are_a
 
 def test_h4_the_reply_loop_starts_each_reply_afresh(monkeypatch, tmp_path):
     started = []
-    monkeypatch.setattr(brain.tools, "start_reply", lambda: started.append(True))
+    monkeypatch.setattr(brain.tools, "start_reply", lambda request_text="", arty_started=False: started.append(True))
     monkeypatch.setattr(brain, "_history_path", lambda: tmp_path / "history.json")
     monkeypatch.setattr(brain.tools, "definitions", lambda request_text=None: None)
 

@@ -1,6 +1,6 @@
 {
   "name": "arty",
-  "version": "1.5.9",
+  "version": "1.6.0",
   "description": "Arty on your desktop: talk to it, and let it use your computer",
   "main": "main.js",
   "scripts": {
@@ -30,6 +30,8 @@
       "platform.js",
       "service-proof.js",
       "preload.js",
+      "control-indicator.js",
+      "control-preload.js",
       "renderer/**/*",
       "assets/**/*"
     ],
@@ -83,7 +85,8 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "Arty-Setup-${version}.exe",
       "shortcutName": "Arty",
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "include": "build/installer.nsh"
     }
   },
   "author": "drew-codes-things"

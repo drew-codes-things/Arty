@@ -86,7 +86,7 @@ class FakeEngine:
         return next(self.chats)
 
 
-def run_agent(engine, messages, hub=None, client_tools=()):
+def run_agent(engine, messages, hub=None, client_tools=(), options=None):
     hub = hub or FakeHub()
     state = {"messages": messages, "context": {}}
     with unittest.mock.patch.object(connections, "hub", hub), \
@@ -96,7 +96,7 @@ def run_agent(engine, messages, hub=None, client_tools=()):
             unittest.mock.patch.object(agent_loop, "system_prompt", return_value=""), \
             unittest.mock.patch.object(agent_loop, "current_context", return_value=""), \
             unittest.mock.patch.object(brain.policy, "select_tools", side_effect=lambda tools, *args, **kwargs: tools):
-        outcome = brain.run_agent({"model": "m", "approval": RULES}, state, run=brain.AgentRun(client_tools=list(client_tools)))
+        outcome = brain.run_agent({"model": "m", "approval": RULES, **({"options": options} if options else {})}, state, run=brain.AgentRun(client_tools=list(client_tools)))
     return outcome, hub
 
 

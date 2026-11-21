@@ -2,7 +2,8 @@ import { ArtyApi } from "./api.js";
 import { h } from "./dom.js";
 import { scanQrCode } from "./scanner.js";
 import { cleanSettings, isComplete, saveSettings } from "./settings.js";
-import { parseSetupCode } from "./setupcode.js";
+import { linkPhone } from "./phonelink.js";
+import { readScannedCode } from "./setupcode.js";
 
 const WHERE_TO_FIND_THEM = [
   "App key: on the machine running the brain, in /srv/ai/secrets/arty-api.txt. Arty on your computer has it too, as api_key in its arty_config.yaml.",
@@ -37,7 +38,7 @@ export function renderSetup(container, storage, onConnected) {
   const scan = h("button", { type: "button", class: "button primary" }, "Scan QR code");
   const typeIn = h("button", { type: "button", class: "button" }, "Enter details manually");
   const choices = h("div", { class: "choices" }, scan, typeIn,
-    h("p", { class: "help" }, "The QR code is in Arty on your computer: open its tray menu and choose Phone setup code."));
+    h("p", { class: "help" }, "The QR code is in Arty on your computer: open its tray menu and choose Link a phone."));
 
   const showForm = () => {
     choices.hidden = true;
@@ -67,7 +68,13 @@ export function renderSetup(container, storage, onConnected) {
     try {
       const scanned = await scanQrCode();
       if (scanned === null) return;
-      const settings = parseSetupCode(scanned);
+      const { link, settings } = readScannedCode(scanned);
+      if (link) {
+        showStatus(status, "Linking with Arty...");
+        const linked = saveSettings(storage, await linkPhone(link));
+        onConnected(new ArtyApi(linked), linked);
+        return;
+      }
       fillForm(form, settings);
       showForm();
       await connectWith(settings);
@@ -86,7 +93,7 @@ export function renderSetup(container, storage, onConnected) {
   container.replaceChildren(
     h("img", { src: "icons/icon-180.png", alt: "" }),
     h("h1", {}, "Arty"),
-    h("p", {}, "Scan the setup code from Arty on your computer, or enter the keys yourself. They stay on this iPhone and are only sent to Arty."),
+    h("p", {}, "Scan the code from Arty on your computer: nothing to type. Or enter the keys yourself. They stay on this iPhone and are only sent to Arty."),
     choices, form, status,
   );
   container.hidden = false;

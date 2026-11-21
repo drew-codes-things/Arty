@@ -12,6 +12,7 @@ import connections  # noqa: E402
 import docs_reading  # noqa: E402
 import native_calls  # noqa: E402
 import research  # noqa: E402
+import shopping  # noqa: E402
 
 DJANGO_QUESTION = "How do I run a background task with the tasks framework built into Django 6? Show the code."
 KUBEFROST_QUESTION = "What flags does the kubefrost CLI take for snapshotting a Kubernetes namespace?"
@@ -100,7 +101,9 @@ def fake_hub(results, pages, fetched=None, delay=0.0):
 
 
 def lookup_with(results, pages, fetched=None, question=DJANGO_QUESTION, delay=0.0):
-    with unittest.mock.patch.object(connections.hub, "call", fake_hub(results, pages, fetched, delay)):
+    hub = fake_hub(results, pages, fetched, delay)
+    with unittest.mock.patch.object(connections.hub, "call", hub), \
+            unittest.mock.patch.object(shopping, "fetch_tool_text", lambda arguments: hub(docs_reading.FETCH_TOOL, arguments)):
         return native_calls.look_up_first(SHIPPED_CONFIG, question)
 
 
@@ -248,10 +251,10 @@ class WhichPageIsRead(unittest.TestCase):
 class LongToolResults(unittest.TestCase):
     def test_a_caller_can_ask_the_hub_for_more_than_the_usual_cap(self):
         hub = connections.ToolHub()
-        hub.routes = {"fetch__fetch": "http://hub/fetch/fetch"}
+        hub.routes = {"research__web_search": "http://hub/research/web_search"}
         with unittest.mock.patch.object(connections, "http_json", lambda *args, **named: "x" * 20000):
-            self.assertEqual(len(hub.call("fetch__fetch", {})), connections.TOOL_RESULT_CHARS)
-            self.assertEqual(len(hub.call("fetch__fetch", {}, limit=15000)), 15000)
+            self.assertEqual(len(hub.call("research__web_search", {})), connections.TOOL_RESULT_CHARS)
+            self.assertEqual(len(hub.call("research__web_search", {}, limit=15000)), 15000)
 
 
 if __name__ == "__main__":

@@ -335,13 +335,14 @@ INNER
   fi
 fi
 
-echo "== CT $CT: media tools (ffmpeg, ImageMagick, faster-whisper speech-to-text)"
+echo "== CT $CT: media tools (ffmpeg, ImageMagick, tesseract, faster-whisper speech-to-text)"
 pct exec $CT -- bash -s <<'INNER'
 set -euo pipefail
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg imagemagick python3-venv >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg imagemagick python3-venv tesseract-ocr tesseract-ocr-eng >/dev/null
 mkdir -p /srv/ai/media/models /srv/ai/brain/files
 [ -x /srv/ai/media/venv/bin/python ] || python3 -m venv /srv/ai/media/venv
 /srv/ai/media/venv/bin/pip install -q --upgrade "faster-whisper==1.1.1" requests "av<14"  # this faster-whisper imports requests (newer huggingface_hub dropped it) and uses an option PyAV 14 removed
+/srv/ai/media/venv/bin/pip install -q numpy
 # Fetch the speech model now, so the first voice note doesn't wait for a 500 MB download.
 /srv/ai/media/venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu', compute_type='int8', download_root='/srv/ai/media/models')"
 echo "   ffmpeg $(ffmpeg -version | head -1 | cut -d' ' -f3), $(magick -version | head -1 | cut -d' ' -f2-3), whisper small ready"

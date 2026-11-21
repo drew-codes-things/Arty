@@ -245,7 +245,7 @@ class ScriptedPictures(unittest.TestCase):
 
     def test_browser_profiles_are_private(self):
         for path in ("/home/ai/.gmail-chrome/Default/Cookies", "/home/ai/.browser-profile/Default/Login Data",
-                     "/home/ai/.local/browser-agent/token"):
+                     "/home/ai/.apps-browser-profile/Default/Cookies", "/home/ai/.local/browser-agent/token"):
             self.assertTrue(sharing.is_private(path), path)
 
 

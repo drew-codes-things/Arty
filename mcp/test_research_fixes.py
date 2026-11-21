@@ -273,3 +273,33 @@ def test_read_document_uses_the_name_the_download_got(monkeypatch):
     assert research.read_document("https://example.com/report.pdf") == "text of the document"
     assert "realpath -e -- \"$HOME\"/Downloads/" + shlex.quote("report (2).pdf") + ")" in commands[-1]
     assert commands[-1].endswith('doc2text "$target"')
+
+
+def test_a_download_never_follows_a_redirect_by_itself(tmp_path):
+    home = tmp_path / "home"
+    (home / "Downloads").mkdir(parents=True)
+    script = research.download_script("https://example.com/files/report.pdf")
+    assert " -L" not in script and "--location" not in script
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "curl").write_text('#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { shift; printf moved > "$1"; }; '
+                                   'shift; done\nprintf "302 https://drive.example.org/private"\n')
+    os.chmod(fake_bin / "curl", 0o755)
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                          env={"HOME": str(home), "PATH": f"{fake_bin}:/usr/bin:/bin"})
+    assert done.returncode == research.REDIRECTED_EXIT
+    assert done.stdout.strip().splitlines()[-1] == "302 https://drive.example.org/private"
+    assert list((home / "Downloads").iterdir()) == []
+
+
+def test_read_document_hands_a_redirect_back_instead_of_reading_it(monkeypatch):
+    commands = []
+
+    def fake_remote(command, **kwargs):
+        commands.append(command)
+        return research.REDIRECTED_EXIT, "302 https://drive.example.org/private\n"
+    monkeypatch.setattr(research, "remote_text", fake_remote)
+    answer = research.read_document("https://example.com/report.pdf")
+    assert "https://drive.example.org/private" in answer
+    assert "read_document" in answer
+    assert len(commands) == 1

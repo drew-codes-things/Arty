@@ -19,7 +19,9 @@ Know these before relying on it:
   are recalled by search, and it can miss details.
 - **One model on the GPU at a time** - looking at an image swaps the vision model in for that one look, then the main
   model loads back in the background (about a minute in all).
-- **Limited actions** - email is read-only, through a signed-in Gmail window; it can't send it. It can't create VMs
+- **Limited actions** - it sends email, changes your own Starfire Calendar app and saves to your own Starfire Drive app only once
+  they are connected and only after your yes to exactly what will happen ([details](acting-in-your-apps.md)); sent
+  email can't be undone. It can't create VMs
   or change the homelab on its own, and installing software on its own PC (sudo, apt, global npm or pip installs and
   the like) waits for your approval.
 - **Home network for most things** - away from home only the phone apps work (through Cloudflare). Arty Desktop,

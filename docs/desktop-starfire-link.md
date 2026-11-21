@@ -23,3 +23,30 @@ is asked and the app is told to use the full title. If the window closes or chan
 nothing is captured. On plain X11 a window with anything over it, a menu or tooltip included, is not captured (the
 cover could show through). Otherwise the card says plainly that the whole screen would be sent. An app with no
 window is reported as not found and nothing is captured, and a password manager is never looked at.
+
+## Linking by itself
+
+From Arty Desktop 1.6.0 and starfire Desktop 1.1.0 there is usually no code to type. While nothing is linked, Arty
+Desktop leaves a one-use secret (32 hex characters) in `.arty_link_offer` in its data folder, readable only by you.
+starfire Desktop, running as the same user on the same computer, reads it and pairs with exactly the same SPAKE2
+exchange as the code (marked `local`), so the secret itself is never sent and both sides still prove they know it.
+The secret is used up when the link is made, five wrong tries replace it, and Arty says in its window that starfire
+Desktop linked by itself; the link screen shows "Linked with starfire Desktop. It linked by itself". Unlinking makes
+a fresh secret. **Stop linking by itself** in the same screen removes the file and leaves only the code.
+A web page cannot read the file, and other users on the computer cannot either. Any program running as you could
+already read Arty's own token, so this gives such a program nothing it did not have.
+
+## Capabilities and opening a page in your browser
+
+From Arty Desktop 1.6.0, `/link/status` also lists what the linked app may ask for, so starfire Desktop can show it
+and offer only what works right now: `screen.look` (a picture of the screen or one window, above), `browser.open`
+(open a page in one of your browsers, with the names of the browsers whose Arty extension is connected) and Arty
+Desktop's version. Each entry says whether it is available; with computer control off, nothing is.
+
+`/link/browser` opens a page in one of your connected browsers. It takes exactly an action (`open`), an address and a
+browser name, and refuses anything else. Only `http` and `https` addresses with a site in them are taken; an address
+with a name and @ before the site, a backslash, an encoded site name, spaces, control or invisible characters, or more
+than 2,000 characters is refused before anything is asked, never cut. The browser has to be connected (with one
+connected, the name can be left out). The card names the browser and shows the whole address, and the page opens in a
+new tab only after **Allow**. Nothing from the page goes back to the linked app: only which browser and which tab.
+The same busy rule and one-minute pause after three refusals in a row apply as for the other steps.

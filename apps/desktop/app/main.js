@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, Tray, clipboard, globalShortcut, ipcMain, screen, dialog } = require('electron');
+const controlIndicator = require('./control-indicator');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -141,7 +142,7 @@ async function startBridge() {
     cwd: root,
     windowsHide: true,
     stdio: ['ignore', output, output],
-    env: { ...process.env, PYTHONUNBUFFERED: '1', ARTY_ROOT: root, ARTY_DATA: data },
+    env: { ...process.env, PYTHONUNBUFFERED: '1', ARTY_ROOT: root, ARTY_DATA: data, ARTY_VERSION: app.getVersion() },
   });
   bridge.on('exit', (code) => {
     bridge = null;
@@ -403,13 +404,15 @@ function buildTray() {
     },
     { label: 'Start with the PC', type: 'checkbox', checked: autostartEnabled(), click: (item) => setAutostart(item.checked) },
     { label: 'Connect to another Arty…', click: () => { win.show(); win.focus(); win.webContents.send('connect'); } },
-    { label: 'Phone setup code…', click: () => { win.show(); win.focus(); win.webContents.send('phone-code'); } },
+    { label: 'Link a phone…', click: () => { win.show(); win.focus(); win.webContents.send('phone-code'); } },
     { label: 'Chrome sites…', click: () => { win.show(); win.focus(); win.webContents.send('chrome-sites'); } },
     { label: 'Link starfire…', click: () => { win.show(); win.focus(); win.webContents.send('starfire-link'); } },
+    { label: 'Let Arty control the screen', type: 'checkbox', checked: screenControlOn, click: (item) => setScreenControl(item.checked) },
     { type: 'separator' },
     { label: 'Quit Arty', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu());
+  refreshTrayMenu = () => tray.setContextMenu(menu());
   tray.on('click', toggleWindow);
   win.on('always-on-top-changed', () => tray.setContextMenu(menu()));
 }
@@ -420,6 +423,72 @@ function setSolidity(value) {
   saveBounds();
 }
 
+const CONTROL_BAR = { width: 560, height: 48, top: 8 };
+let controlWin = null;
+let screenControlOn = false;
+let refreshTrayMenu = () => {};
+
+async function serviceCall(route, options = {}) {
+  if (!bridgeTrusted) throw new Error('the local service is not trusted yet');
+  const response = await fetch(`${BRIDGE_URL}${route}`, {
+    ...options,
+    headers: { 'X-Arty-Token': serviceToken(), 'Content-Type': 'application/json', ...(options.headers || {}) },
+    signal: AbortSignal.timeout(options.timeoutMs || 10000),
+  });
+  if (!response.ok) throw new Error(`${route} answered ${response.status}`);
+  return response.json();
+}
+
+function stopControl() {
+  serviceCall('/control/stop', { method: 'POST' }).catch((error) => console.error(`Arty: stopping screen control failed: ${error.message}`));
+}
+
+function showControlIndicator(state) {
+  return new Promise((resolve) => {
+    const { width } = screen.getPrimaryDisplay().workAreaSize;
+    controlWin = new BrowserWindow({
+      width: CONTROL_BAR.width, height: CONTROL_BAR.height,
+      x: Math.round((width - CONTROL_BAR.width) / 2), y: CONTROL_BAR.top,
+      frame: false, resizable: false, movable: false, skipTaskbar: true, focusable: false, show: false,
+      alwaysOnTop: true, backgroundColor: '#8f1d1d', title: 'Arty is controlling the screen',
+      webPreferences: { preload: path.join(__dirname, 'control-preload.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    controlWin.setAlwaysOnTop(true, 'screen-saver');
+    controlWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    controlWin.webContents.on('will-navigate', (event) => event.preventDefault());
+    controlWin.once('ready-to-show', () => {
+      controlWin.showInactive();
+      globalShortcut.register(controlIndicator.CONTROL_HOTKEY, stopControl);
+      resolve();
+    });
+    controlWin.loadFile(path.join(__dirname, 'renderer', 'control.html'), { query: { hotkey: state.hotkey_shown || '' } });
+  });
+}
+
+function hideControlIndicator() {
+  globalShortcut.unregister(controlIndicator.CONTROL_HOTKEY);
+  controlWin?.destroy();
+  controlWin = null;
+}
+
+function setScreenControl(enabled) {
+  serviceCall('/screen-control', { method: 'POST', body: JSON.stringify({ enabled }) })
+    .catch((error) => console.error(`Arty: changing screen control failed: ${error.message}`));
+}
+
+function watchScreenControl() {
+  controlIndicator.followControl({
+    fetchState: (after, seconds) => serviceCall(`/control?after=${after}&timeout=${seconds}`, { timeoutMs: (seconds + 5) * 1000 }),
+    postShown: (session) => serviceCall('/control/shown', { method: 'POST', body: JSON.stringify({ session }) }).catch(() => {}),
+    showIndicator: showControlIndicator,
+    hideIndicator: hideControlIndicator,
+    onEnabled: (enabled) => { screenControlOn = enabled; refreshTrayMenu(); },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    keepGoing: () => !quitting,
+  });
+}
+
+ipcMain.on('control-stop', stopControl);
 ipcMain.on('hide', () => win?.hide());
 ipcMain.on('show', () => { win?.show(); win?.focus(); });
 ipcMain.on('token', (event) => { event.returnValue = bridgeTrusted ? serviceToken() : ''; });
@@ -435,6 +504,7 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     installMissingDependencies().catch((error) => console.error(`Arty: checking for missing packages failed: ${error}`));
     buildTray();
+    watchScreenControl();
     globalShortcut.register('CommandOrControl+Shift+Space', showAndListen);
     globalShortcut.register('CommandOrControl+Shift+A', toggleWindow);
     globalShortcut.register('CommandOrControl+Alt+Space', showAndLook);

@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -11,6 +12,7 @@ for key in ("BRAIN_API_KEY", "MCPO_API_KEY"):
 
 import brain  # noqa: E402
 import agent_loop  # noqa: E402
+import app_actions  # noqa: E402
 import background_tasks  # noqa: E402
 import connections  # noqa: E402
 import policy  # noqa: E402
@@ -122,6 +124,13 @@ def model_replies(*steps):
 
 
 class InTheToolLoop(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        approvals = unittest.mock.patch.object(app_actions, "STATE_FILE", Path(folder.name) / "app-actions.json")
+        approvals.start()
+        self.addCleanup(approvals.stop)
+
     def run_turn(self, steps, background=False, chat_approved=None):
         hub = FakeHub()
         state = {"messages": [{"role": "user", "content": "read my latest email"}], "context": {}}

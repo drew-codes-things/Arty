@@ -81,6 +81,8 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" 
 & robocopy models\kokoro "$Stage\models\kokoro" /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
 Copy-Item arty_config.example.yaml "$Stage\arty_config.example.yaml"
+New-Item -ItemType Directory -Force "$Stage\extension" | Out-Null
+Copy-Item ..\..\extensions\browser\background.js "$Stage\extension\background.js"
 
 Write-Host '==> Building the installer'
 Push-Location app

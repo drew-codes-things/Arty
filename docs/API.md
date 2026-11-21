@@ -21,6 +21,7 @@ Any OpenAI client library works: set `base_url` to `http://192.0.2.13:8081/v1` a
 - `model`: `Arty` uses the main model (the old name `assistant-core` still works); `arty/<model>` (e.g. `arty/mimo-v2.6:9b`) uses that model for this request only. `GET /v1/models` lists them.
 - `GET /v1/models?all=1` lists every downloaded chat model. A request sending `X-Arty-Client-Tools: 1` and `X-Arty-Any-Model: 1` may name any of them; a model that isn't downloaded or only makes embeddings is a 400, and the engine being down is a 503. See [Who Can Run Arty's Tools](tools-trust-boundary.md). Each entry carries `context_tokens` (the context window the brain gives that model: `options.num_ctx` in brain.json, or the model's own size from `model_windows.num_ctx` when `model_windows.enabled` is true; it ships off, ready with 49152 for mimo-v2.6:9b. With it on, sizes differ per model, so a client should use the entry for the model it is sending to, not the smallest) and `reply_tokens` (the most tokens one agent turn reply can use, thinking included: `agent_options.num_predict`, else `options.num_predict`, else 2048). A client should keep at least `reply_tokens` of the window free when it sizes its prompt.
 - `client` (optional, on chats and chat jobs): your app's name, such as `desktop`, `voice`, `telegram` or `discord`. Lowercase letters, digits, `_` and `-`, up to 32 characters.
+- `features` (optional, on chats and chat jobs, a list of strings): what the calling app can show. The Android app sends `client` `phone` with `features` `["device_actions", "camera"]` and then gets alarm, timer, app and camera actions (`<phone-action>` lines with kind `alarm`, `timer`, `app` or `camera`). A `phone` client without both (Android 1.5.8 and older) gets only `call` and `text` actions, as before.
 - Arty adds its persona, long-term memory, recent conversations and all its tools itself, and remembers the exchange. Send only your app's messages; a `system` message is added as extra instructions.
 - The reply has the usual `choices[0].message.content`, plus `tools_used`.
 - Arty Auto: `model` set to `auto` picks the model for each message with fixed rules, no extra model call. A picture or video in the latest message is the `vision` role (the `vision_model`, as the `Arty` entry routes pictures), code-heavy text the `code` role (the `coding_model` under the same rule as `Arty`: a big job, or the coding model already loaded), asks about the phone, home, reminders, calendar, music, weather or news (and a voice note) the `agent` role, anything else the `chat` role; `agent` and `chat` both run on the main model with Arty's tools. `route_picture_chats`, `route_coding_chats`, `arty_models` and the other model limits apply as for `Arty`. `GET /v1/models` names it in a top-level `auto` object (`id`, `name` "Arty Auto", `description`, `roles`); the `data` list is unchanged.
@@ -34,6 +35,15 @@ Any OpenAI client library works: set `base_url` to `http://192.0.2.13:8081/v1` a
 - Timings on agent turns: the reply's `usage` (in the last chunk when streamed) keeps `prompt_tokens`, `completion_tokens` and `total_tokens` and adds `rounds`, one entry per model call the brain made for this request, oldest first: `model`, the engine's own `load_duration`, `prompt_eval_count`, `prompt_eval_duration`, `eval_count` and `eval_duration` (durations in nanoseconds, missing ones as 0), `prompt_eval_cached_count` when the engine reports it, and `loaded_fresh` (true when `load_duration` was 1 s or more: the model was loaded for that call, or the call waited for the GPU). Other requests' `usage` is unchanged.
 - Reasoning on agent turns (opt in): a streamed agent turn that also sends `X-Arty-Reasoning: 1`, or `"arty_reasoning": true` in the body, gets the model's reasoning as it is written, in chunks whose delta is `{"reasoning_content": "..."}`. They arrive while the model thinks, so normally before the answer text and tool calls, and again if the brain sends the model back for another try within the same request; the `content` and `tool_calls` chunks are unchanged, reasoning is never put in `content`, and it is never sent back to the model, so a client must not return it in `messages`. Nothing is sent when the model did not think on that turn (the brain's `think` setting decides, as before), when the request has no `system` message of its own, when the request is not streamed, or outside agent mode. The `: working` notes keep coming every 15 s either way.
 - Outward actions (posting, sending, buying) aren't done until the user's latest message is a plain "yes"/"go ahead": Arty asks first.
+
+## Shared chat room
+
+A chat room app where other people's AIs talk to Arty connects with its own key (`ROOM_API_KEY`), only from the addresses in `ROOM_ADDRESSES` (see [setup.md](setup.md)). Point the app's OpenAI-compatible model server at `http://<brain>:8081/v1` with that key.
+
+- That key gets only `GET /v1/models` (one entry, `arty-room`) and `POST /v1/chat/completions` (no streaming: the answer comes back whole). Every other path answers 403 or 401. A request from an address not in `ROOM_ADDRESSES` gets the same 401 as a wrong key, and addresses match however they are written (`::ffff:10.0.0.5` is `10.0.0.5`). The brain will not start if `ROOM_API_KEY` is the same as `BRAIN_API_KEY`, `ARTY_API_KEY` or `MCPO_API_KEY`.
+- A room turn runs on Arty's main model with a small budget: at most 3 model rounds, 500-token replies, no thinking, no code checks in the sandbox, no program writing (`work_out`), and a 90-second deadline that starts when the message arrives and is checked before every model round (the first one too, after the search lookup), every step and the search Arty runs for the model itself. The turn also stops before its next step as soon as you start a chat; an answer finished after the deadline or after you started a chat is replaced by a short out-of-time answer, with no claim check. It keeps the calculators and converters, web search (what the results say, not the pages), the claim check and private instructions kept private (checked again after the claim check). It has no memories, no earlier conversations, no saved notes about you, none of your accounts, files, devices, schedules or home network, only Arty's name in place of the persona, UTC instead of your time zone, a crisis line that names no country, and it never drops anyone's name from its answer. Nothing it says or hears is saved to your history or memory.
+- Everything the room sends, its own instructions included, is treated as outside text. Arty opens no web page in a room turn, whoever names it: not a link posted in the room, not one from its own search results, and not the top result its search lookup reads for you. A step that would need your approval is never asked about in the room: the answer is "I can't do that from the room." The coursework send-back never applies in the room.
+- Limits: 30 requests a minute, 4 answers a minute, 60 an hour, 10 minutes of answering an hour, one at a time, and none while you have a chat in progress or chatted in the last 5 minutes (429 otherwise); 6 web pages a minute, counted apart from your own; a 256 KB body, the newest 40 messages of up to 6000 characters each.
 
 ## Files and attachments
 
@@ -103,6 +113,7 @@ Each run becomes a background task.
 - For apps: `GET /v1/calendar?days=30` (Arty's and Google's events as JSON: id (Arty's only), title, start, end, all_day, location, repeats, calendar), `POST /v1/calendar` with `{title, when, duration_minutes, location}`, `DELETE /v1/calendar/{id}`.
 - Google Calendar is optional and shown alongside: each calendar's "secret address in iCal format", stored root-only in `/srv/ai/secrets/calendar.env` by `bin/set-calendar` (run from the laptop; it never prints the links).
 - 15 minutes before each timed event, Arty sends "📅 Coming up" to Updates in the phone and desktop apps. The briefings include the day's events.
+- Your own Starfire Calendar app (over CalDAV), your own mailbox (IMAP and SMTP) and your own Starfire Drive app: `calendar_app_events` and `email_inbox` can be called with `POST /v1/tools/<name>`; the tools that send, change, save or share answer `400` there, because they only run in a chat after a yes. See [Email, Calendar and Drive](acting-in-your-apps.md).
 
 ## Lectures
 
@@ -120,13 +131,40 @@ Held for approval: clicking post/send/connect/apply/delete-style buttons, submit
 
 ## Approved computers
 
-- `POST /v1/device/start` (no key) with `{"name"}` starts the "approve this computer" flow and returns a `device_code`, a `user_code` and a link for a signed-in app; `POST /v1/device/token` (no key) with `{"device_code"}` returns the computer's own key once the owner has approved it.
+- `POST /v1/device/start` (no key) with `{"name"}` starts the "approve this computer" flow and returns a `device_code`, a `user_code` and a link for a signed-in app; `POST /v1/device/token` (no key) with `{"device_code"}` returns the computer's own key once the owner has approved it. Starting never shows the owner anything: a request is only seen when the owner opens the approve page and types the code the computer shows. At most 20 starts a minute, 50 waiting requests, and 3 waiting requests per address (per /64 network for IPv6, however the address is written), each running out after 10 minutes.
 - `GET /v1/device/pending?code=` and `POST /v1/device/approve` with `{"user_code", "approve": true | false}` are for the signed-in app.
 - `GET /v1/devices` lists the approved computers (`id`, `name`, `address`, `created`, `last_used`, `remote_control`; never the key). `DELETE /v1/devices/{id}` turns one key off at once.
 - `POST /v1/devices/{id}/remote-control` with `{"allow": true | false}` lets that device follow and steer Arty CLI sessions (below). It is off for every new key, and only the brain's own keys may change it.
 - A device key works everywhere the shared key does. Its `/v1/identity` proof is the HMAC keyed with the SHA-256 hex of the key.
 - `POST /v1/devices` with `{"name"}` makes a named device key straight away and returns `{"id", "name", "api_key"}`; the key is shown only in this answer. Only the brain's own keys (`BRAIN_API_KEY` or `ARTY_API_KEY`) may call it: a device key gets 403. At most 100 device keys can be live at once (429 after that).
+- `GET /v1/devices` also gives each device's `kind`: `"phone"` for a phone linked by QR code, `""` for the rest.
 - `GET /v1/device/approver` (no key) returns `{"approve_page"}`: starfire's approve page when `BRAIN_STARFIRE_URL` is set, otherwise an empty string. The approve sheet uses it to send a browser with no Arty key to starfire.
+
+## Linking a phone by QR code
+
+- `POST /v1/phone-link/offers` with `{"access": {"id", "secret"}}` (or `{}`) makes a one-use offer and returns
+  `{"offer", "code", "expires_in": 120}`. Only the brain's own keys may call it (403 for a device key). The access
+  pair is the Cloudflare service token to hand to the phone; it is kept in memory with the offer and never shown in
+  the code. Arty Desktop puts `{"arty": 2, "url", "offer", "code", "home"?}` in the QR code.
+- `GET /v1/phone-link/offers/{offer}` (brain's own keys) returns `{"state": "waiting", "expires_in"}`,
+  `{"state": "linked", "name", "device_id"}` or `{"state": "gone"}` (run out, used, or never made).
+- `POST /link/phone/begin` (no key, outside `/v1` so Cloudflare can let only it through) with
+  `{"offer", "name", "share"}` returns `{"session", "share", "proof"}`. `POST /link/phone/finish` with
+  `{"offer", "session", "proof", "seal": 1}` returns `{"linked": true, "name", "sealed_access"?}`: the access pair as
+  JSON, sealed under the link key (hex of a 16-byte nonce, the pair XORed with HMAC-SHA256 blocks under
+  HMAC(key, `arty-phone-link-v1|seal-stream`) of nonce plus a 4-byte counter, then the HMAC-SHA256 tag under
+  HMAC(key, `arty-phone-link-v1|seal-tag`) of nonce plus that). Current phone apps make their proof with the role
+  `app-sealed-1` instead of `app`: that proof alone gets the pair sealed, so stripping `seal` on the way changes
+  nothing, and these apps refuse an answer with `"access"` in the clear. Phone apps from before that prove with `app`
+  and still get the pair sealed only when they send `seal` (and in the clear without it), so link those over https
+  only. The shares and proofs are SPAKE2
+  over the RFC 3526 2048-bit group with the code as the password and context `arty-phone-link-v1` (`brain/spake2.py`,
+  the same maths as the desktop and starfire link). Both sides then hold the same key, and the phone's device key is
+  `arty_dev_` plus the base64url HMAC-SHA256 of `arty-phone-link-v1|token` under it, so it is never sent. An offer is
+  used up by a finish (right or wrong), five begins, or two minutes; then both steps answer 410. A begin for an
+  unknown or used offer gets a 410 at once and counts against the caller's address: ten of those in a minute and
+  that address gets 429 for the rest of the minute. A wrong proof is 403, more than thirty begins a minute on real
+  offers 429, a bad share 400.
 
 ## Arty CLI remote control
 

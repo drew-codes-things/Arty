@@ -36,7 +36,9 @@ def test_ordinary_commands_just_run(command):
 def test_mouse_and_keyboard_ask_once_per_reply_when_set_to(monkeypatch):
     monkeypatch.setattr(computer, "setting", lambda section, key, default=None: True if key == "ask_before_mouse_and_keyboard" else default)
     assert computer.needs_ok("computer_click", {"target": "Send"}, set())
-    assert computer.needs_ok("computer_type", {"text": "hi"},
+    assert computer.needs_ok("computer_scroll", {"direction": "down"},
+                             {computer.consent_key("computer_click")}) is None
+    assert computer.needs_ok("computer_click", {"target": "the Inbox tab"},
                              {computer.consent_key("computer_click")}) is None
 
 

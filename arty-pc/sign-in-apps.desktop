@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sign in to Starfire apps
+Comment=Open the separate browser Arty's Drive and Calendar actions use, on the starfire, Drive and Calendar sign-in pages. Sign in, then close the window.
+Exec=/usr/local/bin/sign-in-apps
+Icon=system-users
+Terminal=false
+Categories=Network;

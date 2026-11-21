@@ -22,6 +22,8 @@ DISGUISED_COMMANDS = [
     "cat ~/.ssh/id_ed25519",
     "cd ~/.local && cat browser-agent/token",
     "cat</home/ai/.gmail-chrome/Default/Cookies",
+    "sqlite3 ~/.apps-browser-profile/Default/Cookies .dump",
+    "ls ~/.apps-*-profile",
 ]
 ORDINARY_COMMANDS = ["ls *", "ls -la ~", "cat notes/gmail-chrome-tips.md", "grep profile app.py", "ls .config", "ls x,y"]
 
@@ -41,7 +43,8 @@ def test_ordinary_commands_are_not_caught(command):
     assert not remote.touches_private_folders(command)
 
 
-@pytest.mark.parametrize("path", ["~/.ssh/config", "projects/../.gmail-chrome/x", "/home/ai/.local/browser-agent"])
+@pytest.mark.parametrize("path", ["~/.ssh/config", "projects/../.gmail-chrome/x", "/home/ai/.local/browser-agent",
+                                  "/home/ai/.apps-browser-profile/Default/Cookies"])
 def test_private_paths_are_caught_after_normalising(path):
     assert remote.private_path(path)
 

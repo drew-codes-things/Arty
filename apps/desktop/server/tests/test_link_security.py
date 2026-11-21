@@ -872,3 +872,27 @@ def test_every_window_on_the_screen_is_read_top_first_with_frames_and_map_state(
     assert session.top_level_window("0x999999") is None
     assert session.is_unmapped("0x20000e") and session.is_unmapped("0x200000")
     assert not session.is_unmapped("0x20000f") and not session.is_unmapped("0x999999")
+
+
+@pytest.fixture
+def discord_in_front(monkeypatch):
+    monkeypatch.setattr(computer, "_front_text", lambda: "Discord")
+    computer.forget_asked_fronts()
+    yield
+    computer.forget_asked_fronts()
+
+
+def test_a_refused_link_step_leaves_no_window_pinned_for_the_next_one(served, computer_on, discord_in_front):
+    token = pair_like_starfire(served)
+    summary, refused = card_for(token, "computer_key", {"keys": "ctrl+w"}, ok=False)
+    assert "ctrl+w" in summary and refused.status_code == 403
+    assert "computer_key" not in computer._asked_in_front
+
+
+def test_a_paused_link_step_leaves_no_window_pinned_for_the_next_one(served, computer_on, discord_in_front):
+    token = pair_like_starfire(served)
+    for _ in range(link.REFUSALS_BEFORE_PAUSE):
+        card_for(token, "computer_apps", {}, ok=False)
+    paused = client.post("/link/computer", json={"tool": "computer_key", "arguments": {"keys": "ctrl+w"}}, headers=linked(token))
+    assert paused.status_code == 429
+    assert "computer_key" not in computer._asked_in_front

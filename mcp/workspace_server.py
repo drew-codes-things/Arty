@@ -847,6 +847,100 @@ def email_draft_link(to: str, subject: str, body: str) -> str:
     return f"Draft ready (not sent). The user opens this to check and send it: https://mail.google.com/mail/?{query}"
 
 
+OWN_APP_NAMES = {"drive": "Drive", "calendar": "Calendar"}
+OWN_APP_SECONDS = 120
+UPLOAD_SECONDS = 600
+SEND_SECONDS = 150
+ONLY_FOR_APP_ACTIONS = "Used inside Arty's own app actions, which ask the user first; not a tool to call yourself. "
+OWN_APP_SIGN_IN = ("BLOCKED: the {name} app ({origin}) needs a starfire sign-in in the apps browser on your desktop. Do "
+                   "not try to sign in yourself. Call ask_user to ask the user (as 'you') to sign in to starfire on your "
+                   "desktop: open the 'Sign in to Starfire apps' icon there, sign in to starfire, {origin} and the other "
+                   "app pages it opens, close that window, then ask again.")
+GMAIL_SIGN_IN = ("BLOCKED: {reason}. Do not try to get around it. Call ask_user to ask the user (as 'you') to sign in to "
+                 "Google in the browser on your desktop, then try again.")
+
+
+def _agent_json(action: str, seconds: int, **arguments) -> dict | str:
+    code, output = remote_text(agent_request(action, seconds), stdin=json.dumps(arguments).encode(), timeout=seconds + 10)
+    try:
+        answer = json.loads(output)
+    except json.JSONDecodeError:
+        return _browser_down() if code != 0 or not output.strip() else f"browser error: {clip(output, 300)}"
+    if not isinstance(answer, dict):
+        return "browser error: the desktop sent back something that isn't an answer"
+    if "error" in answer:
+        return f"browser error: {answer['error']}"
+    return answer
+
+
+def _own_app_result(answer: dict | str) -> str:
+    if isinstance(answer, str):
+        return answer
+    if answer.get("signed_out"):
+        name = OWN_APP_NAMES.get(str(answer.get("app")), "own")
+        return OWN_APP_SIGN_IN.format(name=name, origin=answer.get("origin") or "the app's address")
+    shown = {key: answer.get(key) for key in ("status", "body", "time_zone", "shares_enabled", "origin")}
+    return json.dumps(shown, ensure_ascii=False)
+
+
+@mcp.tool(description=ONLY_FOR_APP_ACTIONS + "One call to the user's own Drive or Calendar app (app: drive or calendar), "
+                       "made inside the signed-in browser on your desktop, so its sign-in never leaves that browser. "
+                       "Answers JSON: status, body, time_zone.")
+def own_app_request(app: str, method: str, path: str, body_json: str = "", if_match: str = "") -> str:
+    if app not in OWN_APP_NAMES:
+        return f"app must be one of: {', '.join(OWN_APP_NAMES)}"
+    try:
+        body = json.loads(body_json) if body_json else None
+    except json.JSONDecodeError:
+        return "body_json must be JSON"
+    return _own_app_result(_agent_json("app_call", OWN_APP_SECONDS, app=app, method=method, path=path, json=body,
+                                       if_match=if_match))
+
+
+@mcp.tool(description=ONLY_FOR_APP_ACTIONS + "Save a file into the user's own Drive app through the signed-in browser on "
+                       "your desktop: the file's bytes (data_base64) or a file on your computer (path). Answers JSON "
+                       "with the new file.")
+def drive_upload(name: str, folder_id: int = 0, data_base64: str = "", path: str = "") -> str:
+    if path and private_path(path):
+        return PRIVATE_REFUSAL
+    if bool(path) == bool(data_base64):
+        return "give either data_base64 or path"
+    source = {"path": expand(path)} if path else {"data_base64": data_base64}
+    return _own_app_result(_agent_json("app_upload", UPLOAD_SECONDS, name=name, parent_id=int(folder_id), **source))
+
+
+def address_list(raw: str) -> list[str]:
+    return [address for address in re.split(r"[,;\s]+", raw or "") if address]
+
+
+@mcp.tool(description=ONLY_FOR_APP_ACTIONS + "Send one email from the Gmail signed in on your desktop: Gmail's compose "
+                       "window is filled in, read back and only sent if it holds exactly this email. Never retried. "
+                       "Answers JSON: sent and how it was confirmed.")
+def gmail_send(to: str, subject: str, body: str, cc: str = "") -> str:
+    answer = _agent_json("gmail_send", SEND_SECONDS, to=address_list(to), cc=address_list(cc), subject=subject, body=body)
+    if isinstance(answer, str):
+        return answer
+    if answer.get("blocked"):
+        return GMAIL_SIGN_IN.format(reason=answer["blocked"])
+    if answer.get("sent") is True:
+        return json.dumps({"sent": True, "confirmed": str(answer.get("confirmed") or "")})
+    return f"browser error: {answer.get('error') or 'Gmail did not say it was sent; look in Sent before trying again'}"
+
+
+@mcp.tool(description=ONLY_FOR_APP_ACTIONS + "Who sent the newest message of the number-th result of a Gmail search, "
+                       "and its subject, for a reply. Answers JSON.")
+def gmail_message(query: str = "in:inbox", number: int = 1) -> str:
+    page = _gmail("gmail_read", query=query, number=number)
+    if isinstance(page, str):
+        return page
+    messages = page.get("messages") or []
+    if not messages:
+        return f"There's no email number {number} for: {query}"
+    newest = messages[-1]
+    return json.dumps({"subject": page.get("subject", ""), "sender": newest.get("sender", ""),
+                       "email": newest.get("email", ""), "when": newest.get("when", "")}, ensure_ascii=False)
+
+
 @mcp.tool(description="Only when asked to read or collect posts: read LinkedIn posts in your browser (signed in as the user), "
                        "profile 'me' for the user's own, or a profile URL / name.\n"
                        "Not needed to write a post: their style is already in your instructions.\n"
