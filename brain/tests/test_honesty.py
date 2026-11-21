@@ -284,6 +284,132 @@ class Honesty(unittest.TestCase):
             with self.subTest(claim=claim):
                 self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + filler))
 
+    REWRITE_INTRODUCTIONS = (
+        "Here's the rewritten note:", "Here's a rewritten version of the sick note:", "Here is the reworded message:",
+        "I've reworded it below:", "I've rewritten the note for you below:", "Certainly! Here's the rewritten note:",
+        "Here's the translated text:", "I've summarised the article below:", "Here's the rephrased summary:",
+        "I've rephrased them below.", "Here is the reworded wording:", "Of course. I've translated the text below:",
+    )
+    REWRITE_FALSE_CLAIMS = (
+        "I've rewritten the note and emailed it to Sam.", "Here's the rewritten note, which I sent to your employer.",
+        "I've reworded it and posted it to your blog.", "I've translated the text and saved it to your Documents.",
+        "Here's the rewritten note, now in your Google Docs.", "I've rewritten the message for you and it was delivered.",
+        "I've summarised the article on your server for you.", "Here is the rewritten note that I uploaded.",
+        "I've reworded it for you: it went to your teacher this morning.",
+    )
+
+    def test_the_claim_check_prompt_says_text_written_in_the_reply_is_not_an_action(self):
+        for word in ("rewriting", "rewording", "drafting", "summarising", "translating", "shown in the reply itself",
+                     "saving", "sending", "posting", "uploading", "submitting"):
+            with self.subTest(word=word):
+                self.assertIn(word, honesty.CLAIM_CHECK_PROMPT)
+
+    def test_a_rewritten_text_shown_below_the_opening_keeps_the_opening(self):
+        for claim in self.REWRITE_INTRODUCTIONS:
+            with self.subTest(claim=claim):
+                reply = f"{claim}\n\n{self.LAB_REPORT}"
+                self.assertEqual(self.checked_reply(reply, claim, "Reword this note."), reply)
+
+    def test_a_rewrite_that_was_also_sent_or_saved_is_still_corrected(self):
+        filler = " Here is some more of the reply." * 10
+        for claim in self.REWRITE_FALSE_CLAIMS:
+            with self.subTest(claim=claim):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + filler))
+                corrected = self.checked_reply(f"{claim}\n\n{self.LAB_REPORT}", claim, "Reword this note.")
+                self.assertNotIn(claim, corrected)
+                self.assertIn(self.LAB_REPORT, corrected)
+
+    PRESENTED_WITH_A_TAIL = (
+        "Here's a reworded version of your paragraph that should get past Turnitin:",
+        "Here's a reworded version of your paragraph that should get past the plagiarism checker:",
+        "Sure! Here's a rewritten version of your note that reads more formally:",
+        "Of course. Below is a shorter version of the email that keeps the main points:",
+        "This is a reworked paragraph in a more casual tone for a school newsletter:",
+        "Here is a version of the cover letter aimed at a junior role in logistics:",
+    )
+    PRESENTED_THEN_PUT_SOMEWHERE = (
+        "Here's a reworded version of your paragraph, which I sent to your teacher:",
+        "Here's a reworded version of your paragraph that I saved on your drive:",
+        "Here is the reworded version of your note that is now on the portal:",
+        "Here's the version that got merged into main:", "Here is a version of the note forwarded to your tutor:",
+        "Here's a reworded version of the paragraph copied to your Notion:",
+        "Here is the version, uploaded to Moodle:", "Here's the version (already emailed to Sam):",
+        "Here's the version; the tests pass:", "Here's a version of the note that is live on your website:",
+        "Here is the version that has been posted to the council:", "Here's the note running on the server:",
+    )
+
+    def test_a_here_is_opening_with_a_tail_is_kept_when_the_text_follows(self):
+        for claim in self.PRESENTED_WITH_A_TAIL:
+            with self.subTest(claim=claim):
+                reply = f"{claim}\n\n{self.LAB_REPORT}"
+                self.assertEqual(self.checked_reply(reply, claim, "Reword this paragraph."), reply)
+
+    def test_a_here_is_opening_with_a_tail_is_kept_when_the_judge_leaves_off_the_colon(self):
+        claim = "Here's a reworded version of your paragraph that should get past Turnitin"
+        reply = f"{claim}:\n\n{self.LAB_REPORT}"
+        self.assertEqual(self.checked_reply(reply, claim, "Reword this paragraph."), reply)
+
+    def test_a_here_is_opening_with_a_tail_needs_the_text_to_follow(self):
+        claim = self.PRESENTED_WITH_A_TAIL[0]
+        self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + " Done."))
+
+    LIVE_REWORD_OPENING = "Here's a reworded version of your sentence to help avoid detection by plagiarism checkers:"
+    ONE_SENTENCE_REWRITES = (
+        '"The transformation brought about by the Industrial Revolution significantly altered working practices for '
+        'individuals."',
+        "Factories changed the daily routine of ordinary workers.",
+        "Photosynthesis turns light, water and carbon dioxide into sugar.",
+    )
+    SHORT_CLAIMS_AFTER_THE_COLON = (
+        "Here's the confirmation: your table for two at 7pm on Friday is booked.",
+        "Here's the update: I've emailed Sam and he has the file now.",
+        "Here is the status: the backup ran and every file was saved to the drive.",
+        "Here's the summary: the invoice was paid and the receipt is in your inbox.",
+        "Here's the result: we sent the letter to the council this morning.",
+        "Here is the outcome: the meeting with Sam is set up for Monday at ten.",
+        "Here's the news: your order for the new keyboard is on its way to you.",
+        "Here is the progress: the essay went to your tutor an hour ago, done.",
+        "Here's the confirmation: Table for two at 7pm on Friday, reference AB123.",
+        "Here is the booking reference: AB123 for two people at 7pm on Friday evening.",
+    )
+
+    def test_a_here_is_opening_is_kept_before_a_one_sentence_rewrite(self):
+        claim = self.LIVE_REWORD_OPENING
+        for rewrite in self.ONE_SENTENCE_REWRITES:
+            with self.subTest(rewrite=rewrite[:40]):
+                reply = f"{claim}\n\n{rewrite}"
+                self.assertTrue(honesty.shows_the_work_it_claims(claim, reply))
+                self.assertEqual(self.checked_reply(reply, claim, "Reword my own essay sentence so Turnitin doesn't flag it."),
+                                 reply)
+
+    def test_a_short_text_after_the_colon_that_is_itself_a_claim_is_still_corrected(self):
+        for line in self.SHORT_CLAIMS_AFTER_THE_COLON:
+            claim, _, rest = line.partition(": ")
+            claim += ":"
+            with self.subTest(line=line):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, f"{claim} {rest}"))
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, f"{claim}\n\n{rest}"))
+
+    def test_a_text_after_the_colon_under_forty_characters_is_not_enough(self):
+        claim = self.LIVE_REWORD_OPENING
+        for rest in ('"Factories changed work."', "Work changed a lot.", ""):
+            with self.subTest(rest=rest):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, f"{claim}\n\n{rest}"))
+
+    def test_a_short_text_after_an_opening_without_a_colon_is_not_enough(self):
+        for claim in ("I've written the essay below.", "Here is the essay you asked for."):
+            with self.subTest(claim=claim):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, f"{claim}\n\n{self.ONE_SENTENCE_REWRITES[0]}"))
+
+    def test_a_presented_text_put_somewhere_or_delivered_is_still_corrected(self):
+        filler = " Here is some more of the reply." * 10
+        for claim in self.PRESENTED_THEN_PUT_SOMEWHERE:
+            with self.subTest(claim=claim):
+                self.assertFalse(honesty.shows_the_work_it_claims(claim, claim + filler))
+                corrected = self.checked_reply(f"{claim}\n\n{self.LAB_REPORT}", claim, "Reword this paragraph.")
+                self.assertNotIn(claim, corrected)
+                self.assertIn(self.LAB_REPORT, corrected)
+
     def test_a_finished_task_with_a_long_explanation_is_still_corrected(self):
         for claim in ["I've finished setting up your router.", "Here's what I did: I restarted the router and the lights.",
                       "I've finished the work on your router."]:

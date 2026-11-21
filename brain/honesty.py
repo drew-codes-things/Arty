@@ -28,7 +28,7 @@ The reply:
 %s
 >>>
 
-Find every sentence where the reply says or implies the assistant did, changed, sent, set, saved, noted, made, started or booked something that no tool above did (or that a tool above tried but failed). Only actions count. Stating a fact is never a claim, even a fact about the user, their plans, their likes or what they said earlier ("Your favourite colour is blue.", "Your appointment is at 3pm.", "You said 5pm."), and neither is describing what it saw, answering, explaining, suggesting, offering or asking. Wording and language don't matter, only meaning.
+Find every sentence where the reply says or implies the assistant did, changed, sent, set, saved, noted, made, started or booked something that no tool above did (or that a tool above tried but failed). Only actions count. Stating a fact is never a claim, even a fact about the user, their plans, their likes or what they said earlier ("Your favourite colour is blue.", "Your appointment is at 3pm.", "You said 5pm."), and neither is describing what it saw, answering, explaining, suggesting, offering or asking. Writing, rewriting, rewording, drafting, summarising or translating text that is shown in the reply itself is never an action either ("Here's the rewritten note:", "I've reworded it below:"): only doing something outside the reply counts, such as saving, sending, posting, uploading, submitting or changing files or settings. Wording and language don't matter, only meaning.
 Copy each such sentence exactly as it is in the reply. For each one write a short first-person correction in the reply's language that says what is actually true about that action (e.g. that it didn't do it, or that it was already like that), or "" when the sentence should simply go.
 Answer only with JSON: {"false_claims": [{"text": "...", "correction": "..."}]}"""
 CLAIM_CHECK_TOKENS = 400
@@ -47,14 +47,15 @@ CLAIM_CHECK_REQUEST_CHARS = 2000
 HONEST_NOTHING_DONE = ("I didn't actually do that: I don't have a way to do it from here, so nothing has changed. "
                        "If you tell me how you'd like it done, I'll help where I can.")
 SHOWN_WORK = (r"essay|report|review|answers?|solutions?|working|coursework|assignment|homework|sheet|questions?|draft|"
-              r"letter|email|story|poem|code|program|function|script|summary|translation|outline|plan|notes|"
+              r"letter|email|story|poem|code|program|function|script|summary|translation|outline|plan|notes?|version|text|message|wording|"
               r"dissertation|article|project|exercises?|work|paragraphs?|sections?|chapters?|write-?ups?")
 WORK_WORDS = r"(?:(?:the|your|my|a|an|some|this|these)\s+)?(?:[\w’'-]+\s+){0,4}?(?:" + SHOWN_WORK + r")"
 NOT_A_STATE_WORD = r"(?!(?:I|we|has|have|had|was|were|is|are|been|now|done|already|which|that|and|then|also)\b)"
-NOT_A_PLACE_OR_DELIVERY_WORD = (
-    r"(?!(?:servers?|portal|site|website|app|database|docs|drive|github|gitlab|moodle|tripadvisor|linkedin|blog|"
+PLACE_OR_DELIVERY_WORDS = (
+    r"servers?|portal|site|website|app|database|docs|drive|github|gitlab|moodle|tripadvisor|linkedin|blog|"
     r"calendar|inbox|repo|repository|ct|vm|sent|e-?mailed|posted|saved|uploaded|submitted|delivered|published|pushed|"
-    r"attached|shared|(?:in|on|onto|into|to|at|via) (?:your|my|our))\b)")
+    r"attached|shared|(?:in|on|onto|into|to|at|via) (?:your|my|our)")
+NOT_A_PLACE_OR_DELIVERY_WORD = r"(?!(?:" + PLACE_OR_DELIVERY_WORDS + r")\b)"
 TOPIC_WORD = NOT_A_STATE_WORD + NOT_A_PLACE_OR_DELIVERY_WORD + r"[\w’'/()%-]+"
 WORK_TOPIC = r"(?:\s+(?:on|about|for|of|covering)\s+(?:" + TOPIC_WORD + r",?\s+){0,10}?" + TOPIC_WORD + r")?"
 COURTESY = r"(?:(?:sure|of course|certainly|absolutely|okay|ok|no problem)\W+)?"
@@ -63,12 +64,19 @@ INTRO_TAIL = (r"(?:,?\s+(?:you asked for|for you|below|with (?:full |all (?:the 
               r"explanations?|comments|references|citations|answers)|(?:to|for) (?:questions?|q|parts?|exercises?|tasks?|"
               r"problems?)\s*\d+(?:\s*(?:to|-|and|,)\s*\d+)*|(?:that |which )?I(?:['’]ve| have)? (?:wrote|written|drafted|"
               r"prepared)(?: for you)?))?")
+REWORKED_VERBS = r"rewr(?:ote|itten)|reworded|rephrased|paraphrased|translated|summari[sz]ed"
 WROTE_IT = (r"I(?:['’]ve| have)?\s+(?:just\s+)?(?:wr(?:ote|itten)|drafted|prepared|put together|completed|finished|solved|"
-            r"worked through)")
+            r"worked through|" + REWORKED_VERBS + r")")
+REWORKED_IT = r"I(?:['’]ve| have)?\s+(?:just\s+)?(?:" + REWORKED_VERBS + r")\s+(?:it|them|this|that)"
+DELIVERED_BELOW = r"(?:\s*:|(?:\s+(?:below|for you)){1,2}\s*[.!:]?)"
 WORK_INTRODUCTION = re.compile(
     r"\W*" + COURTESY + r"(?:(?:here(?:['’]s| is| are)|below (?:is|are))\s+" + WORK_WORDS + WORK_TOPIC + INTRO_TAIL
-    + r"\s*[.!:]?|" + WROTE_IT + r"\s+" + WORK_WORDS + WORK_TOPIC + r"(?:\s*:|(?:\s+(?:below|for you)){1,2}\s*[.!:]?))\s*$",
+    + r"\s*[.!:]?|" + WROTE_IT + r"\s+" + WORK_WORDS + WORK_TOPIC + DELIVERED_BELOW + r"|" + REWORKED_IT + DELIVERED_BELOW + r")\s*$",
     re.I)
+PRESENTING_OPENING = re.compile(r"\W*" + COURTESY + r"(?:here(?:['’]s| is| are)|below (?:is|are)|this is)\s+([^,;()\n.!?:]+?)\s*:?$", re.I)
+PLACE_OR_DELIVERY = re.compile(
+    r"\b(?:" + PLACE_OR_DELIVERY_WORDS + r"|merged|forwarded|copied|moved|live|running|restarted|deployed|told|cleared|"
+    r"texted|went)\b", re.I)
 HANDED_OVER = re.compile(r"(?:copy|paste|read|check|use|edit|adjust|change|tweak|let me know|feel free|tell me|ask me|"
                          r"good luck)\b[^.!?\n]{0,80}[.!?:]?$", re.I)
 STATE_WORDS = re.compile(r"\b(?:I|we|has|have|had|was|were|is|are|been|now|done|already)\b|\bI['’]", re.I)
@@ -80,6 +88,11 @@ OUTSIDE_THE_REPLY = re.compile(
     r"gone)\b", re.I)
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 SHOWN_WORK_CHARS = 200
+PRESENTED_TEXT_CHARS = 40
+PRESENTED_WRITING = re.compile(r"\b(?:" + SHOWN_WORK + r"|sentences?)\b", re.I)
+CLAIM_IN_PRESENTED_TEXT = re.compile(
+    r"\b(?:I|we|me|us|our|your|done|confirmed|booked|reserved|paid|cancel\w*|completed?|finished|ready|success\w*|"
+    r"on (?:its|the) way|now|already)\b|\bI['’]", re.I)
 
 
 def tools_record(tools_used: list[str], failed: list[tuple[str, str]]) -> str:
@@ -183,10 +196,43 @@ def only_introduces_the_work(sentence: str) -> bool:
     return all(HANDED_OVER.match(part) and not STATE_WORDS.search(part) for part in later)
 
 
-def shows_the_work_it_claims(sentence: str, answer: str) -> bool:
-    if not only_introduces_the_work(sentence) or OUTSIDE_THE_REPLY.search(sentence):
+def presents_the_text_that_follows(sentence: str, answer: str) -> bool:
+    opening = PRESENTING_OPENING.match(sentence.strip())
+    if not opening:
         return False
-    return len(answer.replace(sentence, "", 1).strip()) >= SHOWN_WORK_CHARS
+    rest = opening.group(1)
+    if STATE_WORDS.search(rest) or PLACE_OR_DELIVERY.search(rest) or " - " in rest:
+        return False
+    position = answer.find(sentence.strip())
+    return sentence.strip().endswith(":") or answer[position + len(sentence.strip()):][:1] == ":"
+
+
+def text_after(sentence: str, answer: str) -> str:
+    position = answer.find(sentence)
+    if position < 0:
+        return ""
+    return answer[position + len(sentence):].lstrip(":").strip()
+
+
+def is_a_claim_itself(text: str) -> bool:
+    return bool(CLAIM_IN_PRESENTED_TEXT.search(text) or OUTSIDE_THE_REPLY.search(text) or PLACE_OR_DELIVERY.search(text))
+
+
+def presents_a_short_written_text(sentence: str, answer: str) -> bool:
+    if not (presents_the_text_that_follows(sentence, answer) and PRESENTED_WRITING.search(sentence)):
+        return False
+    shown = text_after(sentence.strip(), answer)
+    return len(shown) >= PRESENTED_TEXT_CHARS and not is_a_claim_itself(shown)
+
+
+def shows_the_work_it_claims(sentence: str, answer: str) -> bool:
+    if not (only_introduces_the_work(sentence) or presents_the_text_that_follows(sentence, answer)):
+        return False
+    if OUTSIDE_THE_REPLY.search(sentence):
+        return False
+    if len(answer.replace(sentence, "", 1).strip()) >= SHOWN_WORK_CHARS:
+        return True
+    return presents_a_short_written_text(sentence, answer)
 
 
 def reports_an_action(request: str, sentence: str, model: str = "", keep_alive=None, prefix=None) -> bool:

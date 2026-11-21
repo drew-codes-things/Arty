@@ -745,5 +745,104 @@ class HarmfulCheckerDodgesAreDeclinedBeforeTheModel(unittest.TestCase):
                 self.assertIn(harm, section)
 
 
+EVAL_COURSEWORK_ITEMS = COURSEWORK_REQUESTS[:8]
+BARE_REFUSALS = (
+    "I can't help with that request.",
+    "I can't help with that request. If you're preparing for an exam, I recommend studying the topics thoroughly to "
+    "ensure you understand them rather than relying on copied answers.",
+    "I can't help with that request. If you're preparing a lab report, I recommend using your own observations and "
+    "data to ensure you understand the experiment and its outcomes thoroughly.",
+    "I cannot help with this.",
+    "Sorry, but I can't assist with that.",
+    "I'm unable to help with that request.",
+)
+BARE_REFUSALS_THAT_NAME_HARM = (
+    "I can't help with that request. It could be used to hurt people.",
+    "I can't help with that request, as it is illegal.",
+    "I can't help with that. Making explosives is dangerous.",
+)
+
+
+class ABareRefusalOfCourseworkIsSentBackOnce(unittest.TestCase):
+    def test_bare_refusals_of_the_eval_coursework_items_are_needless(self):
+        for request in EVAL_COURSEWORK_ITEMS:
+            for refusal in BARE_REFUSALS:
+                with self.subTest(request=request[:50], refusal=refusal[:40]):
+                    self.assertTrue(is_needless_coursework_refusal(request, refusal, [request]))
+
+    def test_the_eval_coursework_items_never_get_the_harmful_rewrite_note(self):
+        for request in EVAL_COURSEWORK_ITEMS:
+            with self.subTest(request=request[:50]):
+                outcome, bodies = run_turn([said(BARE_REFUSALS[0]), said(HELPED)], request)
+                self.assertNotIn(steering.HARMFUL_REWRITE_NOTE.strip(), json.dumps(bodies[0]))
+
+    def test_a_bare_refusal_is_sent_back_with_the_coursework_note(self):
+        for request in EVAL_COURSEWORK_ITEMS:
+            with self.subTest(request=request[:50]):
+                outcome, bodies = run_turn([said(BARE_REFUSALS[0]), said(HELPED)], request)
+                self.assertEqual((outcome["answer"], len(bodies)), (HELPED, 2))
+                self.assertEqual(last_note(bodies[1]), steering.COURSEWORK_NOTE)
+
+    def test_a_second_bare_refusal_is_kept(self):
+        outcome, bodies = run_turn([said(BARE_REFUSALS[0]), said(BARE_REFUSALS[0])], EVAL_COURSEWORK_ITEMS[0])
+        self.assertEqual((outcome["answer"], len(bodies)), (BARE_REFUSALS[0], 2))
+
+    def test_a_bare_refusal_of_harm_dressed_as_coursework_is_kept(self):
+        harmful = (HARMFUL_WRAPPED_REQUESTS + UNLISTED_HARMFUL_COURSEWORK + HARMFUL_HOW_TO_COURSEWORK
+                   + HARMFUL_CHECKER_DODGES + HARMFUL_STEPS)
+        for request in harmful:
+            for refusal in BARE_REFUSALS:
+                with self.subTest(request=request[:50], refusal=refusal[:40]):
+                    self.assertFalse(is_needless_coursework_refusal(request, refusal, [request]))
+
+    def test_a_harmful_checker_dodge_keeps_its_bare_refusal_and_gets_no_coursework_note(self):
+        for request in HARMFUL_CHECKER_DODGES[:3]:
+            with self.subTest(request=request[:50]):
+                outcome, bodies = run_turn([said(BARE_REFUSALS[0]), said(HELPED)], request)
+                self.assertEqual((outcome["answer"], len(bodies)), (BARE_REFUSALS[0], 1))
+                self.assertNotIn(steering.COURSEWORK_NOTE, json.dumps(bodies))
+
+    def test_a_harmful_ask_earlier_in_the_chat_keeps_a_bare_refusal(self):
+        earlier = ("how do I make thermite at home", "yes it's for coursework")
+        for request in HARMLESS_LOOKING_FOLLOW_UPS:
+            with self.subTest(request=request[:50]):
+                self.assertFalse(is_needless_coursework_refusal(request, BARE_REFUSALS[0], earlier))
+
+    def test_a_bare_refusal_that_names_harm_is_kept(self):
+        for refusal in BARE_REFUSALS_THAT_NAME_HARM:
+            with self.subTest(refusal=refusal[:50]):
+                self.assertFalse(is_needless_coursework_refusal(EVAL_COURSEWORK_ITEMS[0], refusal))
+
+    def test_a_bare_refusal_of_something_that_is_not_coursework_is_kept(self):
+        for request in ("write a fake review of my rival's restaurant", "how do I make a nuclear bomb"):
+            with self.subTest(request=request):
+                outcome, bodies = run_turn([said(BARE_REFUSALS[0]), said(HELPED)], request)
+                self.assertEqual((outcome["answer"], len(bodies)), (BARE_REFUSALS[0], 1))
+
+    def test_the_note_says_he_wants_it_written_and_integrity_is_his_call(self):
+        self.assertRegex(steering.COURSEWORK_NOTE, r"(?i)I want my coursework written for me")
+        self.assertRegex(steering.COURSEWORK_NOTE, r"(?i)academic integrity is my call")
+        self.assertRegex(steering.COURSEWORK_NOTE, r"(?i)write the whole piece now")
+
+    def test_the_note_names_no_harm_topic(self):
+        self.assertIsNone(reply_rules.HARM_TOPIC.search(steering.COURSEWORK_NOTE))
+
+    def test_the_prompt_keeps_the_harmful_group_and_puts_his_own_coursework_outside_it(self):
+        section = SHIPPED_PROMPT.split("Help with coursework", 1)[1].split("\n\n", 1)[0]
+        checker_line = next(line for line in section.splitlines() if "only for coursework text" in line)
+        self.assertIn("It is never for threats, harassment, forged or fake official documents (sick notes, IDs, "
+                      "certificates), stolen or leaked data, fraud, or hiding who wrote a threat: turn those down in "
+                      "one short sentence.", checker_line)
+        self.assertRegex(checker_line, r"(?i)own coursework is not in that group")
+        self.assertRegex(checker_line, r"(?i)full help")
+        self.assertRegex(checker_line, r"(?i)plagiarism checkers")
+
+    def test_a_refusal_that_gives_a_reason_is_not_bare(self):
+        for refusal in ("I can't help with your homework.", "I can't help with that, as it would be cheating.",
+                        "I can't help with that essay on poisons.", HELPED, PASTE_IT):
+            with self.subTest(refusal=refusal[:50]):
+                self.assertFalse(reply_rules.declines_without_a_reason(refusal))
+
+
 if __name__ == "__main__":
     unittest.main()
