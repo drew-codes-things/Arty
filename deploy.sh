@@ -56,7 +56,7 @@ bundle=$(mktemp --suffix=.tgz)
 own_apps_folder=$(mktemp -d)
 trap 'rm -f "$bundle"; rm -rf "$own_apps_folder"' EXIT
 printf '%s\n' "$own_apps" > "$own_apps_folder/own-apps.json"
-tar czf "$bundle" --exclude=services/arty-desktop-egress.service --exclude='mcp/test_*.py' brain/*.py brain/persona.md brain/system-prompt.md brain/brain.json \
+tar czf "$bundle" --exclude=services/arty-desktop-egress.service --exclude='mcp/test_*.py' brain/*.py brain/persona.md brain/system-prompt.md brain/safety-prompt.md brain/brain.json \
   mcp/*.py mcp/tool-hub.json hub/tool_hub.py hub/web_host.py "$PINNED_DESKTOP_KEY" bin/ai-pull bin/ai-models bin/ai-use bin/ai-toolless bin/ai-engine-lib services/*.service \
   services/*.timer doclib/*.py doclib/retrieval_set.json \
   apps/ios/index.html apps/ios/app.css apps/ios/sw.js apps/ios/manifest.webmanifest apps/ios/js/*.js apps/ios/js/vendor/*.js \

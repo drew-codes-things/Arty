@@ -74,6 +74,13 @@ class DeployBundle(unittest.TestCase):
         self.assertIn("brain/agent_loop.py", modules)
         self.assertEqual(modules - members, set())
 
+    def test_every_file_the_brain_reads_at_start_up_is_shipped(self):
+        self.assertEqual(self.run_result.returncode, 0, self.run_result.stderr)
+        members = set(self.bundle_members())
+        for name in ("brain/brain.json", "brain/system-prompt.md", "brain/safety-prompt.md", "brain/persona.md"):
+            with self.subTest(name=name):
+                self.assertIn(name, members)
+
     def test_the_docs_library_and_its_units_are_shipped_and_started(self):
         self.assertEqual(self.run_result.returncode, 0, self.run_result.stderr)
         members = set(self.bundle_members())
