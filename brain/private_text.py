@@ -4,6 +4,7 @@ import bisect
 import logging
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import cached_property, lru_cache
 
@@ -27,6 +28,46 @@ ENCODED_MIN_CHARS = 24
 ROT13 = str.maketrans("abcdefghijklmnopqrstuvwxyz", "nopqrstuvwxyzabcdefghijklm")
 ENCODED_RUN = re.compile(rf"[A-Za-z0-9+/_-]{{{ENCODED_MIN_CHARS},}}={{0,2}}(?:[ \t]*\n[ \t]*[A-Za-z0-9+/_-]{{4,}}={{0,2}})*")
 SPACED_HEX = re.compile(r"\b(?:[0-9A-Fa-f]{2}[ \t:,]+){15,}[0-9A-Fa-f]{2}\b")
+ENCODED_GROUP_MIN_CHARS = 12
+ENCODED_GROUP = rf"[A-Za-z0-9+/_-]{{{ENCODED_GROUP_MIN_CHARS},}}+={{0,2}}"
+ENCODED_LINE_PREFIX = r"(?:>[ \t]?|\d{1,6}(?:[.:|)\t][ \t]?|[ \t]+))"
+ENCODED_GAP = r"(?=[ \t\n])(?>[ \t]*(?:\n[ \t]*)*)(?:" + ENCODED_LINE_PREFIX + r"[ \t]*)?"
+JOINED_RUN = re.compile(r"(?<![A-Za-z0-9+/_=-])" + ENCODED_GROUP + r"(?:" + ENCODED_GAP + ENCODED_GROUP + r")++")
+STILL_JOINING = re.compile(r"(?>[ \t]*(?:\n[ \t]*)*)(?:" + ENCODED_LINE_PREFIX + r"?[ \t]*)?[A-Za-z0-9+/_=-]{0,%d}"
+                           % (ENCODED_GROUP_MIN_CHARS - 1))
+PREFIXED_LINE = re.compile(r"\n[ \t]*" + ENCODED_LINE_PREFIX)
+TOKEN_CHARACTERS = r"A-Za-z0-9+/_\-"
+FILLER_TOKEN = rf"[{TOKEN_CHARACTERS}]++={{0,2}}"
+ENCODED_TOKEN = (rf"(?<![{TOKEN_CHARACTERS}=])(?=[{TOKEN_CHARACTERS}]*(?:[0-9+/]|[a-z][A-Z]))"
+                 rf"[{TOKEN_CHARACTERS}]{{4,}}+={{0,2}}(?![{TOKEN_CHARACTERS}=])")
+TOKEN_SEPARATOR = rf"(?:\s++|[^\s{TOKEN_CHARACTERS}=]{{1,4}}+)"
+SCATTER_GAP = rf"(?:{TOKEN_SEPARATOR}|{FILLER_TOKEN}){{1,8}}?"
+SCATTERED_RUN = re.compile(ENCODED_TOKEN + rf"(?:{SCATTER_GAP}{ENCODED_TOKEN}){{2,}}")
+LONE_GROUP = re.compile(rf"(?<![{TOKEN_CHARACTERS}=])(?=[{TOKEN_CHARACTERS}]*(?:[0-9+/]|[a-z][A-Z]))"
+                        rf"[{TOKEN_CHARACTERS}]{{{ENCODED_GROUP_MIN_CHARS},}}+={{0,2}}(?![{TOKEN_CHARACTERS}=])")
+LONE_GROUP_TAIL_CHARS = 2048
+STILL_SCATTERING = re.compile(rf"(?:{TOKEN_SEPARATOR}|{FILLER_TOKEN}){{0,8}}")
+TRAILING_GROUPS = re.compile(rf"(?:{TOKEN_SEPARATOR}{FILLER_TOKEN}){{1,2}}")
+SENTENCE_ENDED = re.compile(r"(?<!\d)[.!?](?:\s|$)")
+TOKEN = re.compile(FILLER_TOKEN)
+LOOKS_ENCODED = re.compile(rf"(?=[{TOKEN_CHARACTERS}]*(?:[0-9+/]|[a-z][A-Z]))[{TOKEN_CHARACTERS}]{{4,}}={{0,2}}")
+BASE64_OFFSETS = range(4)
+READABLE_SAMPLE_CHARS = 4096
+READABLE_RUN_LETTER_SHARE = 0.7
+READABLE_RUN = re.compile(r"[^\x00-\x08\x0b-\x1f\x7f-\x9f\ufffd]{%d,}" % ENCODED_MIN_CHARS)
+OPEN_RUN_RELEASE_CHARS = 1024
+CLEAN_CHECK_OVERLAP_CHARS = 1024
+CLEAN_CHECK_OVERLAP_TOKENS = 48
+CLEAN_CHECK_OVERLAP_MIN_TOKENS = 24
+QUIET_RELEASE_CHARS = 256
+QUIET_RELEASE_POINT = re.compile(r"[,|\]};\u3002\u3001\uff0c\uff01\uff1f\uff1b\uff1a]|(?<=\S)\r?[\n\t]|(?<![^\s(\[])[+-]?\d[\d.,:/-]* ")
+RELEASE_POINT_CONTEXT_CHARS = 32
+WHITESPACE_RUN = re.compile(r"\s+")
+RELEASE_SHARE = 4
+BLOB_TAIL_CHARS = 16000
+BLOB_WINDOW_CHARS = 128
+ENCODED_RUN_CHARACTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-")
+SPACED_HEX_CHARACTERS = frozenset("0123456789ABCDEFabcdef \t:,")
 HEX_ONLY = re.compile(r"(?:[0-9A-Fa-f]{2})+")
 HEX_PREFIX = "0x"
 SENTENCE_CLOSERS = "*_\"')\\]”’"
@@ -52,7 +93,7 @@ SHIFTS = tuple(shift for shift in range(1, len(ALPHABET)) if shift != len(ALPHAB
 MORSE = dict(zip(
     ".- -... -.-. -.. . ..-. --. .... .. .--- -.- .-.. -- -. --- .--. --.- .-. ... - ..- ...- .-- -..- -.-- --.. "
     "----- .---- ..--- ...-- ....- ..... -.... --... ---.. ----.".split(), ALPHABET + "0123456789"))
-MORSE_RUN = re.compile(r"(?:[.\-·•−–]{1,6}(?:[ \t]+/?[ \t]*|[ \t]*/[ \t]*|\n)){8,}[.\-·•−–]{1,6}")
+MORSE_RUN = re.compile(r"(?:[.\-·•−–]{1,6}(?:[ \t]++(?:/[ \t]*+)?|/[ \t]*+|\n)){8,}[.\-·•−–]{1,6}")
 MORSE_DOTS = str.maketrans("·•−–", "..--")
 NATO = {word: word[0] for word in (
     "alfa alpha bravo charlie delta echo foxtrot golf hotel india juliet juliett kilo lima mike november oscar papa "
@@ -234,6 +275,7 @@ class Watch:
     found: list = field(default_factory=list)
     blob_verdicts: dict = field(default_factory=dict)
     blob_watches: dict = field(default_factory=dict)
+    finished_plain: dict = field(default_factory=dict)
 
     def read(self, text: str) -> "Watch":
         if not text.startswith(self.text):
@@ -248,6 +290,7 @@ class Watch:
     def restart(self):
         self.text, self.reading, self.words, self.words_checked, self.letters_checked = "", Normalised(), [], 0, 0
         self.block_hits, self.flagged_blocks, self.found, self.blob_verdicts, self.blob_watches = {}, set(), [], {}, {}
+        self.finished_plain = {}
 
     def finish(self) -> "Watch":
         if self.hidden:
@@ -299,7 +342,7 @@ class Watch:
         return bool(self.read(text).found) or self.finished_blob_repeats(text)
 
     def finished_blob_repeats(self, text: str) -> bool:
-        for blob in encoded_blobs(text):
+        for blob in all_encoded_blobs(text):
             if is_still_being_written(blob, text):
                 continue
             key = (blob.start(), blob.end())
@@ -310,11 +353,14 @@ class Watch:
         return False
 
     def blob_repeats(self, blob: re.Match) -> bool:
-        for number, reading in enumerate(blob_readings(blob.group())):
-            if not (plain := decoded(reading)):
+        for number, plain in enumerate(decoded_readings(blob.group(), blob.re is SCATTERED_RUN)):
+            if plain in self.finished_plain:
+                if self.finished_plain[plain]:
+                    return True
                 continue
             watch = self.blob_watches.setdefault((blob.re.pattern, blob.start(), number), Watch(self.hidden))
-            if watch.read(plain).finds_when_finished():
+            self.finished_plain[plain] = watch.read(plain).finds_when_finished()
+            if self.finished_plain[plain]:
                 return True
         return False
 
@@ -342,16 +388,41 @@ class Watch:
         return False
 
 
-def blob_readings(blob: str) -> list[str]:
+def blob_readings(blob: str, scattered: bool = False) -> list[str]:
+    if scattered:
+        return scattered_readings(blob)
     lines = [line for line in blob.splitlines() if line.strip()]
-    return [blob, *(["\n".join(lines[1:]), "\n".join(lines[:-1])] if len(lines) > 1 else [])]
+    readings = [blob, *(["\n".join(lines[1:]), "\n".join(lines[:-1])] if len(lines) > 1 else [])]
+    unprefixed = PREFIXED_LINE.sub("\n", blob)
+    return readings + [unprefixed] if unprefixed != blob else readings
 
 
-def decoded_readings(blob: str) -> list[str]:
-    return [text for reading in blob_readings(blob) if (text := decoded(reading))]
+def scattered_readings(blob: str) -> list[str]:
+    tokens = TOKEN.findall(blob)
+    encoded = [token for token in tokens if LOOKS_ENCODED.fullmatch(token)]
+    lengths = [len(token) for token in encoded]
+    usual = max(set(lengths), key=lambda length: lengths.count(length) * length) if lengths else 0
+    grouped = [token for number, token in enumerate(encoded) if len(token) == usual or number == len(encoded) - 1]
+    unprefixed = [token[len(HEX_PREFIX):] if token[:len(HEX_PREFIX)].lower() == HEX_PREFIX else token for token in tokens]
+    hexed = [token for token in unprefixed if HEX_ONLY.fullmatch(token)]
+    return list(dict.fromkeys("".join(reading) for reading in (tokens, encoded, grouped, hexed) if reading))
+
+
+def decoded_readings(blob: str, scattered: bool = False) -> list[str]:
+    return [text for reading in blob_readings(blob, scattered) for text in decodings(reading)]
 
 
 def decoded(blob: str) -> str:
+    return next(iter(decodings(blob)), "")
+
+
+def is_readable(text: str) -> bool:
+    sample = text[:READABLE_SAMPLE_CHARS]
+    readable = sum(count for char, count in Counter(sample).items() if char.isprintable() or char.isspace())
+    return bool(sample) and readable >= DECODED_PRINTABLE_SHARE * len(sample)
+
+
+def decodings(blob: str) -> list[str]:
     compact = re.sub(r"[\s:,]", "", blob)
     hex_start = len(HEX_PREFIX) if compact[:len(HEX_PREFIX)].lower() == HEX_PREFIX else 0
     attempts = []
@@ -359,15 +430,37 @@ def decoded(blob: str) -> str:
         attempts.append(lambda: binascii.unhexlify(hex_part.group()))
     if len(pieces := [piece for piece in compact.split("=") if piece]) > 1:
         attempts.append(lambda: b"".join(base64_bytes(piece) for piece in pieces))
-    attempts.append(lambda: base64_bytes(compact.split("=", 1)[0]))
-    for attempt in attempts:
-        try:
-            text = attempt().decode("utf-8", "ignore")
-        except (binascii.Error, ValueError):
-            continue
-        if text and sum(char.isprintable() or char.isspace() for char in text) >= DECODED_PRINTABLE_SHARE * len(text):
-            return text
-    return ""
+    unpadded = compact.split("=", 1)[0]
+    found = [text for attempt in attempts if (text := readable_bytes(attempt))]
+    every_offset = [decoded_bytes(lambda offset=offset: base64_bytes(unpadded[offset:])) for offset in BASE64_OFFSETS
+                    if len(unpadded) - offset >= ENCODED_MIN_CHARS]
+    readable = [is_readable(text) for text in every_offset]
+    shares = {index: letter_share(text) for index, text in enumerate(every_offset) if readable[index]}
+    best = every_offset[max(shares, key=shares.get)] if shares else ""
+    lettered = [every_offset[index] for index, share in shares.items() if share >= READABLE_RUN_LETTER_SHARE]
+    runs = [run for text in every_offset for run in readable_runs(text)]
+    return list(dict.fromkeys(text for text in (*found, best, *lettered, *runs) if text))
+
+
+def readable_runs(text: str) -> list[str]:
+    return [run.group() for run in READABLE_RUN.finditer(text) if letter_share(run.group()) >= READABLE_RUN_LETTER_SHARE]
+
+
+def letter_share(text: str) -> float:
+    sample = text[:READABLE_SAMPLE_CHARS]
+    return sum(count for char, count in Counter(sample).items() if char.isalpha() or char == " ") / max(len(sample), 1)
+
+
+def decoded_bytes(attempt) -> str:
+    try:
+        return attempt().decode("utf-8", "ignore")
+    except (binascii.Error, ValueError):
+        return ""
+
+
+def readable_bytes(attempt) -> str:
+    text = decoded_bytes(attempt)
+    return text if is_readable(text) else ""
 
 
 def base64_bytes(encoded: str) -> bytes:
@@ -380,25 +473,60 @@ def encoded_blobs(text: str) -> list[re.Match]:
     return [*ENCODED_RUN.finditer(text), *SPACED_HEX.finditer(text)]
 
 
+def all_encoded_blobs(text: str) -> list[re.Match]:
+    return [*encoded_blobs(text), *JOINED_RUN.finditer(text), *SCATTERED_RUN.finditer(text)]
+
+
+def open_blobs(text: str) -> list[re.Match]:
+    still = [blob for blob in all_encoded_blobs(text) if is_still_being_written(blob, text)]
+    tail_start = max(0, len(text.rstrip()) - LONE_GROUP_TAIL_CHARS)
+    last_group = None
+    for last_group in LONE_GROUP.finditer(text, tail_start):
+        pass
+    if last_group is not None and is_still_being_written(last_group, text):
+        still.append(last_group)
+    return still
+
+
 def is_still_being_written(blob: re.Match, text: str) -> bool:
+    if blob.re is JOINED_RUN:
+        return STILL_JOINING.fullmatch(text, blob.end()) is not None
+    if blob.re in (SCATTERED_RUN, LONE_GROUP):
+        return STILL_SCATTERING.fullmatch(text, blob.end()) is not None and not SENTENCE_ENDED.search(text, blob.end())
     return not text[blob.end():].strip(STILL_BEING_WRITTEN)
 
 
 def ends_in_an_encoded_blob(text: str) -> bool:
-    return any(is_still_being_written(blob, text) for blob in encoded_blobs(text))
+    return bool(open_blobs(text))
 
 
-def blob_leak(blob: str, hidden: HiddenText) -> str | None:
-    for plain in decoded_readings(blob):
-        if inside := Watch(hidden).read(plain).finish().found:
-            return inside[0][2]
-    return None
+def plain_leak(plain: str, hidden: HiddenText) -> str | None:
+    return next(iter(Watch(hidden).read(plain).finish().found), (0, 0, None))[2]
+
+
+def blob_leak(blob: str, hidden: HiddenText, scattered: bool = False) -> str | None:
+    return next((label for plain in decoded_readings(blob, scattered) if (label := plain_leak(plain, hidden))), None)
 
 
 def decoded_leaks(text: str, hidden: HiddenText) -> list[tuple[int, int, str]]:
     if not hidden:
         return []
-    return [(blob.start(), blob.end(), label) for blob in encoded_blobs(text) if (label := blob_leak(blob.group(), hidden))]
+    leaks, labels = [], {}
+    for blob in all_encoded_blobs(text):
+        for plain in readings_with_trailing_groups(blob, text):
+            if plain not in labels:
+                labels[plain] = plain_leak(plain, hidden)
+            if labels[plain]:
+                leaks.append((blob.start(), blob.end(), labels[plain]))
+                break
+    return leaks
+
+
+def readings_with_trailing_groups(blob: re.Match, text: str):
+    scattered = blob.re is SCATTERED_RUN
+    yield from decoded_readings(blob.group(), scattered)
+    if scattered and (trailing := TRAILING_GROUPS.match(text, blob.end())):
+        yield from decoded_readings(blob.group() + trailing.group(), scattered)
 
 
 def shared_pieces(text: str, hidden: HiddenText) -> int:
@@ -668,28 +796,193 @@ def can_cut_quietly(layout: Layout, start: int, end: int, found_starts: list[int
         and not layout.is_a_numbered_item(start) and not introduces_a_quote(layout.text, start, first_found)
 
 
+def last_gap(text: str, start: int) -> int:
+    end = max(text.rfind(space, start) for space in " \t\n\r")
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    return end
+
+
+def has_release_point(text: str, start: int) -> bool:
+    return any(point.end() > start for point in QUIET_RELEASE_POINT.finditer(text, max(0, start - RELEASE_POINT_CONTEXT_CHARS)))
+
+
+def last_mark(text: str, start: int) -> int:
+    last = 0
+    for point in QUIET_RELEASE_POINT.finditer(text, start):
+        last = point.end()
+    return last
+
+
+def overlap_tokens_kept(starts: list[int], length: int) -> int:
+    kept = min(len(starts), CLEAN_CHECK_OVERLAP_TOKENS)
+    while kept > CLEAN_CHECK_OVERLAP_MIN_TOKENS and length - starts[-kept] > CLEAN_CHECK_OVERLAP_CHARS:
+        kept -= 1
+    return kept
+
+
+def collapsed(text: str) -> str:
+    return WHITESPACE_RUN.sub(lambda run: "\n" if "\n" in run.group() else " ", text)
+
+
+@dataclass
+class OpenRun:
+    hidden: HiddenText
+    start: int
+    checked_to: int = 0
+    leaked: bool = False
+
+    def unchecked_start(self) -> int:
+        return max(self.start, self.checked_to - CLEAN_CHECK_OVERLAP_CHARS)
+
+    def release_point(self, text: str, checked: int) -> int:
+        if len(text) - self.start >= OPEN_RUN_RELEASE_CHARS and (gap := last_gap(text, checked)) > checked:
+            return gap
+        if len(text) - checked >= QUIET_RELEASE_CHARS:
+            return last_mark(text, checked)
+        return 0
+
+    def clean_end(self, text: str, sent_length: int, sent_tail: str) -> int:
+        checked = max(self.start, self.checked_to)
+        if (gap := self.release_point(text, checked)) <= max(checked, sent_length):
+            return 0
+        if decoded_leaks(sent_tail + collapsed(text[sent_length:gap]), self.hidden):
+            self.leaked = True
+            return 0
+        self.checked_to = gap
+        return gap
+
+
+class StreamGuard:
+    def __init__(self, hidden: HiddenText):
+        self.hidden = hidden
+        self.watch = Watch(hidden)
+        self.sent = ""
+        self.sent_tail = ""
+        self.sent_tail_tokens = []
+        self.marks_held = False
+        self.recent = ""
+        self.held = []
+        self.held_length = 0
+        self.checked_length = 0
+        self.cut = False
+        self.open_run = None
+        self.blob_verdicts = {}
+
+    def read(self, piece: str) -> str:
+        if self.cut:
+            return ""
+        self.held.append(piece)
+        self.held_length += len(piece)
+        self.marks_held = self.marks_held or has_release_point(self.recent + piece, len(self.recent))
+        self.recent = (self.recent + piece)[-RELEASE_POINT_CONTEXT_CHARS:]
+        if self.waits_for_more() and not SENTENCE_ENDED.search(piece):
+            return ""
+        return self.release()
+
+    def waits_for_more(self) -> bool:
+        if self.open_run is None:
+            return False
+        run_length = len(self.sent) + self.held_length - self.open_run.start
+        batch = max(min(run_length // RELEASE_SHARE, QUIET_RELEASE_CHARS if self.marks_held else OPEN_RUN_RELEASE_CHARS),
+                    self.held_length // RELEASE_SHARE)
+        return run_length >= OPEN_RUN_RELEASE_CHARS and self.held_length - self.checked_length < batch
+
+    def release(self, finished: bool = False) -> str:
+        if self.cut or not self.held:
+            return ""
+        text = self.sent + "".join(self.held)
+        tail_start = self.open_run.unchecked_start() if self.open_run is not None else self.scan_start(text)
+        tail = text[tail_start:]
+        if self.watch.read(text).found or self.finished_blob_repeats(tail, tail_start, finished) \
+                or (finished and self.watch.finish().found):
+            return self.cut_off()
+        still_written = min(open_blobs(tail), key=re.Match.start, default=None)
+        self.follow_open_run(tail_start + still_written.start() if still_written and not finished else None)
+        if self.open_run is not None and (clean_end := self.open_run.clean_end(text, len(self.sent), self.sent_tail)):
+            return self.release_up_to(text, clean_end)
+        if self.open_run is not None and self.open_run.leaked:
+            return self.cut_off()
+        if not finished and (still_written or self.watch.finds_when_finished()):
+            self.checked_length = self.held_length
+            return ""
+        ready = "".join(self.held)
+        self.remember_sent(ready)
+        self.sent, self.held, self.held_length, self.checked_length = text, [], 0, 0
+        self.marks_held = False
+        return ready
+
+    def remember_sent(self, ready: str):
+        added = collapsed(ready)
+        if added[:1].isspace() and self.sent_tail[-1:].isspace():
+            joined = "\n" if "\n" in self.sent_tail[-1] + added[0] else " "
+            self.sent_tail, added = self.sent_tail[:-1] + joined, added[1:]
+        continues_a_token = bool(self.sent_tail) and TOKEN.fullmatch(self.sent_tail[-1:] + added[:1]) is not None
+        offset = len(self.sent_tail)
+        self.sent_tail_tokens.extend(offset + token.start() for token in TOKEN.finditer(added)
+                                     if not (continues_a_token and token.start() == 0))
+        self.sent_tail += added
+        kept = overlap_tokens_kept(self.sent_tail_tokens, len(self.sent_tail))
+        if kept < len(self.sent_tail_tokens):
+            cut = self.sent_tail_tokens[-kept]
+            self.sent_tail = self.sent_tail[cut:]
+            self.sent_tail_tokens = [start - cut for start in self.sent_tail_tokens[-kept:]]
+
+    def follow_open_run(self, start: int | None):
+        if start is None:
+            self.open_run = None
+        elif self.open_run is None or start < self.open_run.start:
+            self.open_run = OpenRun(self.hidden, start)
+
+    def release_up_to(self, text: str, end: int) -> str:
+        ready = text[len(self.sent):end]
+        self.remember_sent(ready)
+        self.sent, self.held = text[:end], [text[end:]]
+        self.held_length = self.checked_length = len(text) - end
+        self.marks_held = has_release_point(text, end)
+        return ready
+
+    def scan_start(self, text: str) -> int:
+        lowest = max(0, len(text) - BLOB_TAIL_CHARS)
+        start = max(lowest, len(self.sent) - BLOB_WINDOW_CHARS)
+        for characters in (ENCODED_RUN_CHARACTERS, SPACED_HEX_CHARACTERS):
+            while start > lowest and text[start - 1] in characters:
+                start -= 1
+        return start
+
+    def finished_blob_repeats(self, tail: str, tail_start: int, finished: bool = False) -> bool:
+        for blob in all_encoded_blobs(tail):
+            if not finished and is_still_being_written(blob, tail):
+                continue
+            key = (tail_start + blob.start(), tail_start + blob.end())
+            if key not in self.blob_verdicts:
+                self.blob_verdicts[key] = self.watch.blob_repeats(blob)
+            if self.blob_verdicts[key]:
+                return True
+        return False
+
+    def cut_off(self) -> str:
+        self.cut, self.held, self.held_length = True, [], 0
+        return ""
+
+
 class GuardedStream:
     def __init__(self, on_text, hidden: HiddenText):
         self.on_text = on_text
-        self.watch = Watch(hidden)
-        self.sent = ""
-        self.waiting = ""
-        self.held = False
+        self.guard = StreamGuard(hidden)
+
+    @property
+    def held(self) -> bool:
+        return self.guard.cut
 
     def __call__(self, piece: str):
-        if self.held:
+        if self.guard.cut:
             return
-        text = self.sent + self.waiting + piece
-        if self.watch.repeats(text):
-            self.held = True
+        if ready := self.guard.read(piece):
+            self.on_text(ready)
+        if self.guard.cut:
             log.info("held back the rest of a streamed reply that repeated private text")
-            return
-        if ends_in_an_encoded_blob(text):
-            self.waiting += piece
-            return
-        ready, self.waiting = self.waiting + piece, ""
-        self.sent += ready
-        self.on_text(ready)
 
     def kept(self, answer: str) -> int:
-        return len(self.sent) if answer.startswith(self.sent) else 0
+        sent = self.guard.sent
+        return len(sent) if answer.startswith(sent) else 0

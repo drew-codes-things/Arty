@@ -40,13 +40,13 @@ from test_agent_mode import CONFIG, READ_FILE  # noqa: E402
 from test_review_tonight import FakeEngine, FakeHub, said  # noqa: E402
 from test_round_timings import TimedEngine, answer, offline_turns  # noqa: E402
 
-SYSTEM_PROMPT = (BRAIN_FOLDER / "system-prompt.md").read_text().strip()
+SYSTEM_PROMPT = "\n\n".join((BRAIN_FOLDER / name).read_text().strip() for name in ("system-prompt.md", "safety-prompt.md"))
 PERSONA = (Path(__file__).resolve().parent / "persona_fixture.md").read_text().strip()
 PRIVATE_CONFIG = {**CONFIG, "persona": PERSONA, "system_prompt": SYSTEM_PROMPT}
 TELEGRAM_NOTE = ("You are replying on Telegram. Keep replies short (under 1500 characters unless asked for more) "
                  "and use plain text: no markdown tables or headings.")
 COMPUTER_PART = SYSTEM_PROMPT[SYSTEM_PROMPT.index("You have your own Debian"):SYSTEM_PROMPT.index("A message may end")].strip()
-HONESTY_PART = SYSTEM_PROMPT[SYSTEM_PROMPT.index("Be honest about"):SYSTEM_PROMPT.index("\nNever help anyone")].strip()
+HONESTY_PART = SYSTEM_PROMPT[SYSTEM_PROMPT.index("Be honest about"):SYSTEM_PROMPT.index("\nKeep replies concise")].strip()
 PERSONA_LINE = next(line for line in PERSONA.splitlines() if len(line.split()) > 40)
 LONG_DESCRIPTION = ("Run a shell command on your own Debian computer as the ai user and return what it printed, "
                     "with the exit code; long output is cut to the last two thousand characters.")
@@ -590,7 +590,7 @@ def random_layout(rng: random.Random, words: list[str]) -> str:
 def one_pass_verdict(text: str, plain_text: private_text.Watch, decoded_memo: dict) -> bool:
     if plain_text.read(text).found:
         return True
-    finished = [blob.group() for blob in private_text.encoded_blobs(text)
+    finished = [blob.group() for blob in private_text.all_encoded_blobs(text)
                 if not private_text.is_still_being_written(blob, text)]
     for group in finished:
         if group not in decoded_memo:
