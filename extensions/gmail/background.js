@@ -16,6 +16,8 @@ const SEND_WAIT_MS = 30000;
 const SHOWN_DIALOG_CHARS = 200;
 const ADDRESS = /[^<>\s,;"]+@[^<>\s,;"]+/;
 
+importScripts("update-notice.js");
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let running = false;
 

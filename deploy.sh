@@ -42,6 +42,7 @@ own_app_origin() {
 drive_origin=$(own_app_origin DRIVE_ADDRESS "${DRIVE_ADDRESS:-}")
 calendar_origin=$(own_app_origin CALENDAR_ADDRESS "${CALENDAR_ADDRESS:-}")
 starfire_origin=$(own_app_origin STARFIRE_ADDRESS "${STARFIRE_ADDRESS:-}")
+arty_site_origin=$(own_app_origin ARTY_SITE_ADDRESS "${ARTY_SITE_ADDRESS:-}")
 own_apps=$(printf '{"drive": "%s", "calendar": "%s", "starfire": "%s"}\n' "$drive_origin" "$calendar_origin" "$starfire_origin")
 own_app_hosts=$(printf '%s\n' "$drive_origin" "$calendar_origin" "$starfire_origin" | sed -e 's#^https://##' -e 's#:[0-9]*$##' | grep . || true)
 if [ -n "$own_app_hosts" ]; then
@@ -125,7 +126,9 @@ ssh "$DESKTOP" 'dpkg -s arc-theme papirus-icon-theme >/dev/null 2>&1 || sudo DEB
 ssh "$DESKTOP" "pinned='$YT_DLP_VERSION' sh -s" < arty-pc/install-yt-dlp
 ssh "$DESKTOP" 'dpkg -s python3-openpyxl >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-openpyxl >/dev/null'
 ssh "$DESKTOP" 'mkdir -p ~/.local/browser-agent/gmail-extension'
-scp -q extensions/gmail/background.js extensions/gmail/manifest.json extensions/gmail/README.md "$DESKTOP:.local/browser-agent/gmail-extension/"
+scp -q extensions/gmail/background.js extensions/gmail/update-notice.js extensions/gmail/options.html extensions/gmail/options.js \
+  extensions/gmail/icon128.png extensions/gmail/manifest.json extensions/gmail/README.md "$DESKTOP:.local/browser-agent/gmail-extension/"
+printf '{"site": "%s"}\n' "$arty_site_origin" | ssh "$DESKTOP" 'cat > ~/.local/browser-agent/gmail-extension/update-source.json'
 printf '%s' "$own_apps" \
   | ssh "$DESKTOP" 'sudo install -d -o root -g root -m 755 /etc/arty && sudo tee /etc/arty/own-apps.json.new >/dev/null && sudo chown root:root /etc/arty/own-apps.json.new && sudo chmod 644 /etc/arty/own-apps.json.new && sudo mv /etc/arty/own-apps.json.new /etc/arty/own-apps.json && rm -f ~/.local/browser-agent/own-apps.json'
 ssh "$DESKTOP" "upload='$launcher_upload' sums='$launcher_sums'"' sh -s' <<'LAUNCHERS'

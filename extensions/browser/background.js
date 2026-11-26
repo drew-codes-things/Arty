@@ -27,6 +27,15 @@ const OPENABLE_SCHEMES = ['http:', 'https:'];
 const NATIVE_HOST = 'app.arty.desktop';
 const NATIVE_RETRY_MS = 30000;
 const PAIRING_CODE = /^[0-9a-f]{32}$/;
+const RELEASE_API_URL = 'https://api.github.com/repos/drew-codes-things/Arty/releases/latest';
+const EXTENSION_ASSET = /^Arty-Browser-Extension-(\d+(?:\.\d+){0,3})\.zip$/;
+const UPDATE_ALARM = 'arty-update-check';
+const FIRST_UPDATE_CHECK_MINUTES = 1;
+const UPDATE_CHECK_EVERY_MINUTES = 24 * 60;
+const UPDATE_TIMEOUT_MS = 5000;
+const MAX_RELEASE_BYTES = 256 * 1024;
+const UPDATE_BADGE = 'NEW';
+const VERSION_TEXT = /^(?:[a-z]+-)?v?(\d+(?:\.\d+){0,3})$/i;
 
 const FIRST_ITEM_NUMBER = 1;
 const ITEM_NUMBER_LIMIT = 100000;
@@ -185,14 +194,132 @@ async function pairingCode() {
 }
 
 async function showPaired(paired) {
-  await chrome.action.setBadgeText({ text: paired ? '' : '!' });
-  await chrome.action.setTitle({ title: paired ? PAIRED_TITLE : UNPAIRED_TITLE });
+  const badge = !paired ? '!' : waitingUpdate ? UPDATE_BADGE : '';
+  const title = !paired ? UNPAIRED_TITLE : waitingUpdate ? `${EXTENSION_NAME}: ${waitingUpdate.text}. Click for the download page.` : PAIRED_TITLE;
+  await chrome.action.setBadgeText({ text: badge });
+  await chrome.action.setTitle({ title });
+}
+
+let waitingUpdate = null;
+
+function versionParts(text) {
+  const found = VERSION_TEXT.exec(String(text ?? '').trim());
+  return found ? found[1].split('.').map(Number) : null;
+}
+
+function isNewer(latest, current) {
+  const newer = versionParts(latest);
+  const mine = versionParts(current);
+  if (!newer || !mine) return false;
+  for (let index = 0; index < Math.max(newer.length, mine.length); index += 1) {
+    const difference = (newer[index] || 0) - (mine[index] || 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return false;
+}
+
+function assetVersion(asset) {
+  const name = asset && typeof asset === 'object' ? asset.name : null;
+  const found = typeof name === 'string' ? EXTENSION_ASSET.exec(name) : null;
+  return found ? found[1] : null;
+}
+
+function releaseExtensionVersion(release) {
+  const assets = release && typeof release === 'object' && Array.isArray(release.assets) ? release.assets : [];
+  return assets.map(assetVersion).filter(Boolean).reduce((newest, version) => (!newest || isNewer(version, newest) ? version : newest), null);
+}
+
+function noticeFor({ latest, current, dismissed, enabled }) {
+  if (!enabled || !latest || latest === dismissed || !isNewer(latest, current)) return null;
+  return { version: latest, text: `Version ${latest} is available` };
+}
+
+async function readCapped(response) {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_RELEASE_BYTES) throw new Error(`the release answer is ${declared} bytes, over ${MAX_RELEASE_BYTES}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RELEASE_BYTES) {
+      await reader.cancel();
+      throw new Error(`the release answer is over ${MAX_RELEASE_BYTES} bytes`);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+async function fetchLatestVersion() {
+  const response = await fetch(RELEASE_API_URL, {
+    method: 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store',
+    headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(UPDATE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`the release answered ${response.status}`);
+  let release;
+  try {
+    release = JSON.parse(await readCapped(response));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error('the release answer is not valid JSON');
+    throw error;
+  }
+  const latest = releaseExtensionVersion(release);
+  if (!latest) throw new Error('the latest release has no browser extension zip');
+  return latest;
+}
+
+async function updateSettings() {
+  const stored = await chrome.storage.local.get(['updateCheck', 'dismissedUpdate', 'latestVersion']);
+  return {
+    enabled: stored.updateCheck !== false,
+    dismissed: typeof stored.dismissedUpdate === 'string' ? stored.dismissedUpdate : '',
+    latest: typeof stored.latestVersion === 'string' ? stored.latestVersion : null,
+  };
+}
+
+async function refreshUpdateNotice() {
+  const settings = await updateSettings();
+  waitingUpdate = noticeFor({ ...settings, current: chrome.runtime.getManifest().version });
+  await chrome.storage.local.set({ updateNotice: waitingUpdate });
+}
+
+async function checkForUpdate() {
+  const { enabled } = await updateSettings();
+  if (!enabled) return refreshUpdateNotice();
+  try {
+    await chrome.storage.local.set({ latestVersion: await fetchLatestVersion() });
+  } catch (error) {
+    console.info(`Arty: update check skipped (${error.message})`);
+    return undefined;
+  }
+  return refreshUpdateNotice();
+}
+
+function scheduleUpdateChecks() {
+  chrome.alarms.create(UPDATE_ALARM, { delayInMinutes: FIRST_UPDATE_CHECK_MINUTES, periodInMinutes: UPDATE_CHECK_EVERY_MINUTES });
+}
+
+function whenUpdateAlarm(alarm) {
+  if (alarm?.name === UPDATE_ALARM) checkForUpdate();
+}
+
+function whenUpdateSettingsChange(changes, area) {
+  if (area === 'local' && (changes.updateCheck || changes.dismissedUpdate)) refreshUpdateNotice();
 }
 
 chrome.alarms.create('arty-keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(poll);
+chrome.alarms.onAlarm.addListener(whenUpdateAlarm);
 chrome.runtime.onStartup.addListener(poll);
 chrome.runtime.onInstalled.addListener(poll);
+chrome.runtime.onStartup.addListener(scheduleUpdateChecks);
+chrome.runtime.onInstalled.addListener(scheduleUpdateChecks);
+chrome.storage.onChanged?.addListener(whenUpdateSettingsChange);
+chrome.storage.local.get('updateNotice').then((stored) => { waitingUpdate = stored?.updateNotice ?? null; });
 poll();
 
 // ---------- commands ----------

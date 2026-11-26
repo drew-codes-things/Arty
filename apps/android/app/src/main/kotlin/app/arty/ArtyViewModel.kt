@@ -18,7 +18,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.util.Log
 import app.arty.core.Announcement
+import app.arty.core.AppUpdate
+import app.arty.core.AppUpdateNotice
 import app.arty.core.Attachment
 import app.arty.core.ArtyException
 import app.arty.core.ArtyTask
@@ -48,6 +51,7 @@ import app.arty.widget.ArtyWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -74,6 +78,9 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
         const val PREF_AUTO_SPEAK = "autoSpeak"
         const val PREF_LAST_CHAT = "lastChat"
         const val PREF_MODEL_CHOICE = "modelChoice"
+        const val PREF_UPDATE_CHECK = "updateCheck"
+        const val PREF_DISMISSED_UPDATE = "dismissedUpdate"
+        const val LOG_TAG = "Arty"
         const val ANNOUNCEMENT_WAIT_SECONDS = 50
         const val CALENDAR_DAYS = 60
         const val ANNOUNCEMENT_RETRY_MS = 30_000L
@@ -766,6 +773,51 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteMemory(entity: MemoryEntity, fact: String? = null) =
         changeMemory(if (fact == null) "Forgot everything about ${entity.name}." else "Forgotten.") { client.deleteMemory(entity.name, fact) }
+
+    var updateCheck by mutableStateOf(prefs.getBoolean(PREF_UPDATE_CHECK, true)); private set
+    var appUpdate by mutableStateOf<AppUpdateNotice?>(null); private set
+    private var latestVersion: String? = null
+    val updateSource = AppUpdate.sourceFor(BuildConfig.ARTY_BASE_URL)
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(AppUpdate.FIRST_CHECK_DELAY_MS)
+            while (isActive) {
+                checkForUpdate()
+                delay(AppUpdate.CHECK_EVERY_MS)
+            }
+        }
+    }
+
+    private suspend fun checkForUpdate() {
+        if (!updateCheck) return
+        try {
+            latestVersion = AppUpdate.fetchLatest(BuildConfig.VERSION_NAME, updateSource)
+        } catch (error: Exception) {
+            Log.i(LOG_TAG, AppUpdate.skippedLine(error))
+            return
+        } catch (error: StackOverflowError) {
+            Log.i(LOG_TAG, AppUpdate.skippedLine(error))
+            return
+        }
+        withContext(Dispatchers.Main) { showAppUpdate() }
+    }
+
+    private fun showAppUpdate() {
+        appUpdate = AppUpdate.noticeFor(latestVersion, BuildConfig.VERSION_NAME, prefs.getString(PREF_DISMISSED_UPDATE, null), updateCheck)
+    }
+
+    fun toggleUpdateCheck() {
+        updateCheck = !updateCheck
+        prefs.edit().putBoolean(PREF_UPDATE_CHECK, updateCheck).apply()
+        showAppUpdate()
+    }
+
+    fun dismissAppUpdate() {
+        val shown = appUpdate ?: return
+        prefs.edit().putString(PREF_DISMISSED_UPDATE, shown.version).apply()
+        showAppUpdate()
+    }
 
     override fun onCleared() {
         Announcements.onFresh = null

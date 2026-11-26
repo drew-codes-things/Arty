@@ -67,6 +67,12 @@ your important unread emails the same way.
 
 ---
 
+## New Versions
+
+The extension reads the list of builds at `/download/manifest.json` on your Arty site a minute after Chrome starts and then once a day. `deploy.sh` names that site in `update-source.json` next to the extension, from `ARTY_SITE_ADDRESS` in `hosts.env` (an https origin such as `https://arty.example.com`); with it empty the extension does not check. When a newer version is out, Chrome shows a notification with a button to the download page; closing it hides that version. Turn it off with **Tell me about new versions** on the extension's options page.
+
+---
+
 ## Tested On
 
 Google Chrome 156.0.8078.47 on Arty's desktop VM (Debian 13 trixie, XFCE 4.20), profile `~/.gmail-chrome`. The sign-in

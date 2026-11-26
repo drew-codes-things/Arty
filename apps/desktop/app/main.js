@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, clipboard, globalShortcut, ipcMain, screen, dialog } = require('electron');
+const { app, BrowserWindow, Menu, Tray, clipboard, globalShortcut, ipcMain, screen, dialog, shell } = require('electron');
 const controlIndicator = require('./control-indicator');
 const fs = require('fs');
 const path = require('path');
@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const dependencies = require('./dependencies');
 const platform = require('./platform');
 const serviceProof = require('./service-proof');
+const updateNotice = require('./update-notice');
 
 // The window stays on top and goes where it was left, which a native Wayland window
 // can't ask KDE for, so it runs as an X11 client (XWayland). The flag has to be on the
@@ -47,6 +48,9 @@ let lastHealthy = Date.now();
 let solidity = DEFAULT_SOLIDITY;
 let bridgeTrusted = false;
 const portWarning = serviceProof.createPortWarning();
+const updatePreferences = { enabled: true, dismissed: '' };
+let shownUpdate = null;
+let updateChecker = null;
 
 // ---------- the local service (server/arty_server.py) ----------
 
@@ -308,6 +312,8 @@ function savedBounds() {
     const visible = screen.getAllDisplays().some(({ workArea: area }) =>
       saved.x >= area.x - 50 && saved.y >= area.y - 50 && saved.x < area.x + area.width - 50 && saved.y < area.y + area.height - 50);
     if (typeof saved.solidity === 'number') solidity = saved.solidity;
+    if (typeof saved.updateCheck === 'boolean') updatePreferences.enabled = saved.updateCheck;
+    if (typeof saved.dismissedUpdate === 'string') updatePreferences.dismissed = saved.dismissedUpdate;
     if (visible) return saved;
   } catch { /* first run */ }
   const area = screen.getPrimaryDisplay().workArea;
@@ -321,7 +327,10 @@ function savedBounds() {
 function saveBounds() {
   if (!win || win.isDestroyed()) return;
   try {
-    fs.writeFileSync(stateFile(), JSON.stringify({ ...win.getBounds(), onTop: win.isAlwaysOnTop(), solidity }));
+    fs.writeFileSync(stateFile(), JSON.stringify({
+      ...win.getBounds(), onTop: win.isAlwaysOnTop(), solidity,
+      updateCheck: updatePreferences.enabled, dismissedUpdate: updatePreferences.dismissed,
+    }));
   } catch { /* not worth failing over */ }
 }
 
@@ -342,7 +351,10 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.webContents.on('did-finish-load', () => win.webContents.send('transparency', solidity));
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.send('transparency', solidity);
+    win.webContents.send('update-notice', shownUpdate);
+  });
   win.on('moved', saveBounds);
   win.on('resized', saveBounds);
   win.on('close', (event) => {
@@ -408,6 +420,7 @@ function buildTray() {
     { label: 'Chrome sites…', click: () => { win.show(); win.focus(); win.webContents.send('chrome-sites'); } },
     { label: 'Link starfire…', click: () => { win.show(); win.focus(); win.webContents.send('starfire-link'); } },
     { label: 'Let Arty control the screen', type: 'checkbox', checked: screenControlOn, click: (item) => setScreenControl(item.checked) },
+    { label: 'Tell me about new versions', type: 'checkbox', checked: updatePreferences.enabled, click: (item) => setUpdateCheck(item.checked) },
     { type: 'separator' },
     { label: 'Quit Arty', click: () => app.quit() },
   ]);
@@ -415,6 +428,28 @@ function buildTray() {
   refreshTrayMenu = () => tray.setContextMenu(menu());
   tray.on('click', toggleWindow);
   win.on('always-on-top-changed', () => tray.setContextMenu(menu()));
+}
+
+function showUpdate(notice) {
+  shownUpdate = notice;
+  win?.webContents.send('update-notice', notice);
+}
+
+function setUpdateCheck(enabled) {
+  updatePreferences.enabled = enabled;
+  saveBounds();
+  updateChecker?.refresh();
+}
+
+function startUpdateChecks() {
+  updateChecker = updateNotice.createUpdateChecker({
+    fetch,
+    current: app.getVersion(),
+    settings: () => ({ ...updatePreferences }),
+    show: showUpdate,
+    log: (line) => console.info(line),
+  });
+  updateChecker.start();
 }
 
 function setSolidity(value) {
@@ -489,6 +524,15 @@ function watchScreenControl() {
 }
 
 ipcMain.on('control-stop', stopControl);
+ipcMain.on('update-open', () => {
+  shell.openExternal(updateNotice.RELEASE_PAGE_URL).catch((error) => console.info(`Arty: opening the download page failed: ${error.message}`));
+});
+ipcMain.on('update-dismiss', (_event, version) => {
+  if (!shownUpdate || version !== shownUpdate.version) return;
+  updatePreferences.dismissed = version;
+  saveBounds();
+  updateChecker?.refresh();
+});
 ipcMain.on('hide', () => win?.hide());
 ipcMain.on('show', () => { win?.show(); win?.focus(); });
 ipcMain.on('token', (event) => { event.returnValue = bridgeTrusted ? serviceToken() : ''; });
@@ -505,6 +549,7 @@ if (!app.requestSingleInstanceLock()) {
     installMissingDependencies().catch((error) => console.error(`Arty: checking for missing packages failed: ${error}`));
     buildTray();
     watchScreenControl();
+    startUpdateChecks();
     globalShortcut.register('CommandOrControl+Shift+Space', showAndListen);
     globalShortcut.register('CommandOrControl+Shift+A', toggleWindow);
     globalShortcut.register('CommandOrControl+Alt+Space', showAndLook);

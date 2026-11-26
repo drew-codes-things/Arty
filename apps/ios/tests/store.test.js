@@ -125,9 +125,9 @@ test("connection settings need the app key, and the Access id and secret togethe
 
 test("preferences keep their defaults and merge changes", () => {
   const storage = memoryStorage();
-  assert.deepEqual(loadPreferences(storage), { readAloud: false, lastChat: null, lastSeenUpdate: 0, quietCategories: [] });
+  assert.deepEqual(loadPreferences(storage), { readAloud: false, lastChat: null, lastSeenUpdate: 0, quietCategories: [], updateCheck: true, dismissedUpdate: "" });
   savePreferences(storage, { readAloud: true });
-  assert.deepEqual(savePreferences(storage, { lastSeenUpdate: 9 }), { readAloud: true, lastChat: null, lastSeenUpdate: 9, quietCategories: [] });
+  assert.deepEqual(savePreferences(storage, { lastSeenUpdate: 9 }), { readAloud: true, lastChat: null, lastSeenUpdate: 9, quietCategories: [], updateCheck: true, dismissedUpdate: "" });
   storage.setItem("arty.preferences", JSON.stringify({ quietCategories: "email" }));
   assert.deepEqual(loadPreferences(storage).quietCategories, []);
 });

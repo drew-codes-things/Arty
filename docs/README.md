@@ -42,6 +42,7 @@ Guides and reference for Arty. Each app and part also has its own README in its 
 
 | Release | Notes |
 |---|---|
+| 1.7.0 | [26 November 2026](release-notes-2026-11-26-1.7.0.md) |
 | 1.6.1 | [21 November 2026](release-notes-2026-11-21-1.6.1.md) |
 | 1.6.0 | [21 November 2026](release-notes-2026-11-21-1.6.0.md) |
 | 1.5.8 | [19 November 2026](release-notes-2026-11-19-1.5.8.md) |

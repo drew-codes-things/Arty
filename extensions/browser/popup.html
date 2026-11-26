@@ -35,10 +35,22 @@
     button:hover { background: color-mix(in srgb, var(--text) 86%, var(--bg)); }
     button:active { transform: scale(.97); }
     #status { min-height: 1.2em; margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .update { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--accent-tint); font-size: 13px; }
+    .update[hidden] { display: none; }
+    .update span { flex: 1 1 100%; }
+    .update button { align-self: auto; height: 30px; }
+    .update .quiet { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+    .switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
+    .switch input { width: auto; height: auto; }
     @media (prefers-reduced-motion: reduce) { * { transition-duration: .001ms !important; } button:active { transform: none; } }
   </style>
 </head>
 <body>
+  <div id="update-notice" class="update" role="status" hidden>
+    <span id="update-text"></span>
+    <button id="update-open" type="button">Download page</button>
+    <button id="update-dismiss" type="button" class="quiet">Dismiss</button>
+  </div>
   <h1>Pair with Arty Desktop</h1>
   <p>In Arty Desktop, open the tray menu and choose <b>Chrome sites</b>. Paste the pairing code from there.</p>
   <form id="pair">
@@ -46,6 +58,7 @@
     <button type="submit">Save</button>
   </form>
   <div id="status" role="status"></div>
+  <label class="switch">Tell me about new versions <input id="update-check" type="checkbox"></label>
   <script src="popup.js"></script>
 </body>
 </html>

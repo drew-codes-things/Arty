@@ -265,6 +265,11 @@ private fun ChatTopBar(vm: ArtyViewModel, onMenu: () -> Unit) {
                     onClick = { vm.toggleInstantNotifications() },
                 )
                 DropdownMenuItem(
+                    text = { Text("Tell me about new versions", style = MaterialTheme.typography.bodyMedium) },
+                    trailingIcon = { Switch(checked = vm.updateCheck, onCheckedChange = { vm.toggleUpdateCheck() }) },
+                    onClick = { vm.toggleUpdateCheck() },
+                )
+                DropdownMenuItem(
                     text = { Text("Brain connection", style = MaterialTheme.typography.bodyMedium) },
                     onClick = { moreMenu = false; SetupActivity.open(context) },
                 )

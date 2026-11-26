@@ -49,9 +49,9 @@ function loadExtension({ stored = {}, serviceCode = NATIVE_CODE, nativeAnswer, n
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
 
-test('the manifest asks for native messaging and is version 1.7', () => {
+test('the manifest asks for native messaging and is version 1.8', () => {
   assert.ok(manifest.permissions.includes('nativeMessaging'));
-  assert.strictEqual(manifest.version, '1.7');
+  assert.strictEqual(manifest.version, '1.8');
 });
 
 test('with no code saved, the extension asks Arty Desktop for one through native messaging and uses it', async () => {
@@ -111,6 +111,8 @@ test('a code from the native host that the service cannot prove is never sent', 
 test('the popup says when it was paired automatically, and a pasted code is marked as pasted', async () => {
   const popup = fs.readFileSync(path.join(folder, 'popup.js'), 'utf8');
   const elements = { pair: { addEventListener: (kind, listener) => { elements.submit = listener; } }, code: { value: '' }, status: { textContent: '' } };
+  const control = () => ({ hidden: true, checked: false, textContent: '', addEventListener: () => {} });
+  for (const id of ['update-notice', 'update-check', 'update-text', 'update-open', 'update-dismiss']) elements[id] = control();
   const saved = { pairing: NATIVE_CODE, pairedBy: 'native' };
   const chrome = { storage: { local: { get: async () => ({ ...saved }), set: async (values) => Object.assign(saved, values) } } };
   const context = { chrome, document: { getElementById: (id) => elements[id] }, console };

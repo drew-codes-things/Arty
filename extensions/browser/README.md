@@ -161,6 +161,12 @@ minute, and only with **HANDS** on.
 
 ---
 
+## New Versions
+
+The extension asks GitHub for the latest Arty release (drew-codes-things/Arty) a minute after the browser starts and then once a day, and reads its own version from the `Arty-Browser-Extension-<version>.zip` attached to that release. When a newer version is out, its badge says NEW and the pop-up shows the notice with a button to the release page; dismiss it and it stays away until the next version. Turn it off with **Tell me about new versions** in the pop-up. In Firefox, the browser may add the extension's own origin (`moz-extension://` followed by an id Firefox picks for each install) to the update request; Arty does not send it, and the request carries nothing else about you.
+
+---
+
 ## Tested On
 
 Google Chrome 156.0.8078.47 on Debian 13 (trixie) with KDE Plasma 6.3.6, alongside Arty Desktop 1.0.0. Version 1.4

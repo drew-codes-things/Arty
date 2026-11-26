@@ -19,6 +19,7 @@ const val MIC_LOST = "Arty can't hear you right now. Trying again..."
 class ArtyListener private constructor(private val context: Context) : HeadsetEvents {
 
     val state = QuestState()
+    val updates = UpdateWatch(context, state)
     private val main = Handler(Looper.getMainLooper())
     private val actionRunner = Executors.newSingleThreadExecutor()
     private val pairingRunner = Executors.newSingleThreadExecutor()

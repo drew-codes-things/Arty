@@ -145,6 +145,18 @@ fun SetupForm(state: QuestState, onSave: (String, String) -> Unit, onSaveWithCod
     }
 }
 
+class UpdateActions(val open: () -> Unit, val dismiss: () -> Unit, val setEnabled: (Boolean) -> Unit, val offered: Boolean)
+
+@Composable
+private fun UpdateLine(notice: UpdateNotice, actions: UpdateActions) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(notice.text, color = SoftText, fontSize = 16.sp)
+        Spacer(Modifier.size(8.dp))
+        TextButton(onClick = actions.open) { Text("Download page", color = ArtyRed, fontSize = 16.sp) }
+        TextButton(onClick = actions.dismiss) { Text("Dismiss", color = DimText, fontSize = 16.sp) }
+    }
+}
+
 @Composable
 fun OrbPanel(
     state: QuestState,
@@ -153,6 +165,7 @@ fun OrbPanel(
     onSetupWithCode: (String, String) -> Unit,
     onOpenSetup: () -> Unit,
     onCancelSetup: () -> Unit,
+    updates: UpdateActions,
 ) {
     PanelFrame {
         if (state.setupOpen) {
@@ -173,6 +186,18 @@ fun OrbPanel(
                 Line("“${state.heard}”", DimText)
             }
             Spacer(Modifier.weight(1f))
+            state.update?.let { UpdateLine(it, updates) }
+            if (updates.offered) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Tell me about new versions", color = SoftText, fontSize = 16.sp)
+                    Spacer(Modifier.size(12.dp))
+                    Switch(
+                        checked = state.updateCheck,
+                        onCheckedChange = updates.setEnabled,
+                        colors = SwitchDefaults.colors(checkedTrackColor = ArtyRed),
+                    )
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Wake word", color = SoftText, fontSize = 16.sp)
                 Spacer(Modifier.size(12.dp))

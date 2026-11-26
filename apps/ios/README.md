@@ -83,6 +83,10 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
 | `sw.js`, `manifest.webmanifest`, `icons/` | Home Screen install and opening without a connection |
 | `tests/` | Unit tests and `fake_brain.py`, a stand-in brain for trying the app on a laptop |
 
+## New Versions
+
+When the app is opened over https, it checks the download page's list of builds on the same site shortly after it starts and then once a day. When a newer version is out, a notice says so with a link to the download page; dismiss it and it stays away until the next version. Turn it off with **Tell me about new versions** in More.
+
 ## Tests
 
 ```

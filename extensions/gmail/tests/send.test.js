@@ -38,6 +38,7 @@ function loadExtension({ shown = COMPOSED, states = [{ sent: true, asked: '', co
   };
   const context = {
     chrome, console, URL, URLSearchParams,
+    importScripts: () => {},
     fetch: () => new Promise(() => {}),
     setTimeout: (callback) => setTimeout(callback, 0),
     Date: { now: () => (clock += 400) },

@@ -27,7 +27,7 @@ It comes in two builds from the same code:
 | APK | Package | Where it finds Arty |
 |---|---|---|
 | `release/Arty.apk` | `app.arty` | Built in from `~/.arty-android.properties` - the owner's own copy. **Keep it private**: anyone with the file can reach your Arty. |
-| `release/Arty-<version>.apk` (e.g. `Arty-1.6.1.apk`) | `app.arty.shareable` | Nothing built in. It asks on first launch, so one APK works for anyone's Arty and is safe to share. |
+| `release/Arty-<version>.apk` (e.g. `Arty-1.7.0.apk`) | `app.arty.shareable` | Nothing built in. It asks on first launch, so one APK works for anyone's Arty and is safe to share. |
 
 Both can be installed side by side.
 
@@ -103,9 +103,9 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
 
 ## Download
 
-Download `Arty-<version>.apk` (e.g. `Arty-1.6.1.apk`) from the [Releases](../../../../releases) page, or build it into `release/` from source:
+Download `Arty-<version>.apk` (e.g. `Arty-1.7.0.apk`) from the [Releases](../../../../releases) page, or build it into `release/` from source:
 
-- Over USB: `adb install -r Arty-1.6.1.apk` (or `release/Arty.apk` for your own copy, which has your keys built in:
+- Over USB: `adb install -r Arty-1.7.0.apk` (or `release/Arty.apk` for your own copy, which has your keys built in:
   never share that one).
 - Or copy it to the phone, open it and allow installing from that app when Android asks.
 
@@ -122,7 +122,7 @@ Android 9 (API 28) or newer.
 ```
 
 The APKs land in `app/build/outputs/apk/<build>/release/`; copy them to `release/` (which isn't committed), naming the
-shareable one after its version, e.g. `Arty-1.6.1.apk`.
+shareable one after its version, e.g. `Arty-1.7.0.apk`.
 
 The personal build reads its details from `~/.arty-android.properties` (mode 600), never from this repo:
 
@@ -150,6 +150,10 @@ Release builds are signed with `~/.arty-release.jks` (password in `~/.arty-relea
   and list arrivals every screen shares. Motion stops when the phone's animations are turned off.
 - `design/` - the Arty logo source and icon previews. Fonts are IBM Plex Sans and Mono (SIL Open Font License).
 - Toolchain: Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21, JDK 21, compileSdk and targetSdk 35, minSdk 28.
+
+## New Versions
+
+The app checks for a newer version shortly after it starts and then once a day. The shareable build asks GitHub for the latest Arty release and compares its tag; the personal build reads the list of builds at `/download/manifest.json` on the Arty site it was built for (`arty.baseUrl` in `~/.arty-android.properties`). When a newer version is out, a notice above the tabs says so with a button that opens the release or download page in your browser; nothing is downloaded for you. Dismiss it and it stays away until the next version. Turn it off with **Tell me about new versions** in the chat screen's speaker menu.
 
 ## Tested On
 

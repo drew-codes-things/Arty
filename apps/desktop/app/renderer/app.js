@@ -1520,3 +1520,18 @@ $('link-automatic').addEventListener('click', switchAutomaticLink);
 $('link-unlink').addEventListener('click', unlinkStarfire);
 $('link-close').addEventListener('click', hideStarfireLink);
 window.arty?.onStarfireLink(whenNotPresenting(showStarfireLink));
+
+let updateShown = null;
+
+function showUpdateNotice(notice) {
+  updateShown = notice && typeof notice.version === 'string' ? notice : null;
+  $('update-text').textContent = updateShown ? updateShown.text : '';
+  $('update-notice').hidden = !updateShown;
+}
+
+$('update-open').addEventListener('click', () => window.arty?.openReleasePage());
+$('update-dismiss').addEventListener('click', () => {
+  if (updateShown) window.arty?.dismissUpdate(updateShown.version);
+  showUpdateNotice(null);
+});
+window.arty?.onUpdateNotice(showUpdateNotice);

@@ -75,6 +75,7 @@ import app.arty.ui.ChatScreen
 import app.arty.ui.ComputersScreen
 import app.arty.ui.MemoryScreen
 import app.arty.ui.NotificationsScreen
+import app.arty.ui.UpdateBanner
 import app.arty.ui.SchedulesScreen
 import app.arty.ui.TasksScreen
 import app.arty.ui.UpdatesScreen
@@ -237,28 +238,31 @@ private fun ArtyApp(vm: ArtyViewModel) {
         },
     ) { padding ->
         // Consuming the bar padding stops the chat's imePadding from adding the bar height again above the keyboard.
-        Crossfade(tab, Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), ArtyMotion.quick(), label = "tab") { shown ->
-            when (shown) {
-                Tab.Chat -> ChatScreen(vm)
-                Tab.Updates -> UpdatesScreen(vm)
-                Tab.Tasks -> TasksScreen(vm)
-                Tab.Calendar -> CalendarScreen(vm)
-                Tab.More -> MoreScreen(Tab.entries.filterNot { it.inBar }, onOpen = { tab = it })
-                Tab.Lectures -> LecturesScreen(
-                    vm,
-                    onRecord = {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                            LectureRecorder.start(context)
-                        } else {
-                            askMicForLecture.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    },
-                    onStop = { LectureRecorder.stop(context) },
-                )
-                Tab.Schedules -> SchedulesScreen(vm)
-                Tab.Memory -> MemoryScreen(vm)
-                Tab.Computers -> ComputersScreen()
-                Tab.Notifications -> NotificationsScreen()
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+            vm.appUpdate?.let { UpdateBanner(it, vm.updateSource.releasePage, onDismiss = vm::dismissAppUpdate) }
+            Crossfade(tab, Modifier.weight(1f).fillMaxWidth(), ArtyMotion.quick(), label = "tab") { shown ->
+                when (shown) {
+                    Tab.Chat -> ChatScreen(vm)
+                    Tab.Updates -> UpdatesScreen(vm)
+                    Tab.Tasks -> TasksScreen(vm)
+                    Tab.Calendar -> CalendarScreen(vm)
+                    Tab.More -> MoreScreen(Tab.entries.filterNot { it.inBar }, onOpen = { tab = it })
+                    Tab.Lectures -> LecturesScreen(
+                        vm,
+                        onRecord = {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                LectureRecorder.start(context)
+                            } else {
+                                askMicForLecture.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                        onStop = { LectureRecorder.stop(context) },
+                    )
+                    Tab.Schedules -> SchedulesScreen(vm)
+                    Tab.Memory -> MemoryScreen(vm)
+                    Tab.Computers -> ComputersScreen()
+                    Tab.Notifications -> NotificationsScreen()
+                }
             }
         }
     }

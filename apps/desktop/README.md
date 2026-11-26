@@ -126,8 +126,8 @@ runs on a PC that has never seen this project.
 
 ```bash
 sudo apt install libfuse2t64   # FUSE, to run AppImages
-chmod +x Arty-1.6.1-x86_64.AppImage
-./Arty-1.6.1-x86_64.AppImage
+chmod +x Arty-1.7.0-x86_64.AppImage
+./Arty-1.7.0-x86_64.AppImage
 ```
 
 On start, Arty checks for the system packages it needs (PortAudio for the microphone, a clipboard tool, a screenshot
@@ -138,7 +138,7 @@ source also reinstalls the Python packages whenever `server/requirements-linux.t
 
 ### Windows
 
-Run `Arty-Setup-1.6.1.exe`. It installs for your own account (no administrator needed), carries its own Python and
+Run `Arty-Setup-1.7.0.exe`. It installs for your own account (no administrator needed), carries its own Python and
 the Microsoft Visual C++ runtime the speech engine uses, and adds a Start menu and desktop shortcut. The installer is
 not code-signed, so Windows SmartScreen shows "Windows protected your PC" the first time: choose **More info**, then
 **Run anyway**.
@@ -178,6 +178,10 @@ Building the installer: `./build-app.sh` (needs rsync and network access; it dow
 then copy `app/dist/Arty-*.AppImage` to `release/`. On Windows, `.\build-installer.ps1` (needs Node.js and the
 Microsoft Visual C++ runtime on the build machine; it downloads Python 3.12 and the models) writes
 `app\dist\Arty-Setup-*.exe`.
+
+## New Versions
+
+Arty Desktop asks GitHub for the latest Arty release (drew-codes-things/Arty) a minute after it starts and then once a day, and compares its tag with its own version. When a newer version is out, a small notice says so with a button that opens the release page in your browser; nothing is downloaded for you. Dismiss it and it stays away until the next version. Turn it off with **Tell me about new versions** in the tray menu.
 
 ## Tests
 

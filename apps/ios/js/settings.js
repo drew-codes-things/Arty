@@ -41,7 +41,10 @@ export function forgetEverything(storage) {
 }
 
 export function loadPreferences(storage) {
-  const saved = { readAloud: false, lastChat: null, lastSeenUpdate: 0, quietCategories: [], ...(readJson(storage, PREFERENCES_KEY) ?? {}) };
+  const saved = { readAloud: false, lastChat: null, lastSeenUpdate: 0, quietCategories: [], updateCheck: true, dismissedUpdate: "",
+    ...(readJson(storage, PREFERENCES_KEY) ?? {}) };
+  if (typeof saved.updateCheck !== "boolean") saved.updateCheck = true;
+  if (typeof saved.dismissedUpdate !== "string") saved.dismissedUpdate = "";
   if (!Array.isArray(saved.quietCategories)) saved.quietCategories = [];
   return saved;
 }

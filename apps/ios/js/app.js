@@ -8,6 +8,7 @@ import { approveElsewhereLink, readAuthoriseCode, renderApproveElsewhere, render
 import { ArtyApi, approvePage } from "./api.js";
 import { forgetEverything, forgetSettings, loadPreferences, loadSettings, savePreferences } from "./settings.js";
 import { UpdatesFeed } from "./updates.js";
+import { RELEASE_PAGE_PATH, createUpdateChecker } from "./appupdate.js";
 
 const storage = window.localStorage;
 const byId = (id) => document.getElementById(id);
@@ -15,7 +16,7 @@ const VIEWS = ["chat", "updates", "tasks", "calendar", "more"];
 const MORE_PAGES = { schedules: renderSchedules, lectures: renderLectures, memory: renderMemory, devices: renderDevices,
   computers: renderComputers };
 
-const state = { api: null, chat: null, updates: null, view: "chat" };
+const state = { api: null, chat: null, updates: null, view: "chat", appUpdate: null };
 
 function showView(name) {
   state.view = name;
@@ -37,6 +38,11 @@ function renderMore(container) {
   const page = (key, label) => h("li", {}, h("button", { type: "button", onclick: () => openMorePage(container, key, label) }, label));
   const readAloud = h("input", { type: "checkbox", checked: loadPreferences(storage).readAloud,
     onchange: () => savePreferences(storage, { readAloud: readAloud.checked }) });
+  const updateCheck = h("input", { type: "checkbox", checked: loadPreferences(storage).updateCheck,
+    onchange: () => {
+      savePreferences(storage, { updateCheck: updateCheck.checked });
+      state.appUpdate?.refresh();
+    } });
   const settings = loadSettings(storage);
   container.replaceChildren(
     sectionHead("More"),
@@ -44,6 +50,7 @@ function renderMore(container) {
       page("devices", "Approved devices"), page("computers", "Computers")),
     h("h3", { class: "kicker" }, "This iPhone"),
     h("label", { class: "toggle" }, h("span", {}, "Read Arty's replies aloud"), readAloud),
+    h("label", { class: "toggle" }, h("span", {}, "Tell me about new versions"), updateCheck),
     ...renderNotificationSwitches(storage),
     h("p", { class: "notice" }, settings?.accessId ? "Connected with the app key and the Cloudflare access token." : "Connected with the app key only (home network)."),
     twoStepButton("Forget the keys on this iPhone", "Tap again to forget them", async () => {
@@ -89,6 +96,38 @@ function closeDrawer() {
   byId("drawer").hidden = true;
 }
 
+function updateSettings() {
+  const { updateCheck, dismissedUpdate } = loadPreferences(storage);
+  return { enabled: updateCheck, dismissed: dismissedUpdate };
+}
+
+function showAppUpdate(notice) {
+  const banner = byId("update-notice");
+  if (!notice) {
+    banner.replaceChildren();
+    banner.hidden = true;
+    return;
+  }
+  const dismiss = () => {
+    savePreferences(storage, { dismissedUpdate: notice.version });
+    showAppUpdate(null);
+  };
+  banner.replaceChildren(
+    h("span", { class: "update-text" }, notice.text),
+    h("a", { class: "update-open", href: RELEASE_PAGE_PATH, target: "_blank", rel: "noopener noreferrer" }, "Download page"),
+    h("button", { type: "button", class: "update-dismiss", "aria-label": "Dismiss", onclick: dismiss }, "\u00d7"),
+  );
+  banner.hidden = false;
+}
+
+function startUpdateChecks() {
+  state.appUpdate = createUpdateChecker({
+    fetch: (...request) => window.fetch(...request), location: window.location, settings: updateSettings,
+    show: showAppUpdate, log: (line) => console.info(line),
+  });
+  state.appUpdate.start();
+}
+
 function startApp(api) {
   state.api = api;
   byId("setup").hidden = true;
@@ -114,6 +153,7 @@ function startApp(api) {
   });
   state.chat.start();
   state.updates.start();
+  startUpdateChecks();
   offerAuthorise(api);
 }
 

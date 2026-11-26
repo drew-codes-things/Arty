@@ -28,6 +28,8 @@ class QuestState {
     var setupProblem by mutableStateOf("")
     var setupBusy by mutableStateOf(false)
     var canCancelSetup by mutableStateOf(false)
+    var update by mutableStateOf<UpdateNotice?>(null)
+    var updateCheck by mutableStateOf(true)
 
     fun apply(message: ServerMessage) {
         when (message) {

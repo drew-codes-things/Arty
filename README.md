@@ -77,16 +77,16 @@ together: [how to link them](docs/arty-cli-and-starfire.md).
 
 ## Download
 
-Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.6.1**
-([release notes](docs/release-notes-2026-11-21-1.6.1.md)):
+Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.7.0**
+([release notes](docs/release-notes-2026-11-26-1.7.0.md)):
 
 | Download | What it is |
 |---|---|
-| `Arty-1.6.1-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.6.1.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.6.1.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
-| `Arty-Browser-Extension-1.7.zip` | [Arty for your browser](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
-| `Arty-Browser-Extension-1.7.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
+| `Arty-1.7.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.7.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.7.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-Browser-Extension-1.8.zip` | [Arty for your browser](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
+| `Arty-Browser-Extension-1.8.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
 
 > **On Linux, Arty Desktop works properly on Debian 13 with KDE Plasma. On Windows it targets Windows 10 and 11, and the installer is not code-signed, so SmartScreen asks you to confirm.**
 

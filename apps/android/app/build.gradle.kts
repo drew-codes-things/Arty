@@ -22,8 +22,8 @@ android {
         applicationId = "app.arty"
         minSdk = 28
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.6.1"
+        versionCode = 15
+        versionName = "1.7.0"
     }
 
     // personal: the owner's own build, with the brain's address and keys built in (keep that APK private).
@@ -106,4 +106,5 @@ dependencies {
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("androidx.fragment:fragment:1.8.5")
     testImplementation(kotlin("test"))
+    testImplementation("org.json:json:20240303")
 }

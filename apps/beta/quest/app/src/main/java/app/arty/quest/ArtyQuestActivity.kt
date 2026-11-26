@@ -40,6 +40,7 @@ class ArtyQuestActivity : AppSystemActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         listener = ArtyListener.get(applicationContext)
+        listener.updates.start()
         PANEL_SPOTS.forEach { spot ->
             Entity.createPanelEntity(
                 spot.id,
@@ -98,7 +99,10 @@ class ArtyQuestActivity : AppSystemActivity() {
     private fun PanelContent(id: Int) {
         val state = listener.state
         when (id) {
-            R.id.orb_panel -> OrbPanel(state, listener::changeWake, listener::saveSetup, listener::saveSetupWithCode, listener::openSetup, listener::closeSetup)
+            R.id.orb_panel -> OrbPanel(
+                state, listener::changeWake, listener::saveSetup, listener::saveSetupWithCode, listener::openSetup, listener::closeSetup,
+                UpdateActions(listener.updates::openReleasePage, listener.updates::dismiss, listener.updates::setEnabled, listener.updates.canCheck),
+            )
             R.id.servers_panel -> ServersPanel(state)
             R.id.today_panel -> TodayPanel(state)
         }

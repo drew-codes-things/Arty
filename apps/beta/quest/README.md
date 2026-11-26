@@ -106,6 +106,10 @@ The Quest needs Developer Mode on and a USB-C data cable; accept "Allow USB debu
 On Debian 13 nothing else needs installing: systemd's `70-uaccess` rule already gives the logged-in user access to
 adb devices. The app is in the library under "Unknown sources".
 
+## New Versions
+
+The personal build reads the list of builds at `/download/manifest.json` on the Arty site it was built for (`arty.baseUrl` in `~/.arty-android.properties`) shortly after it starts and then once a day. When a newer version is out, the orb panel says so with buttons to open the download page or dismiss the notice until the next version. Turn it off with **Tell me about new versions** on the orb panel. The shareable build has no site to ask, so it does not check.
+
 ## Tests
 
 `./gradlew testPersonalDebugUnitTest testShareableDebugUnitTest` covers the socket messages both ways, the action
