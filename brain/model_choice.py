@@ -5,6 +5,7 @@ import urllib.error
 
 import coding
 import connections
+import engine_guard
 import models
 
 from api_support import ApiError
@@ -20,8 +21,9 @@ def reload_main_model(config: dict):
     def load():
         models.make_room(config["model"], models.vram_budget(config))
         try:
-            connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=models.for_runner(config, {"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}),
-                      timeout=300)
+            with engine_guard.housekeeping():
+                connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=models.for_runner(config, {"model": config["model"], "keep_alive": config.get("keep_alive", "10m")}),
+                          timeout=300)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             log.warning("could not bring %s back after another model ran: %s", config["model"], error)
     thread = threading.Thread(target=load, daemon=True)
@@ -223,8 +225,9 @@ def warm_picture_model(config: dict):
     def load():
         models.make_room(looker, models.vram_budget(config))
         try:
-            connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=models.for_runner(config, {"model": looker, "keep_alive": OTHER_MODEL_KEEP_ALIVE}),
-                                  timeout=300)
+            with engine_guard.housekeeping():
+                connections.http_json(f"{ARTY_ENGINE_URL}/api/generate", body=models.for_runner(config, {"model": looker, "keep_alive": OTHER_MODEL_KEEP_ALIVE}),
+                                      timeout=300)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             log.warning("could not load %s ahead of a picture question: %s", looker, error)
         main_model_return.schedule(config)

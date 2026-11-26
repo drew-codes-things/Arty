@@ -4,7 +4,7 @@ import logging
 import re
 import time
 import urllib.error
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import app_actions
 import browser_apps
@@ -12,6 +12,7 @@ import code_check
 import code_sandbox
 import coding
 import connections
+import content_rules
 import docs_reading
 import example_checks
 import fresh_answer
@@ -46,9 +47,9 @@ from steering import (DESKTOP_RUN_TOOLS, LOOKUP_TEMPERATURE, RUN_TOOLS, WRITE_ON
     NOTHING_TO_SIGN_IN, question_for_user, RUN_COMMAND_TOOLS, DESKTOP_RUN_COMMAND_TOOLS, RUN_THE_CODE_NOTE, DONT_RUN_NOTE,
     asks_to_install, WRITE_ONLY_UNCHECKED_NOTE, DONT_RUN_UNCHECKED_NOTE, SEARCH_RESULTS_NOTE, NOTHING_DONE_NOTE,
     PRETEND_TOOLS_NOTE, HALF_WRITTEN_CALL_NOTE, EMPTY_REPLY_NOTE, COURSEWORK_NOTE, UNASKED_PRIVACY_NOTE,
-    HARMFUL_REWRITE_NOTE, STUDY_TOOLS)
+    HARMFUL_REWRITE_NOTE, STUDY_TOOLS, REMOTE_COMPUTER_NOTE)
 from connections import TOOL_RESULT_CHARS
-from prompting import system_prompt, with_persona_left_out, with_tool_guide, current_context
+from prompting import system_prompt, with_memories_left_out, with_persona_left_out, with_tool_guide, current_context
 from native_calls import run_native_safely
 from honesty import client_tool_runs, did_not_work, tool_results, acted_for_sure
 
@@ -407,6 +408,7 @@ class AgentTurn:
     private_set_up: str = ""
     approval_key: str | None = None
     withheld: frozenset = frozenset()
+    approvals: bool = True
 
     @property
     def is_chat(self) -> bool:
@@ -428,6 +430,7 @@ class AgentTurn:
 
 BACKGROUND_TOOL_ROUNDS = 30
 OUT_OF_TIME_ANSWER = "I ran out of time on this one. Ask me again, perhaps a shorter way."
+TOO_MANY_STEPS_ANSWER = "I stopped after too many tool steps. Tell me how you'd like me to continue."
 ROOM_UNSEEN_LINK = ("Not read: in the room you never open web pages, whoever names them. Answer from your search "
                     "results, or without them.")
 
@@ -449,7 +452,18 @@ def run_agent(config, state, run: AgentRun = AgentRun()):
         raise TurnEnded(f"the turn was ended by {error!r}") from error
 
 
+ROOM_REFUSES_MODEL = "this model is never used in the room"
+ROOM_REFUSAL_STATUS = 503
+
+
+def refuse_an_unrestricted_room_turn(config: dict, run: AgentRun) -> None:
+    if run.room and content_rules.is_unrestricted(config, config["model"]):
+        log.warning("a room turn was routed to %s, which has no safety rules; refused", config["model"])
+        raise ApiError(ROOM_REFUSAL_STATUS, ROOM_REFUSES_MODEL)
+
+
 def run_rounds(config, state, run: AgentRun) -> dict:
+    refuse_an_unrestricted_room_turn(config, run)
     turn = start_turn(config, state, run)
     for round_number in range(turn.max_rounds):
         if is_cancelled(run.task):
@@ -460,7 +474,7 @@ def run_rounds(config, state, run: AgentRun) -> dict:
         if outcome is not None:
             return without_private_text(turn, outcome)
     turn.keep_groups()
-    return turn.outcome("done", answer="I stopped after too many tool steps. Tell me how you'd like me to continue.")
+    return turn.outcome("done", answer=TOO_MANY_STEPS_ANSWER)
 
 
 def has_run_out_of_time(run: AgentRun) -> bool:
@@ -545,8 +559,22 @@ def with_held_arguments_left_out(call: dict) -> dict:
     return {**call, "function": {**(call.get("function") or {}), "arguments": dict(HELD_ARGUMENTS)}}
 
 
+def for_the_model(config: dict, run: AgentRun) -> AgentRun:
+    return replace(run, client_tools=content_rules.client_tools_for_model(config["model"], run.client_tools))
+
+
+def own_instructions(config: dict, run: AgentRun, toolless: bool) -> str:
+    if run_has_a_private_set_up(run):
+        return system_prompt(config, run.client_system, run.background, toolless)
+    if content_rules.is_remote(config["model"]):
+        return content_rules.client_system_with_rules(config, run.client_system)
+    return run.client_system
+
+
 def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     connections.hub.refresh()
+    asked_for_client_tools = bool(run.client_tools)
+    run = for_the_model(config, run)
     config = {**config, "tool_budget": models.budget_for(config, config["model"])}
     messages = state["messages"]
     approval_key = policy.approval_key(messages, message_text) if run.chat_approved else None
@@ -556,14 +584,15 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
     toolless = bool(model_info) and not model_info["tools"]
     user_texts = [without_app_notes(message_text(m)) for m in messages if m.get("role") == "user"]
     asked_about_set_up = private_check.asks_about_the_set_up(user_texts)
-    instructions = system_prompt(config, run.client_system, run.background, toolless) \
-        if run_has_a_private_set_up(run) else run.client_system
+    instructions = own_instructions(config, run, toolless)
+    private_turn = asked_about_set_up and run_has_a_private_set_up(run)
     seen = system_prompt(with_persona_left_out(config), run.client_system, run.background, toolless) \
-        if asked_about_set_up and run_has_a_private_set_up(run) else instructions
+        if private_turn else instructions
+    asked_for_set_up_itself = private_turn and private_check.asks_for_the_set_up_itself(user_texts)
     history = [{"role": "system", "content": seen}] + messages
     looked_up = run.looked_up or ([], "", None)
-    add_turn_notes(config, run, history, messages, looked_up)
-    all_tools = tools_for_turn(config, run, toolless, looked_up)
+    add_turn_notes(with_memories_left_out(config) if asked_for_set_up_itself else config, run, history, messages, looked_up)
+    all_tools = content_rules.tools_for_model(config, config["model"], tools_for_turn(config, run, toolless, looked_up))
     request_text = " ".join(message_text(m) for m in messages if m.get("role") == "user")[-2000:]
     rules = config.get("approval", {})
     steps_this_turn = client_tool_runs(messages)[0]
@@ -584,8 +613,10 @@ def start_turn(config: dict, state: dict, run: AgentRun) -> AgentTurn:
         shown_thinking=private_text.GuardedStream(run.on_thinking, private) if shows_thinking else None,
         chat_approved=run.chat_approved, private=private,
         asked_about_set_up=asked_about_set_up, user_requests="\n\n".join(user_texts), private_set_up=instructions,
-        approval_key=approval_key)
+        approval_key=approval_key, approvals=content_rules.approvals_apply(config, config["model"]))
     steer_the_request(turn)
+    if asked_for_client_tools and not run.client_tools:
+        steer_last_request(turn.history, REMOTE_COMPUTER_NOTE)
     # A plain question whose answer was looked up first: the model answers from that, with no tools to
     # wander off with (small models otherwise pick unrelated ones). Asked to do something, it keeps them.
     turn.answer_from_lookups = bool(looked_up[0]) and not run.background and not ACTION_REQUEST.search(last_request) \
@@ -622,7 +653,8 @@ def tools_for_turn(config: dict, run: AgentRun, toolless: bool, looked_up: tuple
     native = [models.handoff_tool(config, definition) if name == "ask_other_model" else definition
               for name, definition in NATIVE_TOOLS.items()
               if not (run.background and name in BACKGROUND_ONLY_EXCLUDED) and app_actions.is_offered(name, connected)]
-    all_tools = [] if toolless or run.agent else connections.hub.tools + native
+    leaves_tools_to_the_app = run.agent and not content_rules.is_remote(config["model"])
+    all_tools = [] if toolless or leaves_tools_to_the_app else connections.hub.tools + native
     hidden = hidden_tools(config)
     all_tools = [t for t in all_tools if not policy.matches(t["function"]["name"], hidden)]
     if run.allowed_tools is not None:
@@ -640,7 +672,7 @@ def tools_for_turn(config: dict, run: AgentRun, toolless: bool, looked_up: tuple
 
 def steer_the_request(turn: AgentTurn):
     last_request = turn.last_request
-    if turn.is_chat and asks_to_disguise_harm(last_request):
+    if turn.is_chat and content_rules.keeps_safety_rules(turn.config, turn.config["model"]) and asks_to_disguise_harm(last_request):
         steer_last_request(turn.history, HARMFUL_REWRITE_NOTE)
     if turn.is_chat and is_coursework_request(last_request) and not asks_for_revision(last_request):
         turn.withheld = turn.withheld | STUDY_TOOLS
@@ -657,6 +689,8 @@ def steer_the_request(turn: AgentTurn):
 
 
 def judged_run_request(turn: AgentTurn, request: str, after_code: bool) -> bool | None:
+    if turn.run.room:
+        return False
     return run_requests.judge_says_run(request, after_code=after_code, model=turn.config["model"],
                                        keep_alive=turn.config.get("keep_alive"))
 
@@ -775,8 +809,8 @@ def start_draft_round(turn: AgentTurn, tools: list):
     may_nudge = not agent and not turn.nudged and bool(tools) and turn.used_no_tools()
     may_search = not agent and turn.nudged and turn.used_no_tools() and not turn.searched_for_it \
         and "research__web_search" in connections.hub.routes
-    draft.start_round(allowed=not turn.asked_about_set_up and not (may_nudge and ACTION_REQUEST.search(turn.last_request))
-                      and not (may_search and SEARCH_REQUEST.search(turn.last_request))
+    draft.start_round(allowed=not turn.asked_about_set_up and not (may_nudge and asks_for_action(turn))
+                      and not (may_search and asks_for_a_search(turn))
                       and not page_to_check_code_against(turn) and not sandbox_may_check(turn),
                       holds_line=code_sandbox.may_become_a_summary_line)
     watch, talk = private_text.Watch(turn.private), private_check.TalkWatch()
@@ -840,7 +874,7 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
     if claims_without_tools(turn, tools, answer):
         nudge_to_use_tools(turn, tools, answer)
         return None
-    if turn.is_chat and not turn.nudged and PRETEND_TOOLS.search(answer):
+    if plays_at_tools(turn, tools, answer):
         nudge_away_from_pretend_tools(turn, answer)
         return None
     if not turn.nudged and tools and answer.count("```") % 2 == 1 and FUMBLED_CALL.search(answer):
@@ -859,7 +893,7 @@ def answer_without_calls(turn: AgentTurn, tools: list, message: dict) -> dict | 
         return None
     if rewrite_failing_examples(turn, answer):
         return None
-    if turn.raw.get("done_reason") == "length":
+    if turn.raw.get("done_reason") == "length" and not turn.run.room:
         answer += cut_short_note(turn.config, turn.raw, turn.run.agent)
     turn.keep_groups()
     answer = reads_fresh(turn, code_sandbox.without_lookalike_summaries(with_real_output(turn, answer)))
@@ -892,7 +926,8 @@ def rewrite_unconfirmed_code(turn: AgentTurn, answer: str) -> bool:
 
 
 def sandbox_may_check(turn: AgentTurn) -> bool:
-    return turn.is_chat and not turn.run.room and code_sandbox.is_on() and coding.is_request(turn.last_request)
+    return turn.is_chat and not turn.run.room and not content_rules.is_remote(turn.config["model"]) and code_sandbox.is_on() \
+        and coding.is_request(turn.last_request)
 
 
 def rewrite_failing_code(turn: AgentTurn, answer: str) -> bool:
@@ -996,10 +1031,22 @@ def wait_for_sign_in(turn: AgentTurn) -> dict:
                                             "call": {"name": "ask_user", "arguments": {}}})
 
 
+def room_may_search(turn: AgentTurn) -> bool:
+    return not turn.run.room or "research__web_search" in (turn.run.allowed_tools or ())
+
+
+def asks_for_action(turn: AgentTurn) -> bool:
+    return room_may_search(turn) and bool(ACTION_REQUEST.search(turn.last_request))
+
+
+def asks_for_a_search(turn: AgentTurn) -> bool:
+    return room_may_search(turn) and bool(SEARCH_REQUEST.search(turn.last_request))
+
+
 def should_search_for_the_model(turn: AgentTurn, answer: str) -> bool:
     return bool(turn.is_chat and turn.nudged and turn.used_no_tools() and not turn.searched_for_it
-                and "research__web_search" in connections.hub.routes
-                and (CLARIFYING.search(answer) or "web_search" in answer or SEARCH_REQUEST.search(turn.last_request)))
+                and room_may_search(turn) and "research__web_search" in connections.hub.routes
+                and (CLARIFYING.search(answer) or "web_search" in answer or asks_for_a_search(turn)))
 
 
 def search_for_the_model(turn: AgentTurn, answer: str):
@@ -1014,7 +1061,7 @@ def search_for_the_model(turn: AgentTurn, answer: str):
 def claims_without_tools(turn: AgentTurn, tools: list, answer: str) -> bool:
     return bool(turn.is_chat and not turn.nudged and tools and turn.used_no_tools()
                 and (PROMISE.search(answer) or CLAIMED.search(answer) or CLARIFYING.search(answer)
-                     or ACTION_REQUEST.search(turn.last_request)))
+                     or asks_for_action(turn)))
 
 
 def nudge_to_use_tools(turn: AgentTurn, tools: list, answer: str):
@@ -1022,6 +1069,11 @@ def nudge_to_use_tools(turn: AgentTurn, tools: list, answer: str):
     # calling a tool; send them back once to actually do it.
     turn.nudged = True
     send_back(turn, answer, NOTHING_DONE_NOTE.format(nudge=tool_guide.nudge_tools(tool_guide.offered_names(tools))))
+
+
+def plays_at_tools(turn: AgentTurn, tools: list, answer: str) -> bool:
+    room_turn_without_tools = turn.run.room and not tools
+    return turn.is_chat and not turn.nudged and not room_turn_without_tools and bool(PRETEND_TOOLS.search(answer))
 
 
 def nudge_away_from_pretend_tools(turn: AgentTurn, answer: str):
@@ -1083,6 +1135,10 @@ def nudge_after_an_empty_reply(turn: AgentTurn):
     turn.history.append({"role": "user", "content": EMPTY_REPLY_NOTE})
 
 
+def runs_every_call_in_the_app(turn: AgentTurn) -> bool:
+    return turn.run.agent and not content_rules.is_remote(turn.config["model"])
+
+
 def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
     held = [call_gives_away_the_set_up(turn, call) for call in calls]
     if any(held):
@@ -1095,7 +1151,8 @@ def act_on_calls(turn: AgentTurn, message: dict, calls: list) -> dict | None:
         return turn.outcome("done", answer=code_sandbox.without_lookalike_summaries(written))
     if turn.run.draft:
         turn.run.draft.before_tools()
-    client_calls = calls if turn.run.agent else [call for call in calls if call.get("function", {}).get("name") in turn.client_names]
+    client_calls = calls if runs_every_call_in_the_app(turn) else \
+        [call for call in calls if call.get("function", {}).get("name") in turn.client_names]
     if client_calls:
         turn.keep_groups()
         return {"status": "client_tools", "calls": client_calls,
@@ -1188,12 +1245,12 @@ def run_tool_call(turn: AgentTurn, call: dict, calls: list) -> dict | None:
     elif turn.run.room and name in policy.WEB_READS:
         result = ROOM_UNSEEN_LINK
     elif (held := policy.web_read_reason(name, arguments, turn.context, own_request(turn))) \
-            and (turn.run.background or not policy.covers(turn.chat_approved, held)):
+            and holds_for_approval(turn, held):
         return wait_for_approval(turn, held, call, calls)
     elif name in NATIVE_TOOLS and (held := policy.native_reason(name, arguments, turn.context, turn.rules)) \
-            and not policy.covers(turn.chat_approved, held):
+            and holds_for_approval(turn, held, background_holds=False):
         return wait_for_approval(turn, held, call, calls)
-    elif name in NATIVE_TOOLS and held and (done_before := spent_already(turn, held)):
+    elif name in NATIVE_TOOLS and held and turn.approvals and (done_before := spent_already(turn, held)):
         return done_before
     elif name in NATIVE_TOOLS:
         result, outcome = run_native_call(turn, name, arguments)
@@ -1241,6 +1298,12 @@ def unlock_groups(turn: AgentTurn, arguments: dict) -> str:
     return f"Unlocked: {', '.join(wanted) or 'nothing (unknown group)'}. Those tools are available from your next step."
 
 
+def holds_for_approval(turn: AgentTurn, reason: str, background_holds: bool = True) -> bool:
+    if not turn.approvals:
+        return False
+    return (background_holds and turn.run.background) or not policy.covers(turn.chat_approved, reason)
+
+
 def wait_for_approval(turn: AgentTurn, reason: str, call: dict, calls: list) -> dict:
     return hold_for_approval(reason, call, calls, turn.run.background, turn.state, turn.requested, turn.add, turn.tool_log,
                              turn.raw)
@@ -1282,10 +1345,10 @@ def run_app_action(turn: AgentTurn, call: dict, calls: list, name: str, argument
     prepared = app_actions.prepare(name, arguments, typed_by_user(turn), turn.config)
     if isinstance(prepared, str):
         return prepared, None
-    if not policy.covers(turn.chat_approved, prepared.card):
+    if holds_for_approval(turn, prepared.card, background_holds=False):
         return None, wait_for_approval(turn, prepared.card, call, calls)
     turn.chat_approved = None
-    if done_before := spent_already(turn, prepared.card):
+    if turn.approvals and (done_before := spent_already(turn, prepared.card)):
         return None, done_before
     return app_actions.carry_out(name, prepared), None
 
@@ -1305,10 +1368,10 @@ def spent_already(turn: AgentTurn, card: str) -> dict | None:
 def run_hub_call(turn: AgentTurn, call: dict, calls: list, name: str, arguments: dict) -> tuple[str | None, dict | None]:
     know_the_page(name, turn.context)
     reason = policy.approval_reason(name, arguments, turn.context, turn.rules)
-    if reason and (turn.run.background or not policy.covers(turn.chat_approved, reason)):
+    if reason and holds_for_approval(turn, reason):
         # Ask in Arty's own words rather than handing the model an instruction it might echo.
         return None, wait_for_approval(turn, reason, call, calls)
-    if reason and (done_before := spent_already(turn, reason)):
+    if reason and turn.approvals and (done_before := spent_already(turn, reason)):
         return None, done_before
     snapshot_before_desktop_work(turn, name)
     result = shopping.fetch_tool_text(arguments) if name == docs_reading.FETCH_TOOL else connections.hub.call(name, arguments)

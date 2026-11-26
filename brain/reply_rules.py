@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 
 import safety
 
@@ -43,17 +44,60 @@ def without_trailing_offers(paragraph: str) -> str:
 
 
 URL_TAGS = re.compile(r"</?url>", re.IGNORECASE)
-TOOLS_NOTE_ECHO = re.compile(r"[ \t]*(?:\[\s*|<context>\s*)?(?:Tools you used or tried on their computer|"
+TOOLS_NOTE_ECHO = re.compile(r"(?:(?<![ \t])[ \t]+)?(?:\[\s*|<context>\s*)?(?:Tools you used or tried on their computer|"
                              r"For your reply above, you used or tried these tools on their computer)[^\]\n<]*(?:\]|</context>)?",
                              re.IGNORECASE)
+TIME_LINE_LEAK = r"(?:^|\n)\s*It is now \w+day \d+ \w+ \d{4}, \d\d:\d\d \([^()\n]*, UTC[+-]\d\d:\d\d\)"
+TOOLS_HEADING_LEAK = r"\n\s*# Tools\b"
+GENERIC_TOOL_LEAKS = r"<tools>|You may call one or more functions"
+ARTY_NOTE_LEAKS = (r"\n\s*FACTS YOU ALREADY KNOW|\n\s*BACKGROUND ONLY, do not continue|</?notes>|"
+                   r"\[\d{4}-\d\d-\d\d \d\d:\d\d\] User:|\n\s*Arty \(you\):")
 # Small models sometimes run on past their answer into their own instructions (the time line, the tool list).
-PROMPT_LEAK = re.compile(r"((?:^|\n)\s*It is now \w+day \d+ \w+ \d{4}, \d\d:\d\d \([^()\n]*, UTC[+-]\d\d:\d\d\)|\n\s*# Tools\b|<tools>|"
-                         r"You may call one or more functions|\n\s*FACTS YOU ALREADY KNOW|\n\s*BACKGROUND ONLY, do not continue|</?notes>|"
-                         r"\[\d{4}-\d\d-\d\d \d\d:\d\d\] User:|\n\s*Arty \(you\):)")
+PROMPT_LEAK_AS_ONE_PATTERN = f"({TIME_LINE_LEAK}|{TOOLS_HEADING_LEAK}|{GENERIC_TOOL_LEAKS}|{ARTY_NOTE_LEAKS})"
+LEAK_AFTER_A_LINE_BREAK = re.compile(
+    r"It is now \w+day \d+ \w+ \d{4}, \d\d:\d\d \([^()\n]*, UTC[+-]\d\d:\d\d\)|# Tools\b|FACTS YOU ALREADY KNOW|"
+    r"BACKGROUND ONLY, do not continue|Arty \(you\):")
+LEAK_ANYWHERE = re.compile(f"{GENERIC_TOOL_LEAKS}|</?notes>|\\[\\d{{4}}-\\d\\d-\\d\\d \\d\\d:\\d\\d\\] User:")
+TIME_LINE_PREFIX = "It is now "
+
+
+@dataclass(frozen=True)
+class LeakStart:
+    position: int
+
+    def start(self) -> int:
+        return self.position
+
+
+def leak_start_before(text: str, literal_start: int, may_start_the_text: bool) -> int | None:
+    position, first_break = literal_start, None
+    while position > 0 and text[position - 1].isspace():
+        position -= 1
+        if text[position] == "\n":
+            first_break = position
+    if may_start_the_text and position == 0:
+        return 0
+    return first_break
+
+
+class PromptLeakFinder:
+    def search(self, text: str) -> LeakStart | None:
+        starts = [found.start() for found in LEAK_ANYWHERE.finditer(text)][:1]
+        for found in LEAK_AFTER_A_LINE_BREAK.finditer(text):
+            start = leak_start_before(text, found.start(), found.group().startswith(TIME_LINE_PREFIX))
+            if start is not None:
+                starts.append(start)
+        return LeakStart(min(starts)) if starts else None
+
+
+PROMPT_LEAK = PromptLeakFinder()
+NOTES_HEADER = "Your notes for this message (not written by the user):"
+STRONG_LEAK = re.compile(f"({TIME_LINE_LEAK}|(?:<notes>\\s*)?{re.escape(NOTES_HEADER)})")
+OUTSIDE_BLOCK_LEAK = re.compile(f"({GENERIC_TOOL_LEAKS}|{ARTY_NOTE_LEAKS})")
 
 
 # A reply ending by opening a code block with nothing in it: the model began a tool call as text.
-FUMBLED_CALL = re.compile(r"\s*```[a-z]*\s*$")
+FUMBLED_CALL = re.compile(r"(?<!\s)\s*```[a-z]*\s*$")
 
 
 # The user asked for something done, or the reply claims something was done or found: with no tool
@@ -405,7 +449,7 @@ def is_only_a_quiz_question(reply: str) -> bool:
 # A reply that plays at using tools (made-up JSON results, "using the `homelab__x` function") instead of answering.
 PRETEND_TOOLS = re.compile(r"```json|\b[a-z]+__[a-z_]+\b|<tool_call>", re.I)
 # Sentences that only talk about Arty's own machinery.
-TOOL_META_SENTENCE = re.compile(r"[^.!?\n]*(\b(none of the|the provided|the available|my available)\s+(functions|tools)\b|"
+TOOL_META_SENTENCE = re.compile(r"(?<![^.!?\n])[^.!?\n]*(\b(none of the|the provided|the available|my available)\s+(functions|tools)\b|"
                                 r"\b[a-z]+__[a-z_]+\b|answer (your question )?directly instead|(with|using) the (tool|function)\b)"
                                 r"[^.!?\n]*[.!?:]?", re.I)
 # A tool result that says it didn't work: the start of hub.call's errors, MCP errors and native refusals.

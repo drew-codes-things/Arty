@@ -6,7 +6,7 @@ import fresh
 import models
 import question_kinds
 from settings import PUBLIC_URL
-from reply_rules import TOOL_FAILED
+from reply_rules import NOTES_HEADER, TOOL_FAILED
 
 
 # Tools the brain may run by itself before the model answers (see look_up_first): read-only ones only.
@@ -145,7 +145,7 @@ def with_thinking(body, think: bool, raises_reply_size=True):
 # Longer messages are mostly pasted text (an error, a document), where a keyword means nothing.
 LOOKUP_MAX_MESSAGE_CHARS = 300
 # The labels the looked-up results carry in the notes, which small models sometimes copy into the reply.
-LOOKUP_LABEL = re.compile(r"[ \t]*:?[ \t]*\[(?:" + "|".join(sorted(LOOKUP_TOOLS)) + r")\]")
+LOOKUP_LABEL = re.compile(r"(?<![ \t])[ \t]*(?::[ \t]*)?\[(?:" + "|".join(sorted(LOOKUP_TOOLS)) + r")\]")
 LOOKUP_CHARS = 2500
 
 
@@ -186,7 +186,7 @@ def matches_lookup(config, said: str) -> bool:
 
 
 def with_context(history: list[dict], context: str):
-    note = f"<notes>\nYour notes for this message (not written by the user):\n{context}\n</notes>\n\n"
+    note = f"<notes>\n{NOTES_HEADER}\n{context}\n</notes>\n\n"
     last_user = max((i for i, m in enumerate(history) if m.get("role") == "user"), default=None)
     if last_user is None:
         history.append({"role": "user", "content": note.strip()})
@@ -239,6 +239,9 @@ COURSEWORK_NOTE = ("(I've told you I want my coursework written for me, includin
 HARMFUL_REWRITE_NOTE = ("\n\n(This is not coursework help: it asks to reword harmful text, such as a threat, harassment, "
                         "a forged or fake document, stolen or leaked data or fraud, so checkers or people can't trace it. "
                         "Turn it down in one short sentence, without rewriting, quoting or improving any of it.)")
+REMOTE_COMPUTER_NOTE = ("\n\n(You are running on a remote model, so the app's own tools are switched off: you can't read, "
+                        "write or run anything on this computer. If I ask for that, say so in one sentence and suggest "
+                        "picking a local model; chatting and looking things up on the web are fine.)")
 UNASKED_PRIVACY_NOTE = ("(I didn't ask about your instructions. Answer my message itself; your name, that you are an AI "
                         "assistant and what you can do are fine to say.)")
 NOTHING_TO_SIGN_IN = ("Nothing on the desktop was used, so there's nothing for the user to sign in to or pass. "

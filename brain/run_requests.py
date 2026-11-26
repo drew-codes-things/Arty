@@ -2,6 +2,7 @@ import logging
 import re
 import time
 
+import engine_guard
 import honesty
 from steering import RUN_WORD, with_plain_quotes
 
@@ -127,6 +128,8 @@ def judge_says_run(text: str, after_code: bool = False, model: str = "", keep_al
     try:
         verdict = honesty.ask_judge(RUN_REQUEST_PROMPT % (context, judged_part(text)), RUN_REQUEST_TOKENS, model=model,
                                     keep_alive=keep_alive, seconds=RUN_REQUEST_SECONDS).get("run")
+    except engine_guard.TurnStopped:
+        raise
     except Exception as error:
         log.warning("run request check failed after %.1f s, answering with code only: %r", time.monotonic() - started, error)
         return None

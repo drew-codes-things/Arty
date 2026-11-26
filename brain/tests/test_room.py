@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -16,6 +17,7 @@ import brain  # noqa: E402
 import connections  # noqa: E402
 import prompting  # noqa: E402
 import room  # noqa: E402
+import safety  # noqa: E402
 import style  # noqa: E402
 import owner  # noqa: E402
 import replies  # noqa: E402
@@ -96,20 +98,65 @@ class RoomGate(unittest.TestCase):
         self.clock.now += room.OWNER_QUIET_SECONDS + 1
         self.take_turn()
 
-    def test_room_time_is_limited_per_hour(self):
-        with self.gate.turn():
-            self.clock.now += room.ROOM_SECONDS_PER_HOUR
+    def spend(self, seconds):
+        with self.gate.turn(seconds) as turn_time:
+            self.clock.now += seconds
         self.clock.now += 61
+        return turn_time
+
+    def test_room_time_is_limited_per_hour(self):
+        for _ in range(room.ROOM_SECONDS_PER_HOUR // room.ROOM_TURN_SECONDS):
+            self.spend(room.ROOM_TURN_SECONDS)
         self.assertEqual(self.refused_status(self.take_turn), 429)
         self.clock.now += 3600
         self.take_turn()
 
+    def test_the_hourly_allowance_is_thirty_minutes_unless_the_config_says_otherwise(self):
+        self.assertEqual(room.ROOM_SECONDS_PER_HOUR, 1800)
+        self.assertEqual(room.seconds_per_hour({}), 1800)
+        self.assertEqual(room.seconds_per_hour({"room": {"seconds_per_hour": 900}}), 900)
+        for wrong in ("lots", -5, 0, True, 7200, [1]):
+            with self.subTest(wrong=wrong):
+                self.assertEqual(room.seconds_per_hour({"room": {"seconds_per_hour": wrong}}), 1800)
+        self.assertEqual(room.seconds_per_hour({"room": "everything"}), 1800)
+
+    def test_the_hourly_allowance_from_the_config_is_used(self):
+        with self.gate.turn(room.ROOM_TURN_SECONDS, 100) as turn_time:
+            self.assertEqual(turn_time.seconds, 100)
+            self.clock.now += 100
+        self.clock.now += 61
+        with self.assertRaises(room.ApiError), self.gate.turn(room.ROOM_TURN_SECONDS, 100):
+            pass
+
     def test_a_turn_gets_no_more_time_than_the_hour_has_left(self):
-        with self.gate.turn() as seconds:
-            self.assertEqual(seconds, room.ROOM_TURN_SECONDS)
-            self.clock.now += room.ROOM_SECONDS_PER_HOUR - 50
-        with self.gate.turn() as seconds:
-            self.assertEqual(seconds, 50)
+        with self.gate.turn() as turn_time:
+            self.assertEqual(turn_time.seconds, room.ROOM_TURN_SECONDS)
+        for _ in range(room.ROOM_SECONDS_PER_HOUR // room.ROOM_TURN_SECONDS - 1):
+            self.spend(room.ROOM_TURN_SECONDS)
+        self.clock.now -= 61
+        with self.gate.turn() as turn_time:
+            self.assertEqual(turn_time.seconds, room.ROOM_TURN_SECONDS)
+            self.clock.now += room.ROOM_TURN_SECONDS - 50
+        with self.gate.turn() as turn_time:
+            self.assertEqual(turn_time.seconds, 50)
+
+    def test_one_turn_is_charged_at_most_its_own_time(self):
+        with self.gate.turn() as turn_time:
+            self.clock.now += room.ROOM_TURN_SECONDS * 5
+        self.assertEqual(turn_time.charge(), room.ROOM_TURN_SECONDS)
+
+    def test_time_waiting_for_outside_work_is_not_charged(self):
+        with self.gate.turn() as turn_time:
+            with turn_time.pause():
+                self.clock.now += 150
+            self.clock.now += 20
+        self.assertEqual(turn_time.charge(), 20)
+        self.assertEqual(self.gate.spent.seconds_left(), room.ROOM_SECONDS_PER_HOUR - 20)
+
+    def test_work_turns_get_more_time_than_chat_turns(self):
+        self.assertGreater(room.ROOM_TURN_SECONDS_BY_KIND["work"], room.ROOM_TURN_SECONDS_BY_KIND["chat"])
+        with self.gate.turn(room.ROOM_TURN_SECONDS_BY_KIND["work"]) as turn_time:
+            self.assertEqual(turn_time.seconds, room.ROOM_TURN_SECONDS_BY_KIND["work"])
 
     def test_requests_are_limited_per_minute(self):
         for _ in range(room.REQUESTS_PER_MINUTE):
@@ -301,20 +348,49 @@ class NoRecentChats(unittest.TestCase):
         self.assertNotIn("tea", context)
 
 
+def app_said(room_text, topic="Building a town"):
+    return (f"{room_text}\n\n(room) Be brief and kind.\n\nRoom topic: {topic}\nOther AIs here: Bob.\n"
+            "Messages from people (not AIs) are marked [person].\n\n(It's your turn, arty. Write your next message only, or PASS.)")
+
+
+def turned(*args, **named):
+    reply = room.room_turn(*args, **named)
+    return reply.answer, reply.tools_used
+
+
 class RoomTurn(unittest.TestCase):
     def setUp(self):
         self.runs = []
+        self.waits = []
         patches = [
+            unittest.mock.patch.object(room, "RESUME_QUIET_SECONDS", 0),
+            unittest.mock.patch.object(room, "wait_a_moment", side_effect=self.wait_a_moment),
+            unittest.mock.patch.object(room.model_choice.main_model_return, "holds_a_session", return_value=False),
             unittest.mock.patch.object(connections, "load_config", return_value=dict(MAIN_CONFIG)),
             unittest.mock.patch.object(room.native_calls, "look_up_first", return_value=([], "", None)),
             unittest.mock.patch.object(room.honesty, "be_honest", side_effect=lambda answer, *rest, **named: answer),
             unittest.mock.patch.object(room, "archive_turn", create=True),
             unittest.mock.patch.object(brain, "archive_turn"),
             unittest.mock.patch.object(brain, "extract_memories"),
+            unittest.mock.patch.object(room.room_notes, "STATE_FILE", Path(self.notes_folder()) / "room-notes.json"),
         ]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
+
+    def wait_a_moment(self):
+        self.waits.append(time.monotonic())
+        if len(self.waits) > 50:
+            raise AssertionError("the room turn waited too long for outside work to finish")
+        if self.on_wait:
+            self.on_wait()
+
+    on_wait = None
+
+    def notes_folder(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        return folder.name
 
     def run_with(self, outcome, seconds=None):
         def fake_run(config, state, run):
@@ -323,8 +399,8 @@ class RoomTurn(unittest.TestCase):
         with unittest.mock.patch.object(room.agent_loop, "run_agent", side_effect=fake_run):
             conversation = [{"role": "system", "content": "be Bob"}, {"role": "user", "content": "yes, go ahead"}]
             if seconds is None:
-                return room.room_turn(conversation)
-            return room.room_turn(conversation, seconds=seconds)
+                return turned(conversation)
+            return turned(conversation, turn_time=room.TurnTime(seconds))
 
     def test_the_turn_is_restricted_and_untrusted(self):
         started = time.monotonic()
@@ -335,7 +411,8 @@ class RoomTurn(unittest.TestCase):
         self.assertLessEqual(run.deadline, time.monotonic() + room.ROOM_TURN_SECONDS)
         self.assertGreaterEqual(run.deadline, started + room.ROOM_TURN_SECONDS)
         self.assertEqual(run.allowed_tools, room.ROOM_TOOLS)
-        self.assertEqual(run.client_system, room.ROOM_NOTE)
+        self.assertEqual(run.client_system, room.room_system("chat"))
+        self.assertTrue(run.client_system.startswith(room.ROOM_NOTE))
         self.assertIsNone(run.chat_approved)
         self.assertFalse(run.background)
         self.assertIs(state["context"].get("untrusted"), True)
@@ -346,7 +423,8 @@ class RoomTurn(unittest.TestCase):
         cold_load_and_reply_seconds = 180
         last_step_and_honesty_check_seconds = 100
         self.assertGreaterEqual(room.ROOM_TURN_SECONDS, cold_load_and_reply_seconds)
-        self.assertLessEqual(room.ROOM_TURN_SECONDS + last_step_and_honesty_check_seconds, room.ROOM_APP_WAIT_SECONDS)
+        self.assertLessEqual(room.ROOM_TURN_SECONDS + last_step_and_honesty_check_seconds,
+                             room.ROOM_APP_WAIT_SECONDS_BY_KIND["chat"])
 
     def test_a_shorter_turn_time_from_the_gate_sets_the_deadline(self):
         started = time.monotonic()
@@ -364,7 +442,7 @@ class RoomTurn(unittest.TestCase):
         self.assertEqual(answer, room.CANNOT_HERE)
 
     def test_a_declined_request_never_reaches_the_model(self):
-        with unittest.mock.patch.object(room.safety, "check", return_value=("weapons", "No.")):
+        with unittest.mock.patch.object(safety, "check", return_value=("weapons", "No.")):
             answer, used = self.run_with({"status": "done", "answer": "unused"})
         self.assertEqual((answer, used), ("No.", ["safety_weapons"]))
         self.assertEqual(self.runs, [])
@@ -407,14 +485,14 @@ class RoomTurn(unittest.TestCase):
         self.assertEqual(answer, "Thanks, Alan. Thanks, Zebedee.")
 
     def test_a_self_harm_message_gets_a_neutral_crisis_line(self):
-        answer, used = room.room_turn([{"role": "user", "content": "I want to kill myself"}])
+        answer, used = turned([{"role": "user", "content": "I want to kill myself"}])
         self.assertEqual(used, ["safety_self_harm"])
         self.assertIn(room.ROOM_CRISIS_HELP, answer)
         self.assertNotIn("OWNER CRISIS", answer)
         self.assertNotIn("Samaritans", answer)
 
     def test_a_short_reply_after_a_self_harm_message_is_screened_with_it(self):
-        answer, used = room.room_turn([{"role": "user", "content": "sometimes I want to kill myself"},
+        answer, used = turned([{"role": "user", "content": "sometimes I want to kill myself"},
                                        {"role": "assistant", "content": "I'm sorry."}, {"role": "user", "content": "ok thanks"}])
         self.assertEqual(used, ["safety_self_harm"])
         self.assertIn(room.ROOM_CRISIS_HELP, answer)
@@ -422,7 +500,7 @@ class RoomTurn(unittest.TestCase):
     def test_the_room_app_notes_are_not_screened_with_a_short_reply(self):
         with unittest.mock.patch.object(room.agent_loop, "run_agent",
                                         return_value={"tools_used": [], "raw": {}, "status": "done", "answer": "Sure."}):
-            answer, used = room.room_turn([{"role": "system", "content": "Topic tonight: I want to kill myself, a film."},
+            answer, used = turned([{"role": "system", "content": "Topic tonight: I want to kill myself, a film."},
                                            {"role": "user", "content": "what did you think of it"},
                                            {"role": "assistant", "content": "Not seen it."}, {"role": "user", "content": "ok"}])
         self.assertEqual((answer, used), ("Sure.", []))
@@ -432,7 +510,7 @@ class RoomTurn(unittest.TestCase):
         self.assertGreater(len(later), room.SHORT_MESSAGE_CHARS)
         with unittest.mock.patch.object(room.agent_loop, "run_agent",
                                         return_value={"tools_used": [], "raw": {}, "status": "done", "answer": "Sure."}):
-            answer, used = room.room_turn([{"role": "user", "content": "sometimes I want to kill myself"},
+            answer, used = turned([{"role": "user", "content": "sometimes I want to kill myself"},
                                            {"role": "assistant", "content": "I'm sorry."},
                                            {"role": "user", "content": later}])
         self.assertEqual((answer, used), ("Sure.", []))
@@ -444,7 +522,7 @@ class RoomTurn(unittest.TestCase):
             seen.append(web_pages.current_pacing())
             return {"tools_used": [], "raw": {}, "status": "done", "answer": "ok"}
         with unittest.mock.patch.object(room.agent_loop, "run_agent", side_effect=fake_run):
-            room.room_turn([{"role": "user", "content": "hi"}])
+            turned([{"role": "user", "content": "hi"}])
         self.assertIs(seen[0], web_pages.ROOM_PACING)
         self.assertIsNot(web_pages.ROOM_PACING, web_pages.PACING)
         self.assertIs(web_pages.current_pacing(), web_pages.PACING)
@@ -456,7 +534,7 @@ class RoomTurn(unittest.TestCase):
             self.runs.append(run)
             return {"tools_used": [], "raw": {}, "status": "done", "answer": "ok"}
         with unittest.mock.patch.object(room.agent_loop, "run_agent", side_effect=fake_run):
-            room.room_turn([{"role": "user", "content": "hi"}], owner)
+            turned([{"role": "user", "content": "hi"}], owner)
         self.assertFalse(self.runs[0].is_interrupted())
         with owner.chatting():
             self.assertTrue(self.runs[0].is_interrupted())
@@ -474,39 +552,83 @@ class RoomTurn(unittest.TestCase):
         self.assertLessEqual(self.runs[0][2].deadline - room.ROOM_TURN_SECONDS, lookup_started)
         self.assertIs(pacing, web_pages.ROOM_PACING)
 
-    def test_an_owner_chat_during_the_lookup_stops_the_turn_before_any_model_call(self):
+    def test_an_owner_chat_during_the_lookup_holds_the_turn_before_any_model_call_and_finishes_it_after(self):
         owner = room.OwnerActivity()
-        engine = FakeEngine([said("too late")])
+        engine = FakeEngine([said("finished after the owner")])
+        bodies_while_held = []
+
+        def owner_done():
+            bodies_while_held.append(len(engine.bodies))
+            if len(self.waits) >= 3:
+                owner.chats = 0
+                owner.last_seen = None
 
         def owner_starts_chatting(config, said_in_room):
-            owner.chats += 1
+            if not self.waits:
+                owner.chats += 1
             return [], "", None
+        self.on_wait = owner_done
         with unittest.mock.patch.object(room.native_calls, "look_up_first", side_effect=owner_starts_chatting), \
                 unittest.mock.patch.object(connections, "hub", FakeHub()), \
                 unittest.mock.patch.object(connections, "http_json", side_effect=engine), \
                 unittest.mock.patch.object(brain.models, "budget_for", return_value=0), \
                 unittest.mock.patch.object(brain.models, "find", return_value=None), \
                 unittest.mock.patch.object(agent_loop, "current_context", return_value=""):
-            answer, _ = room.room_turn([{"role": "user", "content": "hi"}], owner)
-        self.assertEqual((answer, engine.bodies), (agent_loop.OUT_OF_TIME_ANSWER, []))
+            answer, _ = turned([{"role": "user", "content": "hi"}], owner)
+        self.assertEqual(bodies_while_held, [0, 0, 0])
+        self.assertEqual((answer, len(engine.bodies)), ("finished after the owner", 1))
 
-    def test_no_claim_check_after_the_out_of_time_answer(self):
+    def test_a_turn_held_past_its_hold_time_passes_and_keeps_the_message_for_later(self):
+        owner = room.OwnerActivity()
+        owner.chats = 1
+        room_message = "Bob: shall we add a library to the town?"
+        with unittest.mock.patch.object(room.agent_loop, "run_agent") as ran:
+            answer, _ = turned([{"role": "user", "content": app_said(room_message)}], owner,
+                               room.TurnTime(room.ROOM_TURN_SECONDS, started=time.monotonic() - room.ROOM_HOLD_SECONDS_BY_KIND["chat"]))
+        ran.assert_not_called()
+        self.assertEqual(answer, room.room_text.PASS)
+        pad = room.room_notes.scratchpad_for(room.room_text.app_turn(app_said(room_message)).scope)
+        self.assertEqual(pad.pending["speaker"], "Bob")
+        self.assertNotIn("library", json.dumps(pad.pending))
+        still_open = room.room_notes.scratchpad_text(pad, room.room_text.room_messages(app_said(room_message)))
+        moved_on = room.room_notes.scratchpad_text(
+            pad, room.room_text.room_messages(app_said(f"{room_message}\n\nJune: the library is built now.")))
+        gone = room.room_notes.scratchpad_text(pad, room.room_text.room_messages(app_said("June: hello again.")))
+        speaker = room.room_notes.PENDING_SPEAKER.format(name="Bob")
+        self.assertIn(room.room_notes.PENDING_NOW.format(speaker=speaker), still_open)
+        self.assertIn(room.room_notes.PENDING_LATER.format(speaker=speaker), moved_on)
+        self.assertNotIn("library", still_open + moved_on)
+        self.assertEqual(gone, "")
+
+    def test_running_out_of_time_passes_instead_of_saying_so(self):
         with unittest.mock.patch.object(room.honesty, "be_honest") as checked:
             answer, _ = self.run_with({"status": "done", "answer": agent_loop.OUT_OF_TIME_ANSWER, "out_of_time": True})
         checked.assert_not_called()
-        self.assertEqual(answer, agent_loop.OUT_OF_TIME_ANSWER)
+        self.assertEqual(answer, room.room_text.PASS)
 
-    def test_an_owner_chat_during_the_last_round_skips_the_claim_check(self):
+    def test_an_owner_chat_during_the_last_round_holds_the_claim_check_and_finishes_the_reply_after(self):
         owner = room.OwnerActivity()
+        answers = iter(["A first room answer.", "A finished room answer."])
+        checks = []
 
         def owner_starts_chatting(config, state, run):
-            owner.chats += 1
-            return {"tools_used": [], "raw": {}, "status": "done", "answer": "A finished room answer."}
+            if not checks and not self.waits:
+                owner.chats += 1
+            return {"tools_used": [], "raw": {}, "status": "done", "answer": next(answers)}
+
+        def owner_done():
+            owner.chats = 0
+            owner.last_seen = None
+
+        def check(answer, *rest, **named):
+            checks.append(answer)
+            return answer
+        self.on_wait = owner_done
         with unittest.mock.patch.object(room.agent_loop, "run_agent", side_effect=owner_starts_chatting), \
-                unittest.mock.patch.object(room.honesty, "be_honest") as checked:
-            answer, _ = room.room_turn([{"role": "user", "content": "hi"}], owner)
-        checked.assert_not_called()
-        self.assertEqual(answer, agent_loop.OUT_OF_TIME_ANSWER)
+                unittest.mock.patch.object(room.honesty, "be_honest", side_effect=check):
+            answer, _ = turned([{"role": "user", "content": "hi"}], owner)
+        self.assertEqual(checks, ["A finished room answer."])
+        self.assertEqual(answer, "A finished room answer.")
 
     def test_lookups_run_with_the_room_config(self):
         with unittest.mock.patch.object(room.native_calls, "look_up_first", return_value=([], "", None)) as looked:
@@ -534,7 +656,7 @@ class RoomKeyOverHttp(Server):
         self.assertEqual([entry["id"] for entry in json.loads(body)["data"]], [room.ROOM_MODEL_ID])
 
     def test_the_room_key_gets_a_room_turn(self):
-        with unittest.mock.patch.object(room, "room_turn", return_value=("Hi, room.", [])) as turned, \
+        with unittest.mock.patch.object(room, "room_turn", return_value=room.RoomReply("Hi, room.", [])) as turned, \
                 unittest.mock.patch.object(brain, "run_turn") as ordinary:
             status, body = self.as_room("POST", "/v1/chat/completions",
                                         {"model": "anything", "max_tokens": 200, "messages": [{"role": "user", "content": "hi"}]})
@@ -566,7 +688,7 @@ class RoomKeyOverHttp(Server):
         with unittest.mock.patch.object(brain, "turn_answer", side_effect=lambda *a, **k: (
                 (self.as_room("POST", "/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]})[0], [], {}, None))), \
                 unittest.mock.patch.object(brain, "room_gate", room.Gate(owner=brain.owner_activity)), \
-                unittest.mock.patch.object(room, "room_turn", return_value=("Hi.", [])):
+                unittest.mock.patch.object(room, "room_turn", return_value=room.RoomReply("Hi.", [])):
             status_during, _, _, _ = brain.run_turn([{"role": "user", "content": "hello"}])
         self.assertEqual(status_during, 429)
 
@@ -595,7 +717,7 @@ class RoomKeyOverHttp(Server):
         room_path.assert_not_called()
 
     def test_a_busy_room_answers_429(self):
-        with unittest.mock.patch.object(room, "room_turn", return_value=("Hi.", [])):
+        with unittest.mock.patch.object(room, "room_turn", return_value=room.RoomReply("Hi.", [])):
             with brain.room_gate.turn():
                 status, _ = self.as_room("POST", "/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(status, 429)

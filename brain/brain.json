@@ -21,6 +21,27 @@
   "vram_budget_mb": 11500,
   "system_prompt_file": "/srv/ai/brain/system-prompt.md",
   "keep_alive": -1,
+  "unrestricted_models": [],
+  "unrestricted_approvals": true,
+  "remote_tools": [
+    "research__web_search",
+    "fetch__*",
+    "read_web_page",
+    "check_price",
+    "calculate",
+    "date_maths",
+    "clock_maths",
+    "convert_units",
+    "convert_currency",
+    "date_facts",
+    "place_time",
+    "currency_facts",
+    "weather",
+    "time__*",
+    "sequential_thinking__*",
+    "ask_user"
+  ],
+  "remote_desktop_tools": [],
   "options": {
     "temperature": 0.4,
     "num_ctx": 24576,
@@ -1015,5 +1036,7 @@
   "time_zone_label": "UK time",
   "crisis_help": "Samaritans are free, any time, day or night, on 116 123, or you can text SHOUT to 85258. If you're in danger right now, call 999.",
   "starter_deck": [],
-  "unrestricted_models": []
+  "room": {
+    "seconds_per_hour": 1800
+  }
 }

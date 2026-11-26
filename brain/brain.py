@@ -28,6 +28,8 @@ import browser_apps
 import calendar_feed
 import code_sandbox
 import connections
+import content_rules
+import content_screen
 import desktop_look
 import devices
 import drafts
@@ -54,7 +56,9 @@ import research
 import room
 import safety
 import said_to_them
+import screen_review
 import sharing
+import starfire_rules
 import store
 import style
 import web_app
@@ -82,8 +86,8 @@ from agent_loop import (know_the_page, private_upload, turn_rounds, WindowOverfl
                         ROUNDS_KEY)
 from honesty import client_tool_runs, empty_reply, be_honest
 from shortcuts import (addressed_to_arty, TALKED_ABOUT, recap_conversations, phone_action, camera_action, asks_for_something_else,
-    quick_action, judge_answer, researched_answer, solo_turn, said_aloud)
-from agent_turns import agent_turn
+    quick_action, judge_answer, researched_answer, solo_turn, said_aloud, needs_owner_data, LOCAL_MODEL_NEEDED)
+from agent_turns import agent_turn, unanswered_user_words
 from scheduler import gather_writing, scheduler_loop
 from background_tasks import worker_loop, decide_task, public_task
 from alerts import record_alert
@@ -137,7 +141,8 @@ def facts_for_draft(config, said):
 
 def private_text_of_turn(messages: list, client_tools) -> private_text.HiddenText:
     config = connections.load_config()
-    instructions = "\n\n".join(part for part in (config.get("persona"), config.get("system_prompt")) if part)
+    instructions = "\n\n".join(part for part in (config.get("persona"), config.get("system_prompt"), config.get("safety_prompt"))
+                                 if part)
     tools = [*connections.hub.tools, *NATIVE_TOOLS.values()]
     return hidden_notes.private_text_for(instructions, tools, hidden_notes.known_to_the_client(messages, client_tools))
 
@@ -164,13 +169,22 @@ def turn_answer(messages, requested_model, client_tools, skip_groups, on_text, c
         if local_addon and (handled := local_addon.turn(messages, requested_model, client_tools, skip_groups, on_text)) is not None:
             return handled
         private = private_text_of_turn(messages, client_tools)
-        stream = private_text.GuardedStream(on_text, private) if on_text else None
+        guarded = content_screen.GuardedText(on_text, earlier_words(messages), last_user_text(messages)) if on_text else None
+        stream = private_text.GuardedStream(guarded, private) if guarded else None
         answer, tools_used, raw, client_calls = arty_turn(messages, requested_model, client_tools, skip_groups, stream, client,
                                                           any_installed, agent, on_thinking, on_model, early_text_replaced)
     except MessageTooLong as too_long:
         return str(too_long), [], {}, None
     kept = stream.kept(answer or "") if stream else 0
     return private_text.without_hidden_text(answer, private, kept), tools_used, raw, client_calls
+
+
+def last_user_text(messages: list) -> str:
+    return message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {}))
+
+
+def earlier_words(messages: list) -> str:
+    return content_screen.earlier_text(message_text(m) for m in messages if m.get("role") in content_screen.GUARD_ROLES)
 
 
 def system_text_of(messages: list) -> str:
@@ -189,17 +203,26 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
     else:
         auto_role, turn_model = "", chat_model(config, requested_model, said, has_new_picture(messages))
     use_requested_model(config, turn_model, any_installed)
+    config = content_rules.turn_config(config)
     log.info("this turn runs on %s%s", config["model"], f" (Arty Auto: {auto_role})" if auto_role else "")
     if on_model:
         on_model(auto_choice.picked(config, auto_role))
     on_routed_model = turn_model != (MODEL_ID if auto_role else requested_model)
+    remote_turn = content_rules.is_remote(config["model"])
     if last_user is not None:
         desktop_look.user_active()
-        if declined := safety.check(said, config.get("crisis_help")):
+        earlier = earlier_words([m for m in messages if m is not last_user])
+        asked = unanswered_user_words(messages, client)
+        if declined := safety.check(asked, config.get("crisis_help"), content_rules.safety_checks(config, config["model"]), earlier) \
+                or screen_review.declined(config, config["model"], asked, earlier):
             kind, reply = declined
             log.info("declined a %s request", kind)
             archive_turn(config, said, reply, [f"safety_{kind}"])
             return reply, [f"safety_{kind}"], {}, None
+        if remote_turn and needs_owner_data(said, client):
+            log.info("a remote model was asked for something that needs the owner's own things")
+            return LOCAL_MODEL_NEEDED, [], {}, None
+    if last_user is not None and not remote_turn:
         if quizzing := personal.quiz_turn(said, lambda q, e, g: judge_answer(config, q, e, g), client,
                                           asks_for_something_else(said)):
             archive_turn(config, said, quizzing, ["quiz"])
@@ -316,6 +339,9 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
                                                     skip_groups=skip_groups, draft=draft, looked_up=looked_up,
                                                     client_texts=hidden_notes.known_to_the_client(messages, client_tools)))
     if outcome["status"] == "client_tools":
+        if content_screen.calls_cross_the_line(outcome["content"], outcome["calls"], earlier_words(messages), said):
+            log.info("held back tool calls that broke the minors rule")
+            return content_screen.MINORS_REPLY, outcome["tools_used"] + ["safety_minors"], outcome["raw"], None
         content = draft.finish(outcome["content"]) if draft else outcome["content"]
         return content, outcome["tools_used"], outcome["raw"], outcome["calls"]
     if outcome["status"] == "waiting":  # can't happen in chat mode, but never lose the turn
@@ -348,6 +374,10 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
                 answer += f"\n\n{link.group(0)}"
     user_messages = [m for m in conversation if m.get("role") == "user"]
     user_text = user_words(message_text(user_messages[-1]), client) if user_messages else ""
+    if declined_answer := content_screen.declined_reply(answer, earlier_words(content_screen.system_messages(messages) + conversation), user_text):
+        log.info("held back a reply that broke the minors rule")
+        answer = declined_answer
+        outcome["tools_used"].append("safety_minors")
     if is_overheard(answer):
         log.info("voice heard something not meant for Arty; not saving it")
         return NOT_FOR_ME, outcome["tools_used"], outcome["raw"], None
@@ -513,7 +543,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         try:
             parsed = json.loads(self.rfile.read(length))
-        except json.JSONDecodeError:
+        except RecursionError:
+            raise ApiError(400, "body is nested too deeply") from None
+        except ValueError:
             raise ApiError(400, "body must be JSON") from None
         if not isinstance(parsed, dict):
             raise ApiError(400, "body must be a JSON object")
@@ -593,11 +625,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, room.model_list())
             if method != "POST" or segments not in (["v1", "chat", "completions"], ["chat", "completions"]):
                 raise ApiError(403, room.NOT_A_ROOM_PATH)
-            messages = valid_messages(self.body(room.MAX_ROOM_BODY_BYTES).get("messages"))
-            with room_gate.turn() as seconds:
-                answer, tools_used = room.room_turn(messages, room_gate.owner, seconds)
-            log.info("answered the room after %s", ", ".join(tools_used) or "no steps")
-            return self.send_json(200, room.completion(answer))
+            body = self.body(room.MAX_ROOM_BODY_BYTES)
+            messages = valid_messages(body.get("messages"))
+            with room_gate.turn(room.turn_seconds(messages), room.hourly_allowance()) as turn_time:
+                reply = room.room_turn(messages, room_gate.owner, turn_time, body.get("max_tokens"))
+            log.info("answered the room after %s", ", ".join(reply.tools_used) or "no steps")
+            self.send_json(200, room.completion(reply.answer))
+            room.after_delivery(reply)
+            return None
         except ApiError as error:
             return self.send_json(error.status, {"error": {"message": str(error)}})
         except CLIENT_DROPPED_ERRORS:
@@ -659,6 +694,8 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError) as error:
                 log.warning("could not list the engine's models: %s", error)
             return self.send_json(200, {"object": "list", "data": listed, "auto": auto_choice.listing(connections.load_config())})
+        if self.answered_by_addon("GET", segments, None):
+            return
         if segments == ["v1", "tools"]:
             connections.hub.refresh()
             config = connections.load_config()
@@ -775,6 +812,8 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_delete(self, segments):
         if segments[:2] == ["v1", "remote"]:
             return self.relay("DELETE", segments, {}, {})
+        if self.answered_by_addon("DELETE", segments, None):
+            return
         if len(segments) == 3 and segments[:2] == ["v1", "devices"] and segments[2].isdigit():
             if not is_main_key(self.headers.get("Authorization", "")):
                 return self.send_json(403, {"error": {"message": "only Arty's own key can revoke devices"}})
@@ -787,6 +826,20 @@ class Handler(BaseHTTPRequestHandler):
             found = store.delete_event(int(segments[2]))
             return self.send_json(200 if found else 404, {"ok": found})
         self.send_json(404, {"error": {"message": "not found"}})
+
+    def answered_by_addon(self, method, segments, request) -> bool:
+        answer = getattr(local_addon, ADDON_ROUTE, None)
+        if answer is None:
+            return False
+        try:
+            found = answer(method, segments, request, self.require_main_key)
+        except ApiError as error:
+            self.send_json(error.status, {"error": {"message": str(error)}})
+            return True
+        if found is None:
+            return False
+        self.send_json(*found)
+        return True
 
     def switch_remote_control(self, device_id, request):
         if not is_main_key(self.headers.get("Authorization", "")):
@@ -838,6 +891,9 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, segments, request):
         if segments[:2] == ["v1", "remote"]:
             return self.relay("POST", segments, {}, request)
+        if segments == ["v1", "rules"]:
+            self.require_main_key("only Arty's own key can read Arty's rules")
+            return self.send_json(200, starfire_rules.rules_for(connections.load_config(), request))
         if segments == ["v1", "phone-link", "offers"]:
             self.require_main_key("only Arty's own key can make a phone link code")
             try:
@@ -862,6 +918,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.limited_chat(request)
         if len(segments) == 3 and segments[:2] == ["v1", "memory"] and segments[2] in memory_edits.EDITS:
             return self.edit_memory(segments[2], request)
+        if self.answered_by_addon("POST", segments, request):
+            return
         if segments == ["v1", "warm"]:
             warming = bool(local_addon) and local_addon.warm(text_field(request, "model"))
             return self.send_json(202 if warming else 200, {"warming": warming})
@@ -1093,7 +1151,8 @@ class Handler(BaseHTTPRequestHandler):
                 with stream:
                     answer, tools_used, raw, client_calls = run_turn(
                         *turn, on_text=send_early, client=client, any_installed=any_installed, agent=agent,
-                        on_thinking=send_reasoning if agent and asked_for_reasoning else None, on_model=chosen.update)
+                        on_thinking=content_screen.GuardedText(send_reasoning, earlier_words(messages), last_user_text(messages))
+                        if agent and asked_for_reasoning else None, on_model=chosen.update)
             except WindowOverflow as overflow:
                 if stream.open:
                     after_early_text = "\n\n" if sent else ""
@@ -1150,6 +1209,7 @@ def init_storage(config):
 
 
 LOCAL_ADDON = "local_addon"
+ADDON_ROUTE = "answer_route"
 
 
 def load_local_addon():
