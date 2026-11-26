@@ -55,6 +55,17 @@ ASKS_ABOUT_THE_SET_UP = re.compile("|".join([
     r"instrucc\w*|sistema|anweisung\w*|systemprompt|istruzion\w*|instructies|systemow\w*|instrukc\w*)\b",
     r"<tools>|系统|指示|指令|プロンプト|(?i:инструкц|промпт)",
 ]))
+ASKS_FOR_THE_SET_UP_ITSELF = re.compile("|".join([
+    r"(?i)\b(?:your|the|its) (?:own |hidden |initial |original |full )*(?:system )?"
+    r"(?:instructions?|prompts?|personas?|set-?up|configuration|guidelines|directives|programming|tool guide)\b",
+    r"\bsystem (?:prompt|message|role|text)\b|\b(?:everything|text|words|instructions?) (?:above|before this)\b",
+    r"\b(?:ignore|disregard|forget) (?:all |any )?(?:your |the )?(?:previous|prior|above|earlier)\b",
+    r"\brules (?:you follow|you were given|you have been given|you(?:'re| are) given)\b",
+    r"\b(?:were you|you were|you(?:'ve| have) been) (?:told|given|instructed|programmed|configured)\b",
+    r"\b(?:developer|debug|maintenance|diagnostics?) mode\b|\bjailbreak\b",
+    r"\b(?:instrucc\w*|anweisung\w*|consignes?|istruzion\w*|instructies|systemprompt)\b",
+    r"<tools>|系统|指示|指令|プロンプト|(?i:инструкц|промпт)",
+]))
 TALKS_ABOUT_ITS_SET_UP = re.compile("|".join([
     r"(?i)\b(?:my|these|those) (?:own )?(?:system prompt|prompt|instructions?|guidelines|rules|persona|set-?up|configuration|directives)\b",
     r"\bI(?:'m| am| was|'ve been| have been) (?:told|instructed|programmed|configured|set up|meant) to\b",
@@ -72,6 +83,10 @@ WORD = re.compile(r"[^\W\d_]+")
 
 def asks_about_the_set_up(user_texts: list[str]) -> bool:
     return any(ASKS_ABOUT_THE_SET_UP.search(text or "") for text in user_texts[-RECENT_REQUESTS:])
+
+
+def asks_for_the_set_up_itself(user_texts: list[str]) -> bool:
+    return any(ASKS_FOR_THE_SET_UP_ITSELF.search(text or "") for text in user_texts[-RECENT_REQUESTS:])
 
 
 def is_mostly_another_language(text: str) -> bool:

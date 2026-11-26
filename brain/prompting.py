@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import content_rules
 import tool_guide
 
 from archive import recent_exchanges
@@ -37,12 +38,18 @@ RECENT_HEADING = ("\n\nBACKGROUND ONLY, do not continue these: your most recent 
 def system_prompt(config, client_system="", background=False, toolless=False):
     # Tool-less models get no tool instructions: they can't use them, and small ones have short context windows.
     instructions = TOOLLESS_NOTE if toolless else config["system_prompt"]
+    rules = content_rules.safety_prompt(config)
+    instructions = f"{instructions}\n\n{rules}" if rules else instructions
     system = (config["persona"] + "\n\n" if config["persona"] else "") + instructions
     if background:
         system += "\n\n" + BACKGROUND_INSTRUCTIONS
     if client_system:
         system += "\n\nInstructions from the app you are talking through:\n" + client_system
     return f"{system}\n\n{PRIVATE_INSTRUCTIONS}"
+
+
+def with_memories_left_out(config: dict) -> dict:
+    return {**config, "own_memories": "", "recent_exchanges": 0}
 
 
 def with_persona_left_out(config: dict) -> dict:
