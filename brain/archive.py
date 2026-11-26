@@ -4,6 +4,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import models
+
 from api_support import optional_int
 from reply_rules import NOT_FOR_ME, is_a_refusal, is_only_a_deflection, is_only_a_quiz_question
 
@@ -59,6 +61,14 @@ def archive_records(config):
                 yield record
 
 
+def is_from_a_remote_model(record: dict) -> bool:
+    return models.is_remote(str(record.get("model") or ""))
+
+
+def replayable_records(config):
+    return (record for record in archive_records(config) if not is_from_a_remote_model(record))
+
+
 def is_left_out_of_recent(reply: str) -> bool:
     return is_only_a_deflection(reply) or is_a_refusal(reply) or is_only_a_quiz_question(reply)
 
@@ -68,7 +78,7 @@ def recent_exchanges(config):
     if wanted <= 0:
         return ""
     records = []
-    for record in archive_records(config):
+    for record in replayable_records(config):
         if is_left_out_of_recent(record["assistant"]):
             continue
         records.append(record)
@@ -83,7 +93,7 @@ def recall_records(config, query, limit=5):
     found = []
     if not terms:
         return found
-    for record in archive_records(config):
+    for record in replayable_records(config):
         text = f"{record.get('user', '')} {record.get('assistant', '')}".lower()
         if all(term in text for term in terms) or (len(terms) > 2 and sum(term in text for term in terms) >= len(terms) - 1):
             found.append(record)
@@ -104,6 +114,7 @@ def archive_turn(config, user_text, answer, tools_used):
     folder = Path(config["conversations_dir"])
     folder.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
-    record = {"time": now.isoformat(timespec="seconds"), "user": user_text, "assistant": answer, "tools": tools_used}
+    record = {"time": now.isoformat(timespec="seconds"), "user": user_text, "assistant": answer, "tools": tools_used,
+              "model": str(config.get("model") or "")}
     with open(folder / f"{now:%Y-%m}.jsonl", "a") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")

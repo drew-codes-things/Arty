@@ -21,6 +21,7 @@ class OwnAppHostsAreSensitive(unittest.TestCase):
         self.addCleanup(lambda: [path.unlink() for path in folder.iterdir()] and folder.rmdir())
         prompt = folder / "system-prompt.md"
         prompt.write_text("prompt")
+        (folder / "safety-prompt.md").write_text("safety")
         self.config_file = folder / "brain.json"
         self.config_file.write_text(json.dumps({"system_prompt_file": str(prompt),
                                                 "approval": SHIPPED_RULES}))

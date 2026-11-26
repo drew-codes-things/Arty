@@ -561,6 +561,7 @@ class HomelabNames(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="arty-config-") as name:
             folder = Path(name)
             (folder / "prompt.md").write_text("prompt")
+            (folder / "safety-prompt.md").write_text("safety")
             (folder / "brain.json").write_text(json.dumps({"system_prompt_file": str(folder / "prompt.md"),
                                                            "lookups": [{"tool": "homelab__proxmox_status", "pattern": "servers?"}]}))
             with unittest.mock.patch.object(connections, "CONFIG_FILE", str(folder / "brain.json")), \

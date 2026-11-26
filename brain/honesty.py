@@ -159,8 +159,9 @@ def some_tool_worked(tools_used: list[str], failed: list[tuple[str, str]]) -> bo
 def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None, prefix=None,
               seconds: float = JUDGE_SECONDS) -> dict:
     config = connections.load_config()
-    judge_model = model or config["model"]
-    judge_keep_alive = keep_alive if model else config.get("keep_alive", "10m")
+    asked_for = model or config["model"]
+    judge_model = config["model"] if models.is_remote(asked_for) else asked_for
+    judge_keep_alive = keep_alive if model and judge_model == model else config.get("keep_alive", "10m")
     shared = prefix_for(judge_model, prefix)
     asked = {"model": judge_model, "stream": False, "format": "json", "think": False, "keep_alive": judge_keep_alive,
              "options": {"temperature": 0, "num_predict": max_tokens},

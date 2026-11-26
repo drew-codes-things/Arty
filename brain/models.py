@@ -89,6 +89,7 @@ def _refresh_installed() -> list[dict]:
             "thinking": "thinking" in capabilities,
             "context_length": trained_context(shown.get("model_info") or {}),
             "available": entry.get("available") is not False,
+            "digest": entry.get("digest") or "",
         })
     with _cache_lock:
         _cache.update(at=time.time(), models=models)
@@ -316,11 +317,16 @@ def list_text(current: str) -> str:
     return "Models I can run on (* = my main model):\n" + "\n".join(lines)
 
 
+REMOTE_MAIN_REFUSAL = "a remote model can't be my main model, as it runs on someone else's server."
+
+
 def switch(name: str, current: str, notify_send) -> str:
     """Make `name` Arty's main model, downloading it first if needed (in the background)."""
     name = name.strip().lower()
     if not MODEL_NAME.match(name):
         return f"'{name}' doesn't look like a model name (e.g. qwen2.5:7b)."
+    if is_remote(name):
+        return f"Not switching: {REMOTE_MAIN_REFUSAL}"
     if name in (current, f"{current}:latest") or current == f"{name}:latest":
         return f"I'm already running on {current}."
     if not in_arty({"name": name}):

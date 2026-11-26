@@ -41,7 +41,7 @@ NOTE_TEMPLATES = (
     steering.WRITE_ONLY_UNCHECKED_NOTE, steering.DONT_RUN_UNCHECKED_NOTE, steering.HOW_TO_NOTE, steering.READ_LINK_NOTE,
     steering.NOTHING_TO_SIGN_IN, steering.SEARCH_RESULTS_NOTE, steering.NOTHING_DONE_NOTE, steering.PRETEND_TOOLS_NOTE,
     steering.HALF_WRITTEN_CALL_NOTE, steering.EMPTY_REPLY_NOTE, steering.COURSEWORK_NOTE, steering.UNASKED_PRIVACY_NOTE,
-    steering.HARMFUL_REWRITE_NOTE,
+    steering.HARMFUL_REWRITE_NOTE, steering.REMOTE_COMPUTER_NOTE,
     reply_rules.FAILED_NOTE, docs_reading.DOCS_NOTE,
     docs_reading.UNCONFIRMED_NOTE, sharing.SENT_NOTE, window_fit.LEFT_OUT_ASK, fresh_answer.FRESH_ANSWER,
     code_check.REWRITE_NOTE, example_checks.REWRITE_NOTE, research.CORRECTION_NOTE,

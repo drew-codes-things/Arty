@@ -21,11 +21,11 @@ log = logging.getLogger("brain")
 
 def vision_model(wanted: str = ""):
     for name in (wanted, connections.load_config().get("vision_model", "")):
-        model = models.find(name) if name else None
+        model = models.find(name) if name and not models.is_remote(name) else None
         if model and model["vision"]:
             return model
     model = next((m for m in models.installed() if m["vision"] and models.in_arty(m) and not models.is_separate(m)
-                  and not models.kept_solo(m)), None)
+                  and not models.kept_solo(m) and not models.is_remote(m["name"])), None)
     if model is None:
         raise ApiError(400, "No vision model is installed. Run: ai-pull mimo-v2.6:9b")
     return model

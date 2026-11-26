@@ -8,7 +8,12 @@ import abilities
 import app_actions
 import calendar_feed
 import connections
+import content_rules
+import content_screen
+import desktop_look
+import email_watch
 import greetings
+import memory_tidy
 import models
 import personal
 import phone
@@ -16,17 +21,20 @@ import policy
 import quick
 import research
 import safety
+import screen_review
 import shopping
 import said_to_them
+import style
 import undo
 import weather
 
-from archive import message_text, archive_records
+from archive import message_text, archive_records, is_from_a_remote_model
 from settings import ARTY_ENGINE_URL
 from native_tools import NATIVE_TOOLS
 from reply_rules import (REMIND_REQUEST, CHAT_APP, reminder_from, DO_REQUEST, ADDRESSED_PROMPT, APP_NOTES,
     without_app_notes, user_words, VOICE_MODE, ON_A_PHONE_CALL)
-from schedules import cancel_by_name, set_reminder
+from schedules import CANCEL_REMINDER, cancel_by_name, set_reminder
+from memory_facts import REMEMBER_REQUEST, FORGET_REQUEST
 from connections import complete_text, classify_text
 
 log = logging.getLogger("brain")
@@ -36,8 +44,25 @@ ASKED_TO_DO = re.compile(r"^\W*(?:(?:hey |hi )?arty,?\s*)?(?:please|can you|coul
                          re.IGNORECASE)
 
 
+LOCAL_MODEL_NEEDED = "That needs your own things on this server, which a remote model can't reach: pick a local model for that."
+
+
+def judging_config(config: dict) -> dict:
+    return connections.load_config() if content_rules.is_remote(config.get("model", "")) else config
+
+
+def needs_owner_data(said: str, client: str = "") -> bool:
+    asks = (personal.QUIZ_START.search, TALKED_ABOUT.search, lambda text: phone_action(text, client), camera_action,
+            REMIND_REQUEST.search, CANCEL_REMINDER.match, undo.is_request, quick.asks_for_ips, quick.calendar_add, quick.list_add,
+            email_watch.is_request, email_watch.is_unread_request, REMEMBER_REQUEST.match, FORGET_REQUEST.match,
+            memory_tidy.is_restore_request, desktop_look.GRANT.search, desktop_look.REVOKE.search, desktop_look.is_request,
+            style.is_learn_request, style.is_new_draft)
+    return any(ask(said) for ask in asks)
+
+
 def addressed_to_arty(config, heard: str, conversation: list[dict]) -> bool:
     previous = next((message_text(m) for m in reversed(conversation) if m.get("role") == "assistant"), "") or "(nothing yet)"
+    config = judging_config(config)
     try:
         reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", timeout=60, body=models.for_runner(config, {
             "model": config["model"], "stream": False, "format": "json", "think": False,
@@ -80,7 +105,7 @@ def recap_conversations(config, said: str) -> str:
             except ValueError:
                 continue
             in_range = record.get("time", "") >= week_start if week else record.get("time", "").startswith(day)
-            if in_range and record.get("user") and not record["user"].startswith("[background task"):
+            if in_range and not is_from_a_remote_model(record) and record.get("user") and not record["user"].startswith("[background task"):
                 turns.append(f"USER: {APP_NOTES.sub('', record['user'])[:RECAP_TURN_CHARS]}\nARTY: {str(record.get('assistant'))[:RECAP_TURN_CHARS]}")
     if not turns:
         return "We haven't talked this week." if week else "We didn't talk yesterday." if yesterday else "We haven't talked yet today."
@@ -188,6 +213,7 @@ Student's answer: %s"""
 
 
 def judge_answer(config, question: str, expected: str, given: str) -> tuple[bool, str]:
+    config = judging_config(config)
     try:
         reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
             "model": config["model"], "stream": False, "format": "json", "think": False,
@@ -215,13 +241,23 @@ def solo_conversation(messages):
     return conversation
 
 
+REMOTE_SOLO_REFUSAL = "Remote models only answer through Arty: pick it as an Arty model, not as a model on its own."
+
+
 def solo_turn(model_name, messages, client=""):
+    if content_rules.is_remote(model_name):
+        return REMOTE_SOLO_REFUSAL, [], {}, None
     config = connections.load_config()
     said = user_words(message_text(next((m for m in reversed(messages) if m.get("role") == "user"), {})), client)
-    if declined := safety.check(said, config.get("crisis_help")):
+    earlier = content_screen.earlier_text(message_text(m) for m in messages[:-1] if m.get("role") in content_screen.GUARD_ROLES)
+    if declined := safety.check(said, config.get("crisis_help"), content_rules.safety_checks(config, model_name), earlier) \
+            or screen_review.declined(config, model_name, said, earlier):
         kind, reply = declined
         return reply, [f"safety_{kind}"], {}, None
     body = models.for_runner(config, {"model": model_name, "messages": solo_conversation(messages), "stream": False,
                                       "keep_alive": config.get("keep_alive", "10m")})
     reply = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body)
-    return ((reply.get("message") or {}).get("content") or "").strip(), [], reply, None
+    answer = ((reply.get("message") or {}).get("content") or "").strip()
+    if declined_answer := content_screen.declined_reply(answer, content_screen.earlier_text([earlier, said]), said):
+        return declined_answer, ["safety_minors"], {}, None
+    return answer, [], reply, None

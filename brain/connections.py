@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import engine_guard
 import models
 import owner
 import web_host
@@ -23,6 +24,14 @@ USER_NAME = owner.configured_name(CONFIG_FILE)
 
 
 def http_json(url, body=None, headers=None, timeout=600):
+    guard = engine_guard.current()
+    if guard is not None and body is not None and engine_guard.is_generation(url):
+        return engine_guard.guarded_call(url, body, guard, timeout)
+    with engine_guard.outside_use(url):
+        return plain_json(url, body, headers, timeout)
+
+
+def plain_json(url, body=None, headers=None, timeout=600):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET")
     request.add_header("Content-Type", "application/json")
@@ -34,6 +43,14 @@ def http_json(url, body=None, headers=None, timeout=600):
 
 
 def stream_chat(body, on_text, timeout=600, on_thinking=None):
+    url = f"{ARTY_ENGINE_URL}/api/chat"
+    if (guard := engine_guard.current()) is not None:
+        return engine_guard.guarded_call(url, body, guard, timeout, on_text, on_thinking)
+    with engine_guard.outside_use(url):
+        return plain_stream_chat(body, on_text, timeout, on_thinking)
+
+
+def plain_stream_chat(body, on_text, timeout=600, on_thinking=None):
     request = urllib.request.Request(f"{ARTY_ENGINE_URL}/api/chat", data=json.dumps({**body, "stream": True}).encode(), method="POST")
     request.add_header("Content-Type", "application/json")
     content, calls, last = [], [], {}
@@ -54,11 +71,19 @@ def stream_chat(body, on_text, timeout=600, on_thinking=None):
     return {**last, "message": {"role": "assistant", "content": "".join(content), "tool_calls": calls}}
 
 
+SAFETY_PROMPT_NAME = "safety-prompt.md"
+
+
+def safety_prompt_file(config: dict) -> str:
+    return config.get("safety_prompt_file") or str(Path(config["system_prompt_file"]).with_name(SAFETY_PROMPT_NAME))
+
+
 def load_config():
     with open(CONFIG_FILE) as handle:
         config = json.load(handle)
     with open(config["system_prompt_file"]) as handle:
         config["system_prompt"] = handle.read().strip()
+    config["safety_prompt"] = Path(safety_prompt_file(config)).read_text().strip()
     persona_file = config.get("persona_file")
     config["persona"] = Path(persona_file).read_text().strip() if persona_file and Path(persona_file).exists() else ""
     config["lookups"] = with_homelab_names(config.get("lookups", []), HOMELAB_NAMES)

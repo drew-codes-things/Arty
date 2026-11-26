@@ -29,7 +29,8 @@ from reply_rules import (refuses_coursework, is_coursework_request, is_checker_r
                          is_needless_coursework_refusal)
 
 SHIPPED_CONFIG = json.loads((BRAIN_FOLDER / "brain.json").read_text(encoding="utf-8"))
-SHIPPED_PROMPT = (BRAIN_FOLDER / "system-prompt.md").read_text(encoding="utf-8")
+SAFETY_RULES = (BRAIN_FOLDER / "safety-prompt.md").read_text(encoding="utf-8")
+SHIPPED_PROMPT = (BRAIN_FOLDER / "system-prompt.md").read_text(encoding="utf-8").strip() + "\n\n" + SAFETY_RULES
 
 COURSEWORK_REQUESTS = (
     "This is my assessed university essay due tomorrow. Write the full 1,500 word essay on the causes of the First "
@@ -737,7 +738,7 @@ class HarmfulCheckerDodgesAreDeclinedBeforeTheModel(unittest.TestCase):
         self.assertRegex(steering.HARMFUL_REWRITE_NOTE, r"(?i)turn it down")
 
     def test_the_prompt_limits_checker_rewrites_to_coursework_text(self):
-        section = SHIPPED_PROMPT.split("Help with coursework", 1)[1].split("\n\n", 1)[0]
+        section = SAFETY_RULES
         self.assertRegex(section, r"(?i)only for coursework")
         for harm in ("threats", "harassment", "forged or fake official documents", "stolen or leaked data", "fraud",
                      "hiding who wrote a threat"):
@@ -828,7 +829,7 @@ class ABareRefusalOfCourseworkIsSentBackOnce(unittest.TestCase):
         self.assertIsNone(reply_rules.HARM_TOPIC.search(steering.COURSEWORK_NOTE))
 
     def test_the_prompt_keeps_the_harmful_group_and_puts_his_own_coursework_outside_it(self):
-        section = SHIPPED_PROMPT.split("Help with coursework", 1)[1].split("\n\n", 1)[0]
+        section = SAFETY_RULES
         checker_line = next(line for line in section.splitlines() if "only for coursework text" in line)
         self.assertIn("It is never for threats, harassment, forged or fake official documents (sick notes, IDs, "
                       "certificates), stolen or leaked data, fraud, or hiding who wrote a threat: turn those down in "

@@ -1,5 +1,7 @@
 import re
 
+import content_screen
+
 HOW = r"\b(?:how (?:do|can|could|would|should) (?:i|you|we|one|someone)|how to|ways? to|best way to|help me|teach me|tell me how to)\b"
 WEAPON = (r"(?:(?:nuclear|atomic|dirty|pipe|nail|car|fertili[sz]er|home-?made|petrol|molotov)\s+bombs?|"
           r"molotovs?(?:\s+cocktails?)?(?![-'\w])|(?<!bath )(?<!photo )"
@@ -77,19 +79,38 @@ def asks_for_a_scam(text: str) -> bool:
     return bool(SCAM_MESSAGE.search(text) or POSING_FOR_SECRETS.search(text))
 
 
-ALL_CHECKS = ("self_harm", "weapons", "bot_check", "scam")
+ALL_CHECKS = ("self_harm", "minors", "weapons", "bot_check", "scam")
+SPACE_RUN = re.compile(r"[^\S\n]+")
+LINE_BREAK_RUN = re.compile(r" ?(?:\n ?)+")
+PATTERNS = {"self_harm": (SELF_HARM,), "weapons": (WEAPONS, WEAPON_STEPS), "bot_check": (BOT_CHECK,),
+            "scam": (SCAM_MESSAGE, POSING_FOR_SECRETS)}
 
 
-def check(text: str, crisis_help: str | None = None, kinds: tuple[str, ...] = ALL_CHECKS) -> tuple[str, str] | None:
+def spaced(text: str) -> str:
+    return LINE_BREAK_RUN.sub("\n", SPACE_RUN.sub(" ", text or ""))
+
+
+def found_matches(text: str, kinds: tuple[str, ...]):
+    for kind in kinds:
+        for pattern in PATTERNS.get(kind, ()):
+            for found in pattern.finditer(text):
+                yield kind, found
+
+
+def check(text: str, crisis_help: str | None = None, kinds: tuple[str, ...] = ALL_CHECKS,
+          context: str = "") -> tuple[str, str] | None:
     """(kind, reply) for a request Arty declines (or a cry for help), or None."""
     text = text or ""
-    if "self_harm" in kinds and SELF_HARM.search(text):
+    spaced_text = spaced(text)
+    if "self_harm" in kinds and SELF_HARM.search(spaced_text):
         return "self_harm", self_harm_reply(crisis_help)
-    if "weapons" in kinds and (WEAPONS.search(text) or WEAPON_STEPS.search(text)):
+    if "minors" in kinds and content_screen.sexual_with_minors(text, context):
+        return "minors", content_screen.MINORS_REPLY
+    if "weapons" in kinds and (WEAPONS.search(spaced_text) or WEAPON_STEPS.search(spaced_text)):
         return "weapons", WEAPONS_REPLY
-    if "bot_check" in kinds and BOT_CHECK.search(text):
+    if "bot_check" in kinds and BOT_CHECK.search(spaced_text):
         return "bot_check", BOT_CHECK_REPLY
-    if "scam" in kinds and asks_for_a_scam(text):
+    if "scam" in kinds and asks_for_a_scam(spaced_text):
         return "scam", SCAM_REPLY
     return None
 
