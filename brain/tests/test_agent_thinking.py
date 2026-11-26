@@ -116,14 +116,14 @@ class AgentTurnsThatThink(unittest.TestCase):
 
 
 class ReasoningOverHttp(Server):
-    def streamed(self, headers, extra=None):
+    def streamed(self, headers, extra=None, thoughts=("Let me ", "look.")):
         seen = {}
 
         def fake_turn(*args, on_text=None, on_thinking=None, **kwargs):
             seen["asked"] = on_thinking is not None
             if on_thinking:
-                on_thinking("Let me ")
-                on_thinking("look.")
+                for thought in thoughts:
+                    on_thinking(thought)
             on_text("It prints hello.")
             return "It prints hello.", [], {}, None
         body = {"model": "Arty", "stream": True, "messages": [{"role": "user", "content": "hi"}], **(extra or {})}
@@ -142,6 +142,12 @@ class ReasoningOverHttp(Server):
         self.assertEqual("".join(delta.get("content", "") for delta in deltas), "It prints hello.")
         self.assertTrue(raw.startswith(keepalive.WORKING_NOTE))
         self.assertTrue(raw.endswith(b"data: [DONE]\n\n"))
+
+    def test_reasoning_that_crosses_the_minors_line_stops_streaming(self):
+        thoughts = ("Once upon a time. ", "She was 14 ", "and they had sex. ", "The end.")
+        _, deltas, _ = self.streamed({**AGENT_HEADERS, "X-Arty-Reasoning": "1"}, thoughts=thoughts)
+        sent = "".join(delta.get("reasoning_content", "") for delta in deltas)
+        self.assertEqual(sent, "Once upon a time. She was 14 ")
 
     def test_the_request_field_asks_for_it_too(self):
         asked, deltas, _ = self.streamed(AGENT_HEADERS, {"arty_reasoning": True})
