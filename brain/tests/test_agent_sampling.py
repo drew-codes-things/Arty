@@ -17,7 +17,8 @@ import connections  # noqa: E402
 import models  # noqa: E402
 
 SHIPPED = Path(__file__).resolve().parents[1] / "brain.json"
-MIMO = "mimo-v2.6:9b"
+SIDE = "side-model:9b"
+BIG = "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
 QWEN = "qwen3:14b"
 CARD = {"temperature": 0.6, "top_k": 20, "top_p": 0.95}
 AGENT = {
@@ -27,7 +28,7 @@ AGENT = {
     "steady": {"temperature": 0.15},
     "models": {
         "default": {**CARD, "presence_penalty": 0.0},
-        MIMO: {**CARD, "presence_penalty": 0.0},
+        SIDE: {**CARD, "presence_penalty": 0.0},
         QWEN: {**CARD, "min_p": 0.0, "without_thinking": {"temperature": 0.7, "top_p": 0.8}},
         "qwen2.5vl:7b": {"temperature": 0.0001, "repeat_penalty": 1.05},
     },
@@ -42,8 +43,8 @@ def turn_config(model, **agent):
 
 
 class CardSampling(unittest.TestCase):
-    def test_mimo_gets_its_own_generation_config(self):
-        self.assertEqual(models.agent_options(turn_config(MIMO), MIMO, thinks=True),
+    def test_a_listed_model_gets_its_own_generation_config(self):
+        self.assertEqual(models.agent_options(turn_config(SIDE), SIDE, thinks=True),
                          {"temperature": 0.6, "top_k": 20, "top_p": 0.95, "presence_penalty": 0.0, "repeat_penalty": 1.0,
                           "num_predict": 4096, "num_ctx": 24576})
 
@@ -66,7 +67,7 @@ class CardSampling(unittest.TestCase):
         self.assertEqual(models.agent_options(turn_config("qwen2.5vl:7b"), "qwen2.5vl:7b", thinks=True)["repeat_penalty"], 1.0)
 
     def test_the_steady_arm_sends_the_old_single_temperature_to_every_model(self):
-        for model in (MIMO, QWEN, "other:8b"):
+        for model in (SIDE, QWEN, "other:8b"):
             options = models.agent_options(turn_config(model, sampling="steady"), model, thinks=True)
             self.assertEqual(options["temperature"], 0.15, model)
             self.assertNotIn("top_k", options, model)
@@ -74,12 +75,12 @@ class CardSampling(unittest.TestCase):
 
     def test_an_unknown_arm_falls_back_to_the_cards_and_says_so(self):
         with self.assertLogs("brain.models", "WARNING"):
-            options = models.agent_options(turn_config(MIMO, sampling="greedy"), MIMO, thinks=True)
+            options = models.agent_options(turn_config(SIDE, sampling="greedy"), SIDE, thinks=True)
         self.assertEqual(options["temperature"], 0.6)
 
     def test_the_older_flat_block_still_works(self):
         config = {"options": dict(CHAT), "agent_options": {"temperature": 0.15, "num_predict": 4096, "repeat_penalty": 1.0}}
-        self.assertEqual(models.agent_options(config, MIMO, thinks=True),
+        self.assertEqual(models.agent_options(config, SIDE, thinks=True),
                          {"temperature": 0.15, "num_ctx": 24576, "num_predict": 4096, "repeat_penalty": 1.0})
 
 
@@ -153,14 +154,14 @@ class ShippedSampling(unittest.TestCase):
 
     def test_the_shipped_values_match_each_models_card(self):
         entries = self.agent["models"]
-        self.assertEqual({key: entries[MIMO][key] for key in CARD}, CARD)
+        self.assertEqual(entries[BIG], {"temperature": 0.3, "top_k": 20, "top_p": 0.95, "presence_penalty": 0.0})
         self.assertEqual({key: entries[QWEN][key] for key in CARD}, CARD)
         self.assertEqual(entries[QWEN]["without_thinking"], {"temperature": 0.7, "top_p": 0.8})
         self.assertEqual(entries["qwen2.5vl:7b"]["temperature"], 0.0001)
         self.assertEqual({key: entries["default"][key] for key in CARD}, CARD)
 
     def test_the_shipped_file_names_only_the_public_models(self):
-        self.assertEqual(set(self.agent["models"]), {"default", MIMO, QWEN, "qwen2.5vl:7b"})
+        self.assertEqual(set(self.agent["models"]), {"default", BIG, QWEN, "qwen2.5vl:7b"})
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ const ADDRESS_PATTERNS = [
 
 function isPrivateModel(model) {
   if (!model) return false;
-  return PRIVATE_MODEL_LABEL.test(String(model.name || ''));
+  return model.private === true || PRIVATE_MODEL_LABEL.test(String(model.name || ''));
 }
 
 function modelsForAudience(models, presenting) {

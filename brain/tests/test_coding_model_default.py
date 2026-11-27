@@ -17,9 +17,9 @@ import model_choice  # noqa: E402
 import models  # noqa: E402
 
 SHIPPED = json.loads((Path(__file__).resolve().parents[1] / "brain.json").read_text())
-MAIN, VISION = "qwen3:14b", "mimo-v2.6:9b"
-INSTALLED = [{"name": MAIN, "billions": 14.8, "tools": True, "vision": False, "embedding": False, "thinking": True},
-             {"name": VISION, "billions": 9.0, "tools": True, "vision": True, "embedding": False, "thinking": True}]
+MAIN, VISION = "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "qwen2.5vl:7b"
+INSTALLED = [{"name": MAIN, "billions": 34.7, "tools": True, "vision": False, "embedding": False, "thinking": True},
+             {"name": VISION, "billions": 8.3, "tools": True, "vision": True, "embedding": False, "thinking": False}]
 
 
 def found(name):
@@ -29,7 +29,7 @@ def found(name):
 class CodingRunsOnTheMainModel(unittest.TestCase):
     def setUp(self):
         run_turns_offline(self)
-        self.config = {**self.config, "coding_model": SHIPPED["coding_model"], "vision_model": SHIPPED["vision_model"]}
+        self.config = {**self.config, "model": MAIN, "coding_model": SHIPPED["coding_model"], "vision_model": SHIPPED["vision_model"]}
         for name, value in (("find", found), ("installed", lambda: INSTALLED), ("arty_models", lambda: [MAIN, VISION])):
             unittest.mock.patch.object(models, name, side_effect=value).start()
 

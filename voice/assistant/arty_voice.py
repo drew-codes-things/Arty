@@ -38,7 +38,7 @@ STOP_TIMEOUT_SECONDS = 3
 HISTORY_SECONDS = 5 * 60
 HISTORY_MESSAGES = 8
 SLOW_ANSWER_SECONDS = 6
-BRAIN_TIMEOUT_SECONDS = 300
+BRAIN_SILENCE_SECONDS = 120
 CLIENT_NAME = "voice"
 NO_SPEECH_LIMIT = 0.6
 RETRY_SECONDS = (1, 2, 5, 10, 30)
@@ -381,7 +381,7 @@ class Assistant:
                 "messages": [{"role": "system", "content": SPOKEN_STYLE}, *self.conversation.history(),
                              {"role": "user", "content": question}]}
         headers = {"Authorization": f"Bearer {BRAIN_KEY}"}
-        timeout = aiohttp.ClientTimeout(total=BRAIN_TIMEOUT_SECONDS)
+        timeout = aiohttp.ClientTimeout(total=None, sock_read=BRAIN_SILENCE_SECONDS)
         async with self.http.post(f"{BRAIN_URL}/chat/completions", json=body, headers=headers,
                                   timeout=timeout) as response:
             if response.status != 200:

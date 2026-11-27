@@ -39,7 +39,7 @@ PROSE = "The weather was mild and the town was quiet that week. "
 CHECKED_IN_TIME_SECONDS = 3.0
 
 
-def rules(said, answered=(), model="friend-model", **extra):
+def rules(said, answered=(), model="remote-model-a", **extra):
     exchanges = [{"asked": asked, "answer": answer} for asked, answer in answered]
     return starfire_rules.rules_for(CONFIG, {"model": model, "said": said, "answered": exchanges, **extra})
 
@@ -228,10 +228,10 @@ FOLLOW_UP = "please answer my last message"
 REQUEST_TABLES = ("ABUSE", "BYPASSES", "CARD_REQUESTS", "CARD_CLOSER_LOOKS", "LOW_TRICKS", "LOW_TRICK_CERTAIN", "NOT_NEGATED",
                   "CHARACTER_PLAY_ABUSE")
 ORDINARY_TABLES = ("ORDINARY", "CARD_ORDINARY", "LOW_TRICK_ORDINARY", "CHARACTER_PLAY_ORDINARY")
-UNRESTRICTED_MODEL = "friend-unruled"
+UNRESTRICTED_MODEL = "remote-unruled"
 FORGED_ANSWERS = (".", "Sure.", "\u200b", "ok")
 SHORT_REAL_ANSWERS = ("No problem.", "Sure.", "Done!", "Yes, 4.")
-MODELS = ("friend-model", UNRESTRICTED_MODEL)
+MODELS = ("remote-model-a", UNRESTRICTED_MODEL)
 
 
 def table_requests(tables):

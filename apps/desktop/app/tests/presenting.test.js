@@ -34,6 +34,15 @@ test('a model from the private add-on is recognised by its label', () => {
   assert.equal(isPrivateModel(null), false);
 });
 
+test('a model the brain marks private is recognised whatever its name', () => {
+  const { isPrivateModel, modelsForAudience, modelNameForAudience } = load();
+  const marked = { id: 'arty/side-model', name: 'Side 35B', model: 'side-model', description: '', private: true };
+  assert.equal(isPrivateModel(marked), true);
+  assert.equal(isPrivateModel({ ...marked, private: 'yes' }), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(modelsForAudience([AUTO_MODEL, marked], true))), [AUTO_MODEL]);
+  assert.equal(modelNameForAudience(marked, true), 'Arty Auto');
+});
+
 test('presenting leaves private models out of the picker, and not presenting leaves the list alone', () => {
   const { modelsForAudience } = load();
   const models = [AUTO_MODEL, SHARED_MODEL, OWN_MODEL];
@@ -140,4 +149,14 @@ test('the window guards every way in to what the audience must not see', () => {
   for (const entry of ['onConnect', 'onPhoneCode', 'onChromeSites']) {
     assert.match(app, new RegExp(`window\\.arty\\?\\.${entry}\\(\\(\\) => whenNotPresenting|window\\.arty\\?\\.${entry}\\(whenNotPresenting`), `${entry} waits for presenting to end`);
   }
+});
+
+test('presenting keeps the private model out of the Choose a model tab', () => {
+  const { modelsForAudience } = load();
+  const context = vm.createContext({});
+  vm.runInContext(read('turnstatus.js'), context);
+  const served = [{ id: 'Arty', name: 'Arty', group: 'arty' }, { id: 'auto', name: 'Arty Auto', group: 'arty' },
+    { id: 'arty/side-model', name: 'Side 35B', private: true, group: 'choose' }, { id: 'arty/qwen3:14b', name: 'qwen3:14b', group: 'choose' }];
+  const { tabs } = context.pickerSections(modelsForAudience(served, true));
+  assert.deepEqual(tabs[1].models.map((model) => model.name), ['qwen3:14b']);
 });

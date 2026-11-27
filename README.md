@@ -38,7 +38,7 @@ tools all stay at home. It's calm, practical and a bit dry, and it actually does
 you could: it checks your servers, reads your email, keeps reminders and deadlines, sends a morning and evening
 briefing, searches the web privately, and has its own virtual machine to browse and work on.
 
-The brain runs `qwen3:14b` on ArtyEngine, Arty's own model server, on a 12 GB GPU, and everything else - the desktop app, the phone apps, the
+The brain runs one main model (the `model` setting in `brain.json`) on ArtyEngine, Arty's own model server, on a 12 GB GPU, and everything else - the desktop app, the phone apps, the
 voice assistant, the chat bots - talks to it through one API. Every app asks for your own server's address on first
 start, so nothing is tied to anyone else's homelab.
 
@@ -60,7 +60,6 @@ covering how to install it, how to use it, and what it's been run and tested on.
 | [Arty for your browser](extensions/browser/README.md) | Lets Arty Desktop use your own browser (Chrome, Edge, Brave, Chromium, Firefox) | Released: 1.5.1 |
 | [Arty for Quest](apps/beta/quest/README.md) | **Beta.** Your own virtual reality AI, an orb and panels in passthrough | Built from source |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | Arty in your terminal on Linux and Windows, its own repository (ArtyCode) | Own repository |
-| [Arty Code](apps/beta/code/README.md) | **Beta, being replaced by Arty CLI.** The first terminal app | Built from source |
 | [Voice](voice/README.md) | The room mic and speakers hub, and the "Hey Arty" voice assistant | Installed from this repository |
 | [Telegram](chat-bots/telegram/README.md) and [Discord](chat-bots/discord/README.md) bots | Arty in chat apps, owner-only | Installed from this repository |
 | [Arty's PC](arty-pc/README.md) | Scripts for Arty's own computer: its browser agent, terminal, document reader and desktop look | Installed from this repository |
@@ -77,14 +76,14 @@ together: [how to link them](docs/arty-cli-and-starfire.md).
 
 ## Download
 
-Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.7.0**
-([release notes](docs/release-notes-2026-11-26-1.7.0.md)):
+Everything to install is on the [Releases](../../releases) page. The latest release is **Arty 1.8.0**
+([release notes](docs/release-notes-2026-11-27-1.8.0.md)):
 
 | Download | What it is |
 |---|---|
-| `Arty-1.7.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
-| `Arty-Setup-1.7.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
-| `Arty-1.7.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
+| `Arty-1.8.0-x86_64.AppImage` | [Arty Desktop](apps/desktop/README.md) for Linux |
+| `Arty-Setup-1.8.0.exe` | [Arty Desktop](apps/desktop/README.md) for Windows 10 and 11 |
+| `Arty-1.8.0.apk` | [Arty for Android](apps/android/README.md), which asks for your server on first start |
 | `Arty-Browser-Extension-1.8.zip` | [Arty for your browser](extensions/browser/README.md) for Chrome, Edge, Brave and Chromium: unzip it, then **Load unpacked** |
 | `Arty-Browser-Extension-1.8.xpi` | The same extension for Firefox, not signed by Mozilla (see its README) |
 
@@ -145,13 +144,15 @@ The whole list, including checked coding answers, safe browsing and starfire.ai:
 
 ## Limitations
 
-It can still be wrong outside the things handled in code, so check anything important. It writes about 33 tokens a
-second on an RTX 3060, keeps 24,576 tokens of context in a chat, runs one model on the GPU at a time, needs the home
+It can still be wrong outside the things handled in code, so check anything important. It writes about 15 tokens a
+second with the Qwen3.6 35B main on an RTX 3060 (about 31 with `qwen3:14b`), keeps 24,576 tokens of context in a chat, runs one model on the GPU at a time, needs the home
 network for most things, and is built for a single owner. Email is read-only. The details: [limitations](docs/limitations.md).
 
 **Model size:** use a main model of about 7B or above. Smaller models are easier to trick into the wrong action, so
-Arty is not meant for them. Models from that size up are the recommended range; the ones it has been tested with are
-`qwen3:14b` (the main model), `mimo-v2.6:9b` (code and pictures) and `qwen2.5vl:7b` (pictures). No model is immune
+Arty is not meant for them. Models from that size up are the recommended range; the ones it runs on now are the
+Qwen3.6 35B (`hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS`, the main model for chat, code and pictures),
+`qwen3:14b` (runs only when you pick it) and `qwen2.5vl:7b` (pictures for the 14B when you picked it). It was first tested with `qwen3:14b`
+as the main model and `mimo-v2.6:9b` for code and pictures. No model is immune
 to a cleverly worded page or email, which is why Arty's approval checks stay on whichever model you use.
 
 ---

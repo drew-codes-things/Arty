@@ -50,6 +50,7 @@ TURNS_PER_MINUTE = 4
 TURNS_PER_HOUR = 60
 MINUTE_SECONDS = 60
 HOUR_SECONDS = 3600
+PERIOD_NAMES = {MINUTE_SECONDS: "minute", HOUR_SECONDS: "hour"}
 ROOM_TOOL_ROUNDS = 3
 ROOM_REPLY_TOKENS = 500
 ROOM_REPLY_TOKENS_BY_KIND = {room_text.CHAT: ROOM_REPLY_TOKENS, room_text.COUNCIL: 600, room_text.PLAN: 1500,
@@ -152,10 +153,13 @@ class Window:
         self.clock = clock
         self.times: collections.deque = collections.deque()
 
-    def is_full(self) -> bool:
+    def count(self) -> int:
         while self.times and self.clock() - self.times[0] >= self.seconds:
             self.times.popleft()
-        return len(self.times) >= self.most
+        return len(self.times)
+
+    def is_full(self) -> bool:
+        return self.count() >= self.most
 
     def add(self) -> None:
         self.times.append(self.clock())
@@ -168,10 +172,13 @@ class Spending:
         self.clock = clock
         self.spent: collections.deque = collections.deque()
 
-    def seconds_left(self) -> float:
+    def seconds_spent(self) -> float:
         while self.spent and self.clock() - self.spent[0][0] >= self.seconds:
             self.spent.popleft()
-        return max(0.0, self.most_seconds - sum(amount for _, amount in self.spent))
+        return sum(amount for _, amount in self.spent)
+
+    def seconds_left(self) -> float:
+        return max(0.0, self.most_seconds - self.seconds_spent())
 
     def is_full(self) -> bool:
         return self.seconds_left() <= 0
@@ -200,10 +207,16 @@ class OwnerActivity:
                 self.chats -= 1
                 self.last_seen = self.clock()
 
-    def is_busy(self) -> bool:
+    def is_chatting(self) -> bool:
         with self.lock:
-            chatting = self.chats > 0
-        return chatting or self.outside.is_busy()
+            return self.chats > 0
+
+    def is_busy(self) -> bool:
+        return self.is_chatting() or self.outside.is_busy()
+
+    def seen_ago(self) -> float | None:
+        with self.lock:
+            return None if self.last_seen is None else self.clock() - self.last_seen
 
     def quiet_for(self) -> float:
         with self.lock:
@@ -246,6 +259,20 @@ class TurnTime:
             self.paused += self.clock() - began
 
 
+def refused(status: int, message: str, level: int, reason: str, *numbers) -> ApiError:
+    log.log(level, reason, *numbers)
+    return ApiError(status, message)
+
+
+def owner_busy_reason(owner: OwnerActivity) -> str:
+    if owner.is_chatting():
+        return "room turn refused: owner chatting right now"
+    seen_ago = owner.seen_ago()
+    if owner.outside.is_busy() or seen_ago is None:
+        return "room turn refused: outside work running right now"
+    return f"room turn refused: owner active {seen_ago:.0f} s ago"
+
+
 def canonical_address(text: str) -> str | None:
     try:
         address = ipaddress.ip_address(str(text or "").strip().strip("[]").split("%")[0])
@@ -273,24 +300,31 @@ class Gate:
     def admit(self, address: str, allowed: frozenset) -> None:
         caller = canonical_address(address)
         if caller is None or caller not in canonical_addresses(allowed):
-            raise ApiError(401, INVALID_KEY)
+            raise refused(401, INVALID_KEY, logging.WARNING,
+                          "room request refused: caller address is not on the room list")
         with self.lock:
             if self.requests.is_full():
-                raise ApiError(429, TOO_MANY_REQUESTS)
+                raise refused(429, TOO_MANY_REQUESTS, logging.WARNING,
+                              "room request refused: %d requests in the last minute (limit %d)",
+                              self.requests.count(), self.requests.most)
             self.requests.add()
 
     @contextlib.contextmanager
     def turn(self, most_seconds: float = ROOM_TURN_SECONDS, per_hour: float = ROOM_SECONDS_PER_HOUR):
         with self.lock:
             self.spent.most_seconds = per_hour
-            if any(window.is_full() for window in self.turns):
-                raise ApiError(429, TOO_MANY_TURNS)
+            if (full := next((window for window in self.turns if window.is_full()), None)) is not None:
+                raise refused(429, TOO_MANY_TURNS, logging.WARNING,
+                              "room turn refused: %d turns in the last %s (limit %d)",
+                              full.count(), PERIOD_NAMES[full.seconds], full.most)
             if self.spent.is_full():
-                raise ApiError(429, TOO_MUCH_TIME)
+                raise refused(429, TOO_MUCH_TIME, logging.WARNING,
+                              "room turn refused: hourly time budget used (%.0f of %.0f s)",
+                              self.spent.seconds_spent(), self.spent.most_seconds)
             if self.owner.is_active():
-                raise ApiError(429, OWNER_BUSY)
+                raise refused(429, OWNER_BUSY, logging.INFO, "%s", owner_busy_reason(self.owner))
             if not self.answering.acquire(blocking=False):
-                raise ApiError(429, BUSY)
+                raise refused(429, BUSY, logging.INFO, "room turn refused: another room turn is still running")
             for window in self.turns:
                 window.add()
             turn_time = TurnTime(min(most_seconds, self.spent.seconds_left()), self.clock)

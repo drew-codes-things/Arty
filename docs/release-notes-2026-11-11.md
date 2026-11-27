@@ -26,7 +26,7 @@ Everything fixed and added since `d46e1c5`, in two rounds: the first full review
 
 ### Fixed
 - A model that is not downloaded, or an embedding model, is a clear 400 instead of a quiet swap to the main model. A model kept for plain chats can't be given Arty's tools. (N-R5)
-- Ollama being down gives a 503 on `?all=1` and on the any-model path. (N-R6)
+- The model server being down gives a 503 on `?all=1` and on the any-model path. (N-R6)
 - Task links, `/v1/identity` and the calendar answer cleanly on a database error; `days=inf` or `nan` on `/v1/calendar` is a 400. (N-R9)
 - A one-shot reminder is retried at most 10 times. (N-R8)
 - Calendar events can't repeat more than once a day, can't last more than 366 days, and a 29 February schedule is found again after a leap year. (N-A5, N-A6, N-A7)

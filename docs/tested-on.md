@@ -23,7 +23,8 @@
 | qwen3:14b, q8_0 context cache | 12k | 29.6 tok/s | 100% GPU (9.8 GB, cache 1,020 MB instead of 1,920 MB) |
 | qwen3:14b, q8_0 context cache | 24k | 28.6 tok/s | 100% GPU (10.8 GB) |
 | qwen3:14b, q8_0 context cache | 32k | - | 11% spills onto the CPU |
-| mimo-v2.6:9b | - | 53.4 to 53.9 tok/s | 100% GPU (6.6 GB) |
+| mimo-v2.6:9b (the code and picture model until 26 Nov 2026) | - | 53.4 to 53.9 tok/s | 100% GPU (6.6 GB) |
+| Qwen3.6 35B A3B, UD-IQ4_XS (the main model since 26 Nov 2026) | 24k | about 15 tok/s, prompt read at about 37 tok/s | - |
 
 ### qwen2.5:7b and qwen3:14b, same prompts
 

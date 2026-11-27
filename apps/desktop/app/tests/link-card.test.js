@@ -61,7 +61,7 @@ function question(card) {
 
 function loadQuestions(t) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
-  const context = { document: { createElement: (tag) => new FakeElement(tag) }, Date, setTimeout };
+  const context = { document: { createElement: (tag) => new FakeElement(tag), addEventListener() {} }, Date, setTimeout };
   vm.createContext(context);
   vm.runInContext(read('questions.js'), context);
   return context;
@@ -108,4 +108,15 @@ test('the window shows link questions on the link card and reads whether Arty to
   const body = script.slice(start, script.indexOf('function notifyLinkQuestion', start));
   assert.match(body, /linkQuestionCard\(/);
   assert.match(body, /\.ok === true/);
+});
+
+const MARKUP_STEP = 'Let Arty click “<img src=x onerror=alert(1)> 3 < 5 > 2”?';
+
+test('step and link cards show < and > exactly as written, as text and never as markup', (t) => {
+  const { stepQuestionCard, linkQuestionCard } = loadQuestions(t);
+  for (const card of [stepQuestionCard(MARKUP_STEP, () => {}), linkQuestionCard(MARKUP_STEP, async () => true)]) {
+    assert.equal(question(card).textContent, MARKUP_STEP);
+    assert.equal(allElements(card).some((element) => element.tagName === 'img'), false);
+  }
+  assert.doesNotMatch(read('questions.js'), /innerHTML|insertAdjacentHTML/);
 });

@@ -107,6 +107,42 @@ def arty_models() -> list[str]:
         return list(json.load(handle).get("arty_models") or [])
 
 
+def model_labels() -> dict:
+    with open(CONFIG_FILE) as handle:
+        labels = json.load(handle).get("model_labels")
+    return labels if isinstance(labels, dict) else {}
+
+
+def display_name(name: str) -> str:
+    try:
+        labelled = model_labels().get(name)
+    except (OSError, ValueError) as error:
+        log.warning("couldn't read the model labels: %s", error)
+        return name
+    return labelled if isinstance(labelled, str) and labelled.strip() else name
+
+
+ONE_MODEL_REFUSAL = ("Only one model runs on this server ({main}), so there is no other model to hand this to. "
+                     "Do the job yourself.")
+
+
+def main_sees(name: str) -> bool:
+    try:
+        found = find(name)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        log.warning("couldn't ask the engine whether %s can see pictures: %s", name, error)
+        return False
+    return bool(found and found.get("vision") and found.get("tools"))
+
+
+def with_one_model(config: dict) -> dict:
+    if config.get("one_model") is not True or not config.get("model"):
+        return config
+    main = config["model"]
+    seeing = {"vision_model": main} if main_sees(main) else {}
+    return {**config, "coding_model": main, "model_strengths": {}, **seeing}
+
+
 def solo_models() -> list[str]:
     with open(CONFIG_FILE) as handle:
         return list(json.load(handle).get("solo_models") or [])
@@ -126,7 +162,8 @@ def solo_choice(requested: str) -> dict | None:
 def solo_entries() -> list[dict]:
     entries = []
     for _name, model in solo_installed():
-        entries.append({"id": f"{SOLO_PREFIX}{model['name']}", "name": SOLO_LABEL.format(name=model["name"]),
+        entries.append({"id": f"{SOLO_PREFIX}{model['name']}", "name": SOLO_LABEL.format(name=display_name(model["name"])),
+                        "label": display_name(model["name"]),
                         "object": "model", "owned_by": "home", "model": model["name"], "description": SOLO_DESCRIPTION})
     return entries
 
@@ -152,14 +189,37 @@ def is_separate(model: dict) -> bool:
     return _named_in(model, list(separate_models())) and not _named_in(model, arty_models())
 
 
+def helper_models() -> list[str]:
+    try:
+        with open(CONFIG_FILE) as handle:
+            listed = json.load(handle).get("helper_models") or []
+    except (OSError, ValueError) as error:
+        log.warning("couldn't read helper_models from %s: %s", CONFIG_FILE, error)
+        return []
+    return [name for name in listed if isinstance(name, str)] if isinstance(listed, list) else []
+
+
+def is_helper(model: dict) -> bool:
+    return _named_in(model, helper_models())
+
+
 def chat_models() -> list[dict]:
     allowed = toolless_allowed()
     return [model for model in installed() if not model["embedding"] and (model["tools"] or allowed) and in_arty(model)
-            and not is_separate(model)]
+            and not is_separate(model) and not is_helper(model)]
 
 
 def downloaded_chat_models() -> list[dict]:
-    return [model for model in installed() if not model["embedding"] and not kept_solo(model) and not is_separate(model)]
+    return [model for model in installed() if not model["embedding"] and not kept_solo(model) and not is_separate(model)
+            and not is_helper(model)]
+
+
+def is_picked_remote(model: dict | None) -> bool:
+    return bool(model) and is_remote(model["name"]) and not model["embedding"] and (model["tools"] or toolless_allowed())
+
+
+def remote_chat_models() -> list[dict]:
+    return [model for model in installed() if is_picked_remote(model) and not in_arty(model)]
 
 
 def usable(model: dict | None) -> bool:
@@ -446,6 +506,8 @@ def ask(name: str, prompt: str, config: dict, keep_alive=0) -> str:
     """One-shot question to another installed model (no tools, no memory), for delegating a job."""
     if not prompt.strip():
         return "Give the other model the full job to do."
+    if config.get("one_model") is True and name.strip() != config.get("model"):
+        return ONE_MODEL_REFUSAL.format(main=display_name(config.get("model", "")))
     model = find(name.strip())
     if not model:
         return f"{name} isn't installed. {list_text(config['model'])}"

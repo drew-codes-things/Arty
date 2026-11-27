@@ -67,6 +67,8 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -100,6 +102,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.arty.core.Attachment
+import app.arty.core.MainModel
 import app.arty.core.MessageStamp
 import app.arty.core.ModelOption
 import app.arty.data.Conversation
@@ -160,10 +163,13 @@ private fun ChatLayout(vm: ArtyViewModel, drawer: androidx.compose.material3.Dra
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelSheet(models: List<ModelOption>, current: String, onChoose: (String) -> Unit, onDismiss: () -> Unit) {
-    val listed = TurnStatus.pickerModels(models)
+    val picker = TurnStatus.pickerTabs(models)
+    var tab by remember { mutableStateOf(TurnStatus.pickerTab(models, current)) }
+    val listed = picker.tabs.flatMap { it.models } + picker.remote
     val known = models.any { it.id == current }
     val missing = ModelOption(current, TurnStatus.modelLabel(models, current) + if (known || models.isEmpty()) "" else " (not available)", "")
-    val shown = if (listed.any { it.id == current }) listed else listed.take(1) + missing + listed.drop(1)
+    val inTab = picker.tabs[tab].models
+    val shown = if (listed.any { it.id == current } || tab != 0) inTab else inTab + missing
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle(color = ArtyColors.LineStrong) },
@@ -176,7 +182,23 @@ private fun ModelSheet(models: List<ModelOption>, current: String, onChoose: (St
                 Text("Arty isn't reachable, so its models can't be listed right now.", style = MaterialTheme.typography.bodyMedium,
                     color = ArtyColors.TextFaint, modifier = Modifier.padding(8.dp))
             }
+            val drawn = TurnStatus.drawnTabs(picker)
+            TabRow(selectedTabIndex = drawn.indexOf(tab).coerceAtLeast(0), containerColor = Color.Transparent,
+                modifier = Modifier.padding(bottom = 6.dp)) {
+                drawn.forEach { index ->
+                    Tab(selected = tab == index, onClick = { tab = index }, text = { Text(picker.tabs[index].name) })
+                }
+            }
+            if (shown.isEmpty() && models.isNotEmpty()) {
+                Text("No models here for this key.", style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextFaint,
+                    modifier = Modifier.padding(8.dp))
+            }
             shown.forEach { model -> ModelRow(model, selected = model.id == current, onClick = { onChoose(model.id) }) }
+            if (picker.remote.isNotEmpty()) {
+                Text(TurnStatus.REMOTE_SECTION, style = MaterialTheme.typography.labelMedium, color = ArtyColors.TextFaint,
+                    modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 2.dp))
+                picker.remote.forEach { model -> ModelRow(model, selected = model.id == current, onClick = { onChoose(model.id) }) }
+            }
         }
     }
 }
@@ -192,7 +214,7 @@ private fun ModelRow(model: ModelOption, selected: Boolean, onClick: () -> Unit)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(model.name, style = MaterialTheme.typography.titleSmall)
-                if (model.id == TurnStatus.AUTO_ID) {
+                if (model.id == MainModel.ID) {
                     Spacer(Modifier.width(8.dp))
                     Text("Default", style = MaterialTheme.typography.labelSmall, color = ArtyColors.SignalText,
                         modifier = Modifier.clip(CircleShape).background(ArtyColors.SignalSoft).padding(horizontal = 7.dp, vertical = 1.dp))
@@ -323,7 +345,7 @@ private fun MessageList(vm: ArtyViewModel) {
             }
         }
         vm.thinkingSince?.let { since ->
-            item(key = THINKING_KEY) { Box(Modifier.arrival(this, arrivals, "$chatId:$THINKING_KEY:$since")) { Thinking(since, vm.partialReply, vm.thinkingPick) } }
+            item(key = THINKING_KEY) { Box(Modifier.arrival(this, arrivals, "$chatId:$THINKING_KEY:$since")) { Thinking(since, vm.partialReply, vm.thinkingPick, vm.models) } }
         }
     }
 }
@@ -362,7 +384,7 @@ private fun ArtyMessage(message: StoredMessage, vm: ArtyViewModel) {
                 }
                 return@Column
             }
-            ReplyModel(message.report)
+            ReplyModel(message.report, vm.models)
             MarkdownText(message.content)
             PhoneAction.fromJson(message.phoneAction)?.let { action ->
                 ArtyOutlinedButton(onClick = { vm.openPhoneAction(action) }, modifier = Modifier.padding(top = 6.dp)) {
@@ -400,7 +422,7 @@ private fun ArtyAvatar() {
 }
 
 @Composable
-private fun Thinking(since: Long, partial: String?, pick: TurnReport?) {
+private fun Thinking(since: Long, partial: String?, pick: TurnReport?, models: List<ModelOption>) {
     var elapsed by remember { mutableLongStateOf(0L) }
     LaunchedEffect(since) {
         while (true) {
@@ -417,7 +439,7 @@ private fun Thinking(since: Long, partial: String?, pick: TurnReport?) {
                 Spacer(Modifier.width(10.dp))
                 Text("writing$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.TextDim)
             }
-            Column(Modifier.padding(start = 40.dp)) { ReplyModel(pick) }
+            Column(Modifier.padding(start = 40.dp)) { ReplyModel(pick, models) }
             MarkdownText(partial)
         }
         return
@@ -428,13 +450,13 @@ private fun Thinking(since: Long, partial: String?, pick: TurnReport?) {
         Text("thinking$dots", style = MaterialTheme.typography.labelLarge, color = ArtyColors.TextDim, modifier = Modifier.width(96.dp))
         Text("${elapsed}s", style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint)
         Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) { ReplyModel(pick) }
+        Column(Modifier.weight(1f)) { ReplyModel(pick, models) }
     }
 }
 
 @Composable
-private fun ReplyModel(report: TurnReport?) {
-    val label = TurnStatus.replyModelLabel(report)
+private fun ReplyModel(report: TurnReport?, models: List<ModelOption>) {
+    val label = TurnStatus.replyModelLabel(report, models)
     if (label.isEmpty()) return
     Text(label, style = MaterialTheme.typography.labelSmall, color = ArtyColors.TextFaint, maxLines = 1, overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(bottom = 4.dp))

@@ -19,10 +19,10 @@ import media  # noqa: E402
 import model_choice  # noqa: E402
 import models  # noqa: E402
 
-CONFIG = {"model": "qwen3:14b", "coding_model": "mimo:9b", "vision_model": "mimo:9b", "keep_alive": -1, "options": {}}
-MIMO = {"name": "mimo:9b", "billions": 9.0, "tools": True, "vision": True, "embedding": False, "thinking": True}
+CONFIG = {"model": "qwen3:14b", "coding_model": "looker:9b", "vision_model": "looker:9b", "keep_alive": -1, "options": {}}
+LOOKER = {"name": "looker:9b", "billions": 9.0, "tools": True, "vision": True, "embedding": False, "thinking": True}
 QWEN = {"name": "qwen3:14b", "billions": 14.0, "tools": True, "vision": False, "embedding": False, "thinking": True}
-LOOKER_WITHOUT_TOOLS = {**MIMO, "name": "llava:7b", "tools": False}
+LOOKER_WITHOUT_TOOLS = {**LOOKER, "name": "llava:7b", "tools": False}
 PICTURE_PART = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aW1n"}}
 
 
@@ -31,7 +31,7 @@ def with_picture(text):
 
 
 def found(name):
-    return {model["name"]: model for model in (MIMO, QWEN, LOOKER_WITHOUT_TOOLS)}.get(name)
+    return {model["name"]: model for model in (LOOKER, QWEN, LOOKER_WITHOUT_TOOLS)}.get(name)
 
 
 class NewPicture(unittest.TestCase):
@@ -63,7 +63,7 @@ class PictureRouting(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def test_a_new_picture_for_the_main_entry_runs_on_the_vision_model(self):
-        self.assertEqual(model_choice.chat_model(CONFIG, "Arty", "what's the total on this invoice?", True), "arty/mimo:9b")
+        self.assertEqual(model_choice.chat_model(CONFIG, "Arty", "what's the total on this invoice?", True), "arty/looker:9b")
 
     def test_without_a_new_picture_nothing_changes(self):
         self.assertEqual(model_choice.chat_model(CONFIG, "Arty", "what's the total on this invoice?"), "Arty")
@@ -90,7 +90,7 @@ class LookingDuringAPictureTurn(unittest.TestCase):
         self.sent = []
         patches = [
             unittest.mock.patch.object(connections, "load_config", return_value=dict(CONFIG)),
-            unittest.mock.patch.object(attachments, "vision_model", return_value=MIMO),
+            unittest.mock.patch.object(attachments, "vision_model", return_value=LOOKER),
             unittest.mock.patch.object(models, "make_room", return_value=[]),
             unittest.mock.patch.object(connections, "http_json",
                                        side_effect=lambda url, body=None, **_: self.sent.append(body) or {"message": {"content": "an invoice"}}),
@@ -117,14 +117,14 @@ class LookingDuringAPictureTurn(unittest.TestCase):
 
 class PictureKeepAlive(unittest.TestCase):
     def test_a_turn_on_the_vision_model_keeps_it_for_the_look(self):
-        config = {**CONFIG, "model": "mimo:9b", "keep_alive": model_choice.OTHER_MODEL_KEEP_ALIVE}
+        config = {**CONFIG, "model": "looker:9b", "keep_alive": model_choice.OTHER_MODEL_KEEP_ALIVE}
         self.assertEqual(brain.look_keep_alive(config, True), model_choice.OTHER_MODEL_KEEP_ALIVE)
 
     def test_a_turn_on_the_main_model_unloads_the_looker_straight_away(self):
         self.assertEqual(brain.look_keep_alive(dict(CONFIG), False), 0)
 
     def test_a_coding_turn_on_another_model_unloads_the_looker(self):
-        config = {**CONFIG, "model": "coder:7b", "vision_model": "mimo:9b", "keep_alive": "3m"}
+        config = {**CONFIG, "model": "coder:7b", "vision_model": "looker:9b", "keep_alive": "3m"}
         self.assertEqual(brain.look_keep_alive(config, True), 0)
 
 
@@ -144,10 +144,10 @@ class WarmOnUpload(unittest.TestCase):
 
     def test_an_uploaded_picture_loads_the_vision_model_and_the_main_model_comes_back_later(self):
         model_choice.warm_picture_model(dict(CONFIG)).join(5)
-        self.assertEqual(self.room, ["mimo:9b"])
+        self.assertEqual(self.room, ["looker:9b"])
         url, body = self.sent[0]
         self.assertTrue(url.endswith("/api/generate"))
-        self.assertEqual((body["model"], body["keep_alive"]), ("mimo:9b", model_choice.OTHER_MODEL_KEEP_ALIVE))
+        self.assertEqual((body["model"], body["keep_alive"]), ("looker:9b", model_choice.OTHER_MODEL_KEEP_ALIVE))
         self.assertEqual(self.returns[0]["model"], "qwen3:14b")
 
     def test_a_vision_model_already_loaded_is_left_alone(self):

@@ -31,12 +31,12 @@ class ArtyClient(
     private var identityProvenAtMs: Long? = null
 
     fun models(): List<ModelOption> {
-        val reply = request("GET", "/v1/models")
+        val reply = request("GET", "/v1/models?remote=1")
         val listed = listOfNotNull(reply.optJSONObject("auto")) + reply.getJSONArray("data").objects()
         return listed.map {
             ModelOption(
                 it.getString("id"), it.optString("name", it.getString("id")), it.optString("model"), it.optString("description"),
-                it.optBoolean("available", true),
+                it.optBoolean("available", true), it.optString("label"),
             )
         }
     }
@@ -47,7 +47,7 @@ class ArtyClient(
         messages.forEach { history.put(JSONObject().put("role", it.role).put("content", it.contentJson())) }
         // "client": the brain then knows this app can open calls and texts for the user.
         val body = JSONObject().put("model", model).put("messages", history).put("client", "phone")
-            .put("features", JSONArray(listOf("device_actions", "camera")))
+            .put("features", JSONArray(listOf("device_actions", "camera"))).put("arty_named_model", true)
         return request("POST", "/v1/chat/jobs", body).getString("id")
     }
 

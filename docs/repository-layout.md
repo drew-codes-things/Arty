@@ -11,7 +11,6 @@
 | [`apps/ios/`](../apps/ios/) | Arty for iPhone - a Home Screen web app, served by the brain at `/ios/` |
 | [`apps/beta/quest/`](../apps/beta/quest/) | **Beta.** Arty for Quest 3 and 3S, your own virtual reality AI - an orb and panels in passthrough, talking through the voice server |
 | [**Arty CLI**](https://github.com/drew-codes-things/ArtyCode) | Arty in your terminal on Linux and Windows, its own repository (ArtyCode): reads, edits and runs code in your project, asking first. Runs on your Arty; `arty` starts it |
-| [`apps/beta/code/`](../apps/beta/code/) | **Beta, being replaced by Arty CLI.** Arty Code - the first terminal app |
 | [`voice/`](../voice/) | The room mic and speakers hub, and the "Hey Arty" voice assistant |
 | [`extensions/gmail/`](../extensions/gmail/) | Chrome extension that lets Arty's PC read your Gmail |
 | [`extensions/browser/`](../extensions/browser/) | Browser extension (Chrome, Edge, Brave, Chromium, Firefox; Opera and Vivaldi from the unreleased 1.6) that lets Arty Desktop use your own browser |

@@ -23,7 +23,9 @@ import uuid
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import attachments
 import auto_choice
+import named_model
 import browser_apps
 import calendar_feed
 import code_sandbox
@@ -40,6 +42,7 @@ import inbox_tidy
 import keepalive
 import lectures
 import mail_box
+import main_calls
 import media
 import memory_edits
 import model_choice
@@ -115,6 +118,7 @@ TASK_LINK_TROUBLE = "Arty couldn't open that task just now: try again in a minut
 GENERIC_ERROR = "Arty's brain hit an error; the details are in its log."
 MEMORY_DOWN = "Arty's memory store isn't answering; try again in a minute."
 CLIENT_DROPPED_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+CLIENT_GONE_SECONDS = 120
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -148,21 +152,78 @@ def private_text_of_turn(messages: list, client_tools) -> private_text.HiddenTex
 
 
 def run_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
-             agent=False, on_thinking=None, on_model=None, early_text_replaced=False):
+             agent=False, on_thinking=None, on_model=None, early_text_replaced=False, names_a_model=False):
     """One chat turn. Returns (answer, tools_used, raw, client_calls); client_calls is set when the
     model wants the calling app to run one of its own tools, and answer is then whatever text came with it.
     on_text gets the answer's first sentences early (see drafts.py); the answer starts with them unless
     early_text_replaced (the app shows the answer in their place) and a false claim among them was taken back.
     client names the calling app when it says ("phone": the Arty phone app, which can open calls and texts)."""
-    with owner_activity.chatting():
-        answer, tools_used, raw, client_calls = turn_answer(messages, requested_model, client_tools, skip_groups, on_text,
-                                                            client, any_installed, agent, on_thinking, on_model,
-                                                            early_text_replaced)
+    with owner_activity.chatting(), attachments.describing_for_the_turn():
+        try:
+            answer, tools_used, raw, client_calls = turn_answer(messages, requested_model, client_tools, skip_groups, on_text,
+                                                                client, any_installed, agent, on_thinking, on_model,
+                                                                early_text_replaced, names_a_model)
+        except (main_calls.MainModelDown, model_choice.PickedModelGone) as down:
+            return str(down), [], {}, None
     return phone.only_from_code(answer, tools_used), tools_used, raw, client_calls
 
 
+def picker_entries(config: dict, wants_remote: bool) -> list[dict]:
+    main = models.find(config.get("model", ""))
+    listed = [{"id": MODEL_ID, "object": "model", "owned_by": "home", "model": main["name"] if main else "",
+               "description": arty_description(config, main)}]
+    listed += [{"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "name": f"Arty ({models.display_name(m['name'])}{'' if m['tools'] else ', no tools'}"
+                                                                    f"{'' if models.is_available(m) else ', ' + models.OFFLINE_MARK})",
+                "label": models.display_name(m["name"]), "object": "model", "owned_by": "home", "model": m["name"],
+                "description": models.summary(m), "available": models.is_available(m)}
+               for m in models.chat_models() + (models.remote_chat_models() if wants_remote else [])]
+    listed += models.solo_entries()
+    listed += local_addon.listed_models() if local_addon else []
+    return listed
+
+
+def named_candidate(entry: dict) -> named_model.Candidate:
+    label = entry.get("label") or models.display_name(entry.get("model") or entry["id"])
+    also_called = ("main", "default") if entry["id"] == MODEL_ID else ("remote",) if models.is_remote(entry.get("model", "")) else ()
+    return named_model.Candidate(entry["id"], entry.get("model") or entry["id"], label, also_called)
+
+
+def downloaded_entry(model: dict) -> dict:
+    return {"id": f"{models.DROPDOWN_PREFIX}{model['name']}", "model": model["name"], "label": models.display_name(model["name"])}
+
+
+def model_named_in_turn(messages: list, any_installed: bool) -> named_model.Asked | None:
+    if not named_model.may_name_a_model(messages, message_text):
+        return None
+    try:
+        visible = [entry for entry in picker_entries(connections.load_config(), True) if entry.get("model")]
+        downloaded = [downloaded_entry(model) for model in models.downloaded_chat_models()]
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        log.warning("couldn't list the models to find the one named in the message: %s", error)
+        return None
+    shown = {entry["model"] for entry in visible}
+    extra = [entry for entry in downloaded if entry["model"] not in shown]
+    visible, locked = (visible + extra, []) if any_installed else (visible, extra)
+    unique = list({entry["model"]: entry for entry in reversed(visible)}.values())[::-1]
+    return named_model.asked_model(messages, [named_candidate(entry) for entry in unique],
+                                   [named_candidate(entry) for entry in locked], message_text)
+
+
+def named_pick(asked: named_model.Asked) -> dict:
+    staying = {"persist": True, "pick": asked.candidate.id} if asked.persist else {}
+    return {"model": asked.candidate.model, "role": None, "auto": False, **staying}
+
+
 def turn_answer(messages, requested_model, client_tools, skip_groups, on_text, client, any_installed, agent, on_thinking,
-                on_model, early_text_replaced=False):
+                on_model, early_text_replaced=False, names_a_model=False):
+    if names_a_model and (asked := model_named_in_turn(messages, any_installed)):
+        if asked.reply:
+            return asked.reply, [], {}, None
+        requested_model = asked.candidate.id
+        log.info("the message names %s, so this turn runs on it%s", asked.candidate.model,
+                 " and the app's picker moves to it" if asked.persist else "")
+        if on_model:
+            on_model(named_pick(asked))
     if solo := models.solo_choice(requested_model):
         return solo_turn(solo["name"], messages, client)
     try:
@@ -192,7 +253,7 @@ def system_text_of(messages: list) -> str:
 
 
 def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), on_text=None, client="", any_installed=False,
-              agent=False, on_thinking=None, on_model=None, early_text_replaced=False):
+              agent=False, on_thinking=None, on_model=None, early_text_replaced=False, names_a_model=False):
     if agent:
         return agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking, client)
     config = connections.load_config()
@@ -202,7 +263,8 @@ def arty_turn(messages, requested_model="", client_tools=None, skip_groups=(), o
         auto_role, turn_model = auto_choice.choose(config, said, messages)
     else:
         auto_role, turn_model = "", chat_model(config, requested_model, said, has_new_picture(messages))
-    use_requested_model(config, turn_model, any_installed)
+    use_requested_model(config, turn_model, any_installed, by_hand=not auto_role and turn_model == requested_model)
+    attachments.turn_runs_on(config["model"])
     config = content_rules.turn_config(config)
     log.info("this turn runs on %s%s", config["model"], f" (Arty Auto: {auto_role})" if auto_role else "")
     if on_model:
@@ -415,11 +477,13 @@ class ChatJobs:
     def __init__(self):
         self.jobs: dict[str, dict] = {}
         self.pruned: dict[str, None] = {}
+        self.polled: dict[str, float] = {}
         self.lock = threading.Lock()
 
     def prune(self, now: float):
         for old in [k for k, j in self.jobs.items() if now - j["created"] > self.KEEP_SECONDS]:
             del self.jobs[old]
+            self.polled.pop(old, None)
             self.pruned[old] = None
         while len(self.pruned) > PRUNED_JOBS_KEPT:
             del self.pruned[next(iter(self.pruned))]
@@ -427,7 +491,7 @@ class ChatJobs:
     def running(self) -> int:
         return sum(1 for job in self.jobs.values() if job["status"] == "running")
 
-    def start(self, messages, model, client="") -> str:
+    def start(self, messages, model, client="", names_a_model=False) -> str:
         job_id = uuid.uuid4().hex
         with self.lock:
             now = time.time()
@@ -435,15 +499,17 @@ class ChatJobs:
             if self.running() >= MAX_RUNNING_CHAT_JOBS:
                 raise ChatJobs.Busy()
             self.jobs[job_id] = {"status": "running", "created": now}
-        threading.Thread(target=self._run, args=(job_id, messages, model, client), daemon=True).start()
+            self.polled[job_id] = now
+        threading.Thread(target=self._run, args=(job_id, messages, model, client, names_a_model), daemon=True).start()
         return job_id
 
-    def _run(self, job_id, messages, model, client):
+    def _run(self, job_id, messages, model, client, names_a_model=False):
         chosen = {}
         try:
-            answer, tools_used, raw, _ = run_turn(messages, model, on_text=lambda text: self._add_partial(job_id, text),
-                                                  client=client, on_model=lambda pick: self._set_model(job_id, chosen, pick),
-                                                  early_text_replaced=True)
+            with main_calls.answering_while(lambda: self.is_watched(job_id)):
+                answer, tools_used, raw, _ = run_turn(messages, model, on_text=lambda text: self._add_partial(job_id, text),
+                                                      client=client, on_model=lambda pick: self._set_model(job_id, chosen, pick),
+                                                      early_text_replaced=True, names_a_model=names_a_model)
             outcome = {"status": "done", "answer": answer, "tools_used": tools_used,
                        "arty": auto_choice.turn_report(chosen, raw, tools_used)}
         except Exception:
@@ -467,7 +533,14 @@ class ChatJobs:
     def get(self, job_id):
         with self.lock:
             job = self.jobs.get(job_id)
+            if job:
+                self.polled[job_id] = time.time()
             return dict(job) if job else None
+
+    def is_watched(self, job_id) -> bool:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            return bool(job) and time.time() - self.polled.get(job_id, 0.0) < CLIENT_GONE_SECONDS
 
     def expired(self, job_id) -> bool:
         with self.lock:
@@ -674,23 +747,14 @@ class Handler(BaseHTTPRequestHandler):
             reply_size = models.reply_tokens(config)
             return self.send_json(200, {"object": "list", "data": [
                 {"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "object": "model", "owned_by": "home", "model": m["name"],
-                 "description": models.summary(m), "coding": models.is_for_coding(m["name"], coding_name),
+                 "label": models.display_name(m["name"]), "description": models.summary(m), "coding": models.is_for_coding(m["name"], coding_name),
                  "context_tokens": models.context_tokens(config, m["name"]), "reply_tokens": reply_size, "agent_sampling": models.agent_sampling(config, m["name"]),
                  "available": models.is_available(m)}
                 for m in downloaded]})
         if segments in (["v1", "models"], ["models"]):
             listed = [{"id": MODEL_ID, "object": "model", "owned_by": "home"}]
             try:
-                config = connections.load_config()
-                main = models.find(config.get("model", ""))
-                listed[0].update(model=main["name"] if main else "", description=arty_description(config, main))
-                listed += [{"id": f"{models.DROPDOWN_PREFIX}{m['name']}", "name": f"Arty ({m['name']}{'' if m['tools'] else ', no tools'}"
-                                                                                f"{'' if models.is_available(m) else ', ' + models.OFFLINE_MARK})",
-                            "object": "model", "owned_by": "home", "model": m["name"], "description": models.summary(m),
-                            "available": models.is_available(m)}
-                           for m in models.chat_models()]
-                listed += models.solo_entries()
-                listed += local_addon.listed_models() if local_addon else []
+                listed = picker_entries(connections.load_config(), (query.get("remote") or [""])[0] == "1")
             except (urllib.error.URLError, TimeoutError) as error:
                 log.warning("could not list the engine's models: %s", error)
             return self.send_json(200, {"object": "list", "data": listed, "auto": auto_choice.listing(connections.load_config())})
@@ -944,7 +1008,8 @@ class Handler(BaseHTTPRequestHandler):
             messages = valid_messages(request.get("messages"))
             try:
                 # "client": "phone" from the Arty phone app, which can open calls and texts (phone.py).
-                job_id = chat_jobs.start(messages, str(request.get("model") or ""), calling_client(request))
+                job_id = chat_jobs.start(messages, str(request.get("model") or ""), calling_client(request),
+                                         names_a_model=request.get("arty_named_model") is True)
             except ChatJobs.Busy:
                 raise ApiError(503, "Arty is busy with other answers; try again in a moment") from None
             return self.send_json(202, {"id": job_id, "status": "running"})
@@ -1080,13 +1145,18 @@ class Handler(BaseHTTPRequestHandler):
         if max_tokens:
             options["num_predict"] = max_tokens
         models.make_room(model["name"], models.vram_budget(config))
+        is_the_main = model["name"] == config.get("model")
+        kept = config.get("keep_alive", -1) if is_the_main else session_keep_alive(model["name"], VISION_KEEP_ALIVE)
         try:
-            raw = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
-                "model": model["name"], "messages": converted, "stream": False, "options": options,
-                "keep_alive": session_keep_alive(model["name"], VISION_KEEP_ALIVE)}))
+            with main_calls.writing_the_reply():
+                raw = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
+                    "model": model["name"], "messages": converted, "stream": False, "options": options, "keep_alive": kept}))
+            answer = (raw.get("message") or {}).get("content", "")
+        except main_calls.MainModelDown as down:
+            answer = str(down)
         finally:
-            model_choice.main_model_return.schedule(config, VISION_MAIN_RETURN_SECONDS)
-        answer = (raw.get("message") or {}).get("content", "")
+            if not is_the_main:
+                model_choice.main_model_return.schedule(config, VISION_MAIN_RETURN_SECONDS)
         self.send_json(200, {"id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion", "created": int(time.time()), "model": model["name"],
                              "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}]})
 
@@ -1111,6 +1181,7 @@ class Handler(BaseHTTPRequestHandler):
         skip_groups = [g.strip() for g in self.headers.get("X-Arty-Skip-Groups", "").split(",") if g.strip()] if opted_in else []
         any_installed = opted_in and self.headers.get("X-Arty-Any-Model", "") == "1"
         agent = opted_in and self.headers.get("X-Arty-Agent", "") == "1"
+        names_a_model = not agent and (self.headers.get("X-Arty-Named-Model", "") == "1" or request.get("arty_named_model") is True)
         asked_for_reasoning = self.headers.get("X-Arty-Reasoning", "") == "1" or request.get("arty_reasoning") is True
         requested_model = str(request.get("model") or "")
         if any_installed:
@@ -1123,7 +1194,7 @@ class Handler(BaseHTTPRequestHandler):
         if not request.get("stream"):
             try:
                 answer, tools_used, raw, client_calls = run_turn(*turn, client=client, any_installed=any_installed, agent=agent,
-                                                                 on_model=chosen.update)
+                                                                 on_model=chosen.update, names_a_model=names_a_model)
             except WindowOverflow as overflow:
                 return self.send_json(overflow.status, {"error": overflow.details()})
         else:
@@ -1148,11 +1219,11 @@ class Handler(BaseHTTPRequestHandler):
             def send_reasoning(text):
                 send_chunk({"reasoning_content": text})
             try:
-                with stream:
+                with stream, main_calls.answering_while(lambda: stream.open):
                     answer, tools_used, raw, client_calls = run_turn(
                         *turn, on_text=send_early, client=client, any_installed=any_installed, agent=agent,
                         on_thinking=content_screen.GuardedText(send_reasoning, earlier_words(messages), last_user_text(messages))
-                        if agent and asked_for_reasoning else None, on_model=chosen.update)
+                        if agent and asked_for_reasoning else None, on_model=chosen.update, names_a_model=names_a_model)
             except WindowOverflow as overflow:
                 if stream.open:
                     after_early_text = "\n\n" if sent else ""
@@ -1244,7 +1315,8 @@ if __name__ == "__main__":
     code_sandbox.warn_about_a_missing_token()
     notify.listeners.append(record_announcement)
     connect_inbox_tidy()
-    threading.Thread(target=lectures.worker, args=(complete_text, notify.send), name="lectures", daemon=True).start()
+    threading.Thread(target=lectures.worker, args=(complete_text, notify.send), name="lectures",
+                     daemon=True).start()
     threading.Thread(target=worker_loop, name="worker", daemon=True).start()
     threading.Thread(target=scheduler_loop, name="scheduler", daemon=True).start()
     log.info("brain listening on %s:%d", LISTEN_HOST, LISTEN_PORT)

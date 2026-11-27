@@ -75,6 +75,7 @@ open to anyone while every API call still needs both keys (see [docs/cloudflare.
 | `js/manage.js`, `js/updates.js`, `js/tasks.js` | Tasks, calendar, schedules, lectures, memory, approved devices and Updates |
 | `js/memory.js` | Search and the default "About" for the Memory page, where facts Arty remembers can be added, edited and deleted |
 | `js/answerguard.js` | The one-second hold and "New question" flash on approval cards |
+| `js/cardpager.js` | Pages several waiting Allow cards with < and > buttons, a "2 of 3" count and the arrow keys |
 | `js/authorise.js` | The "approve this computer" sheet, and the starfire link and QR code when this browser has no key |
 | `js/qr.js`, `js/vendor/qrcode-generator.js` | Draws QR codes as SVG (qrcode-generator 2.0.4, MIT, see `js/vendor/LICENSE-qrcode-generator.txt`) |
 | `js/setup.js`, `js/setupcode.js`, `js/scanner.js` | First start: scan the link QR code or type the keys |

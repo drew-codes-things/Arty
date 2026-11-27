@@ -228,7 +228,7 @@ def test_the_page_is_read_with_no_tools_and_given_as_untrusted_data(monkeypatch)
     monkeypatch.setattr(own_browser._browser, "read", FakeOwnBrowser().read)
     assert "Best answer: [12] Canberra" in quiz.quiz_answer()
     sent = vision.sent[0]
-    assert "tools" not in sent and sent["model"] == quiz.READ_MODEL
+    assert "tools" not in sent and sent["model"] == look.MODEL
     system, user = sent["messages"]
     assert system["role"] == "system" and "Ignore your rules" not in system["content"]
     assert user["role"] == "user" and user["content"].startswith("[Everything from here to the end marker came from a web page")
@@ -252,3 +252,19 @@ def test_the_answer_step_offers_the_brain_no_tools_that_act(monkeypatch):
     assert {"computer", "email", "tasks", "sharing", "homelab", "memory_admin", "browser", "screen", "windows", "notes",
             "lists", "calendar", "nextcloud", "make_files", "files", "models", "study", "documents"} <= skipped
     assert {"everything_but_search", "recap", "reckoning", "thinking", "weather", "drive", "app_undo", "shopping"} <= skipped
+
+
+def test_quiz_questions_go_to_arty_s_main_model_so_nothing_else_is_loaded(monkeypatch):
+    from process import brain
+    sent = []
+
+    class Reply:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "B"}}]}
+    monkeypatch.setattr(brain, "_base", lambda: "http://brain.test/v1")
+    monkeypatch.setattr(brain, "_headers", lambda **extra: dict(extra))
+    monkeypatch.setattr(quiz.requests, "post", lambda url, json=None, **_: sent.append(json) or Reply())
+    assert quiz.ask_model("Which one?") == "B"
+    assert sent[0]["model"] == "Arty"

@@ -13,7 +13,7 @@ going quiet after browser steps.
   and Chromium (unzip it and choose **Load unpacked**). `Arty-Browser-Extension-1.5.0.xpi` is for Firefox. It is not
   signed by Mozilla, so normal Firefox only loads it as a temporary add-on; Firefox ESR, Developer Edition and
   Nightly can install it once `xpinstall.signatures.required` is `false`.
-- **The models get a 24,576-token window** instead of 12,288. `provision.sh` sets the same size for Ollama, so
+- **The models get a 24,576-token window** instead of 12,288. `provision.sh` sets the same size for the model server, so
   models are no longer loaded twice at two sizes.
 - **New settings in `brain.json`:** `agent_options` (sampling for coding agents, per model) and `model_windows` (a
   window size for one model, off by default).
@@ -28,11 +28,11 @@ going quiet after browser steps.
 - **Agent turns report how long each step took** on the GPU, including whether a model had to be loaded.
 
 ### Fixed
-- **No more empty replies after browser steps.** When Ollama dropped a tool call the model asked for, the brain now
+- **No more empty replies after browser steps.** When the model server dropped a tool call the model asked for, the brain now
   recovers it instead of answering with nothing. If a reply is still empty after steps on your computer, Arty says
   how far it got instead of "I lost my train of thought".
 - **Arty only names the tools it really has.** The instructions list the tools offered in each chat by their real
-  names, so the model no longer asks for tools that are missing (which Ollama dropped without a word).
+  names, so the model no longer asks for tools that are missing (which the model server dropped without a word).
 - **In your browser, Arty only does what you asked.** It never clicks subscribe, like, follow or buy unless you ask,
   and after opening a video it tells you which one and whether it is playing.
 - Steps Arty already took in your browser count as using tools, so an honest answer after them is no longer

@@ -5,7 +5,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import call_defaults
 import engine_guard
+import main_calls
 import models
 import owner
 import web_host
@@ -24,6 +26,12 @@ USER_NAME = owner.configured_name(CONFIG_FILE)
 
 
 def http_json(url, body=None, headers=None, timeout=600):
+    def send(chosen):
+        return call_defaults.written_again_if_cut_off(chosen, lambda asked: engine_or_plain_json(url, asked, headers, timeout))
+    return main_calls.sent(url, call_defaults.with_call_defaults(url, body), send)
+
+
+def engine_or_plain_json(url, body=None, headers=None, timeout=600):
     guard = engine_guard.current()
     if guard is not None and body is not None and engine_guard.is_generation(url):
         return engine_guard.guarded_call(url, body, guard, timeout)
@@ -43,6 +51,14 @@ def plain_json(url, body=None, headers=None, timeout=600):
 
 
 def stream_chat(body, on_text, timeout=600, on_thinking=None):
+    url = f"{ARTY_ENGINE_URL}/api/chat"
+
+    def send(chosen, hearing):
+        return call_defaults.written_again_if_cut_off(chosen, lambda asked: engine_stream(asked, hearing, timeout, on_thinking))
+    return main_calls.streamed(url, call_defaults.with_call_defaults(url, body), on_text, send)
+
+
+def engine_stream(body, on_text, timeout=600, on_thinking=None):
     url = f"{ARTY_ENGINE_URL}/api/chat"
     if (guard := engine_guard.current()) is not None:
         return engine_guard.guarded_call(url, body, guard, timeout, on_text, on_thinking)
@@ -88,7 +104,7 @@ def load_config():
     config["persona"] = Path(persona_file).read_text().strip() if persona_file and Path(persona_file).exists() else ""
     config["lookups"] = with_homelab_names(config.get("lookups", []), HOMELAB_NAMES)
     config["approval"] = with_own_app_hosts(config.get("approval", {}), own_app_hosts())
-    return config
+    return models.with_one_model(config)
 
 
 def host_of(address) -> str:
@@ -239,7 +255,8 @@ def complete_text(prompt: str, json_mode: bool = False, think: bool | None = Non
                                       **({"format": "json"} if json_mode else {})})
     wanted = (not json_mode and thinking_for(config, writing_job=True)) if think is None else think
     body = with_thinking(body, wanted)
-    return (http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body).get("message") or {}).get("content") or ""
+    with main_calls.writing_the_reply():
+        return (http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body).get("message") or {}).get("content") or ""
 
 
 def classify_text(prompt: str) -> str:

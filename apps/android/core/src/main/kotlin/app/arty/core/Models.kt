@@ -55,6 +55,7 @@ data class ModelOption(
     val model: String = "",
     val description: String = "",
     val available: Boolean = true,
+    val label: String = "",
 )
 
 /** A background task. When [status] is "waiting", [waitingKind] is "approval" or "user". */

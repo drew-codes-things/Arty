@@ -124,7 +124,8 @@ class ArtysOwnNotices(unittest.TestCase):
                 unittest.mock.patch.object(connections, "load_config", return_value={}), \
                 unittest.mock.patch.object(scheduler.threading, "Thread", lambda **options: started.append(options) or unittest.mock.Mock()):
             scheduler.start_email_watch()
-        self.assertIs(started[0]["args"][2], notify.send)
+        self.assertIs(started[0]["target"], scheduler.email_watch.check_new)
+        self.assertIs(started[0]["args"][-1], notify.send)
 
 
 class NotifyTool(unittest.TestCase):

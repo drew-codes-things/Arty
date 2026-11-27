@@ -37,7 +37,8 @@ class ChosenModel(unittest.TestCase):
         self.addCleanup(unittest.mock.patch.stopall)
 
     def test_without_opting_in_only_arty_models_are_used(self):
-        self.assertEqual(brain.chosen_model("main:1b", "arty/qwen2.5:72b", any_installed=False), "main:1b")
+        with self.assertRaises(model_choice.PickedModelGone):
+            brain.chosen_model("main:1b", "arty/qwen2.5:72b", any_installed=False)
         self.assertEqual(brain.chosen_model("main:1b", "arty/qwen3:14b", any_installed=False), "qwen3:14b")
 
     def test_opting_in_allows_anything_downloaded_except_embedding_models(self):
@@ -120,9 +121,9 @@ class ListingEverything(Server):
         self.assertEqual(models.context_tokens({"options": {"num_ctx": "lots"}}), models.DEFAULT_CONTEXT_TOKENS)
 
     def test_the_full_list_marks_the_coding_model_and_coder_models(self):
-        self.assertTrue(models.is_for_coding("mimo-v2.6:9b", "mimo-v2.6:9b"))
+        self.assertTrue(models.is_for_coding("side-model:9b", "side-model:9b"))
         self.assertTrue(models.is_for_coding("qwen2.5-coder:14b", ""))
-        self.assertFalse(models.is_for_coding("qwen3:14b", "mimo-v2.6:9b"))
+        self.assertFalse(models.is_for_coding("qwen3:14b", "side-model:9b"))
         self.assertFalse(models.is_for_coding("qwen3:14b", ""))
 
     def test_the_engine_being_down_is_a_clear_503(self):

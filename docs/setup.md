@@ -47,7 +47,7 @@ Install [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine) as its REA
 run, `ai-pull <model>` does the same):
 
 ```bash
-for model in qwen3:14b mimo-v2.6:9b nomic-embed-text; do
+for model in hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS qwen3:14b qwen2.5vl:7b nomic-embed-text; do
   curl -fsS http://127.0.0.1:11438/api/pull -d "{\"model\": \"$model\", \"stream\": false}"
 done
 ```
@@ -177,11 +177,10 @@ Follow [arty-pc/README.md](../arty-pc/README.md) to sign Arty's browser in to th
 | App | First start |
 |---|---|
 | [Arty Desktop](../apps/desktop/README.md) | Asks for the brain's address (`http://<AI_ADDRESS>:8081/v1`) and the API key, and optionally the Cloudflare address and Access token. **Connect to another Arty…** in the tray menu changes them |
-| [Arty for Android](../apps/android/README.md) | Install `Arty-1.7.0.apk`; it asks for the same details and keeps them encrypted on the phone |
+| [Arty for Android](../apps/android/README.md) | Install `Arty-1.8.0.apk`; it asks for the same details and keeps them encrypted on the phone |
 | [Arty for iPhone](../apps/ios/README.md) | Open `https://<your address>/ios/` in Safari and add it to the Home Screen; it asks for the API key. It also approves new computers, and More > **Approved devices** lists and turns them off |
 | [Arty for Quest](../apps/beta/quest/README.md) (beta) | Asks for the voice server's headset address and key |
 | [Arty CLI](https://github.com/drew-codes-things/ArtyCode) | `./install.sh` (Debian) or `install.ps1` (Windows) from the ArtyCode repository, then `arty login`: an Arty API key, or approving the computer in your browser |
-| [Arty Code](../apps/beta/code/README.md) (beta, being replaced) | `pipx install ./apps/beta/code`, then `arty-code setup` asks for the same details as Arty Desktop |
 | [Arty for your browser](../extensions/browser/README.md) | Lets Arty Desktop use your own browsers: Chrome, Edge, Brave, Chromium or Firefox. Choosing one by name, and Opera and Vivaldi, need extension 1.6 and Arty Desktop 1.5.9 or newer; pairing without a code needs extension 1.7 and Arty Desktop 1.6.0 |
 
 Away from home, the phone apps need [the Cloudflare link](cloudflare.md). To set a phone up, scan the QR code

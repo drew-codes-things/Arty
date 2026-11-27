@@ -5,7 +5,7 @@ import { renderMarkdown, speakableText } from "./markdown.js";
 import { stampLabel } from "./messagestamp.js";
 import { allowCard, isCameraAction, phoneLink, photoQuestion, splitPhoneAction } from "./phone.js";
 import { loadPreferences, savePreferences } from "./settings.js";
-import { chatStats, modelLabel, pickerModels, replyModelLabel, statusLine } from "./turnstatus.js";
+import { REMOTE_SECTION, chatStats, defaultModel, drawnTabs, modelLabel, persistedPick, pickerTab, pickerTabs, replyModelLabel, statusLine } from "./turnstatus.js";
 
 const THINKING_TICK_MS = 1000;
 const SPEECH_LANGUAGE = "en-GB";
@@ -31,7 +31,13 @@ export class ChatView {
   }
 
   buildLayout(container) {
-    this.modelSelect = h("select", { id: "model", "aria-label": "Model", onchange: () => this.chooseModel(this.modelSelect.value) });
+    this.modelName = h("span", { class: "model-name" });
+    this.modelButton = h("button", { type: "button", id: "model", class: "model-pill", "aria-haspopup": "listbox", "aria-expanded": "false",
+      onclick: () => this.toggleModelPanel() }, this.modelName);
+    this.modelTabs = h("div", { class: "model-tabs", role: "tablist" });
+    this.modelChoices = h("div", { class: "model-choices" });
+    this.modelPanel = h("div", { class: "model-panel", role: "dialog", "aria-label": "Models", hidden: true }, this.modelTabs, this.modelChoices);
+    this.modelTab = null;
     this.messageList = h("div", { class: "messages", "aria-live": "polite" });
     this.fileInput = h("input", { type: "file", multiple: true, hidden: true, onchange: () => this.attach([...this.fileInput.files]) });
     this.cameraInput = h("input", { type: "file", accept: "image/*", capture: "environment", hidden: true,
@@ -47,7 +53,7 @@ export class ChatView {
       this.send();
     });
     this.statusBar = h("div", { class: "status-bar", "aria-label": "Chat status", hidden: true });
-    container.replaceChildren(h("div", { class: "model-row" }, h("label", { for: "model" }, "Model"), this.modelSelect), this.messageList, composer, this.statusBar);
+    container.replaceChildren(h("div", { class: "model-row" }, h("label", { for: "model" }, "Model"), this.modelButton, this.modelPanel), this.messageList, composer, this.statusBar);
   }
 
   start() {
@@ -68,21 +74,53 @@ export class ChatView {
   }
 
   renderModels() {
-    const choices = pickerModels(this.models);
-    const options = choices.map((model) => h("option", { value: model.id, title: model.description || null }, model.name));
-    if (!choices.some((model) => model.id === this.current.model)) {
-      const known = this.models.some((model) => model.id === this.current.model);
-      const label = modelLabel(this.models, this.current.model);
-      options.splice(1, 0, h("option", { value: this.current.model }, `${label}${known || !this.models.length ? "" : " (not available)"}`));
+    if (!this.current.messages.length && this.models.length && !this.models.some((model) => model.id === this.current.model)) {
+      this.current = { ...this.current, model: defaultModel(this.models) };
     }
-    this.modelSelect.replaceChildren(...options);
-    this.modelSelect.value = this.current.model;
+    this.modelName.textContent = this.currentModelName();
+    const { tabs, remote } = pickerTabs(this.models);
+    const shown = this.modelTab ?? pickerTab(this.models, this.current.model);
+    this.modelTabs.replaceChildren(...drawnTabs(this.models).map((tab) => h("button", {
+      type: "button", role: "tab", class: "model-tab", "aria-selected": String(tab.index === shown),
+      onclick: () => this.showModelTab(tab.index),
+    }, tab.name)));
+    const choices = tabs[shown].models.map((model) => this.modelChoice(model));
+    if (!choices.length) choices.push(h("p", { class: "model-empty" }, this.models.length ? "No models here for this key." : "Arty's models can't be listed right now."));
+    const remoteSection = remote.length ? [h("p", { class: "model-section" }, REMOTE_SECTION), ...remote.map((model) => this.modelChoice(model))] : [];
+    this.modelChoices.replaceChildren(h("div", { role: "listbox", "aria-label": tabs[shown].name }, ...choices, ...remoteSection));
+  }
+
+  currentModelName() {
+    const known = this.models.some((model) => model.id === this.current.model);
+    const label = modelLabel(this.models, this.current.model);
+    return `${label}${known || !this.models.length ? "" : " (not available)"}`;
+  }
+
+  modelChoice(model) {
+    const chosen = model.id === this.current.model;
+    return h("button", { type: "button", role: "option", class: "model-choice", "aria-selected": String(chosen), title: model.description || null,
+      onclick: () => { this.chooseModel(model.id); this.toggleModelPanel(false); } },
+    h("span", { class: "model-choice-name" }, model.name),
+    model.description ? h("span", { class: "model-choice-detail" }, model.description) : null);
+  }
+
+  showModelTab(index) {
+    this.modelTab = index;
+    this.renderModels();
+  }
+
+  toggleModelPanel(open = this.modelPanel.hidden) {
+    this.modelPanel.hidden = !open;
+    this.modelButton.setAttribute("aria-expanded", String(open));
+    this.modelTab = null;
+    if (open) this.renderModels();
   }
 
   chooseModel(model) {
     savePreferences(this.storage, { modelChoice: model });
     this.current = { ...this.current, model };
     if (this.current.messages.length) this.current = this.store.save(this.current);
+    this.renderModels();
   }
 
   conversations() {
@@ -226,7 +264,11 @@ export class ChatView {
     this.turn = null;
     const stored = this.store.get(conversationId);
     if (!stored) return this.render();
-    const updated = this.store.save({ ...stored, messages: [...stored.messages, { ...reply, sent: Date.now() }], pendingJobId: null });
+    const switched = persistedPick(reply.arty);
+    if (switched) savePreferences(this.storage, { modelChoice: switched });
+    const updated = this.store.save({
+      ...stored, ...(switched ? { model: switched } : {}), messages: [...stored.messages, { ...reply, sent: Date.now() }], pendingJobId: null,
+    });
     if (this.current.id === conversationId) this.current = updated;
     this.onConversationsChanged();
     this.render();
@@ -280,7 +322,7 @@ export class ChatView {
   thinkingElement() {
     const partial = h("div", { class: "bubble" });
     partial.innerHTML = renderMarkdown(splitPhoneAction(this.turn.partial).text);
-    const pickLabel = replyModelLabel(this.turn.pick);
+    const pickLabel = replyModelLabel(this.turn.pick, this.models);
     return h("div", { class: "thinking" },
       h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
       h("span", { class: "elapsed" }, "Thinking..."),
@@ -302,7 +344,7 @@ export class ChatView {
       h("button", { type: "button", class: "link-button", onclick: () => this.copy(message.content) }, "Copy"),
     ];
     if (message.failed && isLast && !this.turn) actions.push(h("button", { type: "button", class: "link-button accent", onclick: () => this.retry() }, "Retry"));
-    const modelLabel = replyModelLabel(message.arty);
+    const modelLabel = replyModelLabel(message.arty, this.models);
     return h("div", { class: `message assistant${message.failed ? " failed" : ""}` },
       modelLabel ? h("div", { class: "message-model" }, modelLabel) : null,
       bubble,

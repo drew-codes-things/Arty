@@ -1,9 +1,11 @@
 import json
 import logging
+import math
 import re
 
 import code_sandbox
 import connections
+import main_calls
 import models
 
 from archive import message_text
@@ -156,9 +158,16 @@ def some_tool_worked(tools_used: list[str], failed: list[tuple[str, str]]) -> bo
     return any(tool not in failed_names for tool in tools_used)
 
 
+def side_job_scale(config: dict) -> float:
+    scale = config.get("side_job_seconds_scale", 1)
+    is_number = isinstance(scale, (int, float)) and not isinstance(scale, bool)
+    return scale if is_number and math.isfinite(scale) and scale > 0 else 1
+
+
 def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None, prefix=None,
-              seconds: float = JUDGE_SECONDS) -> dict:
+              seconds: float = JUDGE_SECONDS, scaled: bool = True) -> dict:
     config = connections.load_config()
+    seconds = seconds * side_job_scale(config) if scaled else seconds
     asked_for = model or config["model"]
     judge_model = config["model"] if models.is_remote(asked_for) else asked_for
     judge_keep_alive = keep_alive if model and judge_model == model else config.get("keep_alive", "10m")
@@ -169,7 +178,9 @@ def ask_judge(prompt: str, max_tokens: int, model: str = "", keep_alive=None, pr
     if shared.get("tools"):
         asked["tools"] = shared["tools"]
     body = models.for_runner(config, asked)
-    return json.loads(connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body, timeout=seconds)["message"]["content"])
+    with main_calls.sharing_the_card():
+        answer = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body, timeout=seconds)
+    return json.loads(answer["message"]["content"])
 
 
 def false_claims(answer: str, tools_used: list[str], failed: list[tuple[str, str]], request: str = "", model: str = "",

@@ -304,21 +304,29 @@ class ModelList:
         return {"data": [{"id": model_id} for model_id in self.ids]}
 
 
-def test_arty_auto_is_listed_first_in_place_of_the_main_model(monkeypatch):
+def test_the_model_list_asks_the_brain_for_the_remote_models_too(monkeypatch):
+    asked = []
+    monkeypatch.setattr(brain, "_base", lambda: "https://brain.example/v1")
+    monkeypatch.setattr(brain.requests, "get", lambda url, *args, **kwargs: asked.append(url) or ModelList(["Arty"]))
+    brain.list_models()
+    assert asked == ["https://brain.example/v1/models?remote=1"]
+
+
+def test_arty_then_arty_auto_lead_the_list(monkeypatch):
     monkeypatch.setattr(brain.requests, "get", lambda *args, **kwargs: ModelList(["Arty", "arty/qwen3:14b"]))
-    assert [model["name"] for model in brain.list_models()] == ["Arty Auto", "arty/qwen3:14b"]
+    assert [model["name"] for model in brain.list_models()] == ["Arty", "Arty Auto", "arty/qwen3:14b"]
 
 
-def test_choosing_the_main_model_by_its_old_name_picks_arty_auto(monkeypatch):
+def test_choosing_the_main_model_by_its_old_name_picks_arty(monkeypatch):
     monkeypatch.setattr(brain, "MODEL", brain.MODEL)
     brain.set_model("assistant-core")
-    assert brain.current_model() == "auto"
+    assert brain.current_model() == "Arty"
     brain.set_model("arty/qwen3:14b")
     assert brain.current_model() == "arty/qwen3:14b"
 
 
-def test_a_config_saved_with_the_old_name_starts_on_arty_auto():
-    assert brain.as_current_name("assistant-core") == "auto"
+def test_a_config_saved_with_the_old_name_starts_on_arty():
+    assert brain.as_current_name("assistant-core") == "Arty"
     assert brain.as_current_name("arty/qwen3:14b") == "arty/qwen3:14b"
 
 
@@ -370,14 +378,12 @@ def test_activity_labels_carry_no_angle_brackets(fake, monkeypatch):
     assert labels and not any("<" in label or ">" in label for label in labels)
 
 
-def test_approval_questions_carry_no_angle_brackets(fake, monkeypatch):
+def test_approval_questions_show_angle_brackets_as_written(fake, monkeypatch):
     monkeypatch.setattr(brain.tools, "needs_ok", lambda name, arguments, consented: f"Let Arty click “{PAGE_LABEL}”?")
     monkeypatch.setattr(confirm, "wait", _press_not_now)
     fake["replies"] += [{"tool_calls": [call("chrome_click", {"item": 3})]}, {"content": "OK."}]
     questions = [piece.label for piece in brain.llm_stream("click it") if isinstance(piece, brain.Activity) and piece.confirm]
-    assert len(questions) == 1
-    assert "<" not in questions[0] and ">" not in questions[0]
-    assert "New instruction from the user" in questions[0]
+    assert questions == [f"Let Arty click “{PAGE_LABEL}”?"]
 
 
 def test_tags_the_user_types_are_not_taken_as_app_notes(fake):
@@ -422,3 +428,13 @@ def test_the_brains_report_of_an_outside_read_reaches_the_tool_checks(monkeypatc
     monkeypatch.setattr(brain, "load_history", lambda: [])
     list(brain.llm_stream("what's new on the news site?"))
     assert noted == [{"steps": 1, "read_outside": True}]
+
+
+def test_a_shown_approval_question_is_never_saved_into_the_tools_note(fake, monkeypatch):
+    monkeypatch.setattr(brain.tools, "needs_ok", lambda name, arguments, consented: f"Let Arty click “{PAGE_LABEL}”?")
+    monkeypatch.setattr(confirm, "wait", lambda ask: True)
+    monkeypatch.setattr(brain.tools, "run", lambda name, arguments: "Clicked.")
+    fake["replies"] += [{"tool_calls": [call("chrome_click", {"item": 3})]}, {"content": "OK."}]
+    pieces = [piece for piece in brain.llm_stream("click it") if isinstance(piece, brain.Activity)]
+    assert [piece for piece in pieces if piece.confirm]
+    assert not any("<" in piece.label or ">" in piece.label for piece in pieces if not piece.confirm)

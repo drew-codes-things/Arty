@@ -7,9 +7,7 @@ from process import browser
 from process import learning_pages
 from process import own_browser
 
-QUIZ_MODEL = "qwen3:14b"
-PICTURE_MODEL = "mimo-v2.6:9b"
-READ_MODEL = PICTURE_MODEL
+QUIZ_MODEL = "Arty"
 READ_TOKENS = 800
 PAGE_TEXT_CHARS = 6000
 CHOICES_KEPT_FOR_REPLIES = 2
@@ -109,7 +107,7 @@ def read_without_tools(instructions, page):
 
     try:
         out = look.client().chat.completions.create(
-            model=READ_MODEL, temperature=0, max_tokens=READ_TOKENS,
+            model=look.MODEL, temperature=0, max_tokens=READ_TOKENS,
             messages=[{"role": "system", "content": instructions}, {"role": "user", "content": page}])
     except Exception as error:
         raise QuizError(f"the page couldn't be read ({type(error).__name__})") from None
@@ -120,7 +118,7 @@ def describe_picture(question, image_data_url):
     from process.vision import look
 
     out = look.client().chat.completions.create(
-        model=PICTURE_MODEL, temperature=0, max_tokens=200,
+        model=look.MODEL, temperature=0, max_tokens=200,
         messages=[{"role": "user", "content": [{"type": "text", "text": PICTURE_PROMPT.format(question=question)},
                                                {"type": "image_url", "image_url": {"url": image_data_url}}]}])
     return (out.choices[0].message.content or "").strip()

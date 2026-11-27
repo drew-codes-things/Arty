@@ -53,7 +53,7 @@ What the brain takes from the caller as given:
   the archive. From any other caller they are left in the message as the user's own words, so the safety check reads them.
 - **The caller's own tools**, only when it sends `X-Arty-Client-Tools: 1` (or `"arty_client_tools": true`). The model
   may ask the caller to run them; the brain never runs them itself. The caller is responsible for asking its user first
-  (the desktop app, Arty CLI and Arty Code all do).
+  (the desktop app and Arty CLI both do).
 - **`X-Arty-Skip-Groups`**, so the brain doesn't also offer its own browser or screen tools. This only removes
   tools; it can't add any.
 - **`X-Arty-Any-Model: 1`** together with client tools lets the request name any model downloaded on the AI server,

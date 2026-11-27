@@ -19,6 +19,7 @@ import honesty  # noqa: E402
 import content_screen  # noqa: E402
 import models  # noqa: E402
 import prompting  # noqa: E402
+import screen_review  # noqa: E402
 import shortcuts  # noqa: E402
 import starfire_rules  # noqa: E402
 
@@ -31,12 +32,12 @@ SHIPPED_RULES = {key: SHIPPED[key] for key in (content_rules.UNRESTRICTED_MODELS
                                                content_rules.REMOTE_TOOLS, content_rules.REMOTE_DESKTOP_TOOLS)}
 SAFETY_HEADING = "Never help anyone hurt people"
 PERSONA, GENERAL, SAFETY = "You are Arty, warm and direct.", "Use your tools.", "SAFETY RULES: turn down harm."
-REMOTE = "remote/starfire/friend-model"
+REMOTE = "remote/starfire/remote-model-a"
 REMOTE_UNRESTRICTED = "remote/starfire/big-model-unruled"
 UNRESTRICTED_PATTERNS = ["*-abl", "*-abl-*", "*unruled*", "*freeform*"]
 UNRESTRICTED_NAMES = ("trial-model-9b-abl", "trial-model-8b-abl", "own-freeform", "Freeform",
                       "big-model-unruled", "remote/starfire/llama-3-unruled:8b", REMOTE_UNRESTRICTED)
-RESTRICTED_NAMES = ("qwen3:14b", "mimo-v2.6:9b", REMOTE, "capable-coder:7b", "hf.co/owner/table-model:q8_0")
+RESTRICTED_NAMES = ("qwen3:14b", "side-model:9b", REMOTE, "capable-coder:7b", "hf.co/owner/table-model:q8_0")
 CONFIG = {"model": "qwen3:14b", "persona": PERSONA, "system_prompt": GENERAL, "safety_prompt": SAFETY, "options": {},
           "tool_groups": {}, "approval": {}, **SHIPPED_RULES, content_rules.UNRESTRICTED_MODELS: UNRESTRICTED_PATTERNS}
 CLIENT_SYSTEM = "You are a coding agent working in /home/sam/project."
@@ -241,8 +242,8 @@ class JudgesStayLocal(unittest.TestCase):
         with unittest.mock.patch.object(connections, "load_config", return_value=dict(CONFIG)), \
                 unittest.mock.patch.object(connections, "http_json",
                                            side_effect=lambda url, body=None, **_: sent.append(body) or {"message": {"content": "{}"}}):
-            honesty.ask_judge("check this", 64, "mimo-v2.6:9b", "3m")
-        self.assertEqual(sent[0]["model"], "mimo-v2.6:9b")
+            honesty.ask_judge("check this", 64, "side-model:9b", "3m")
+        self.assertEqual(sent[0]["model"], "side-model:9b")
 
 
 class ToolAllowlist(unittest.TestCase):
@@ -499,7 +500,7 @@ class RemoteTurns(unittest.TestCase):
 
     def test_the_minors_guard_leaves_other_requests_alone(self):
         for said, _ in MINORS_ALLOWED:
-            with self.subTest(said=said):
+            with self.subTest(said=said), unittest.mock.patch.object(screen_review, "closer_look", return_value=False):
                 _, used, _, _ = self.chat_turn(REMOTE_UNRESTRICTED, said, {"role": "assistant", "content": "Fine."})
                 self.assertNotIn("safety_minors", used)
 
@@ -513,7 +514,7 @@ class RemoteTurns(unittest.TestCase):
 
 class UnrestrictedNames(unittest.TestCase):
     def test_only_the_last_part_of_a_name_makes_a_model_unrestricted(self):
-        for name in ("remote/friend-abl-box/llama3:8b", "remote/unruled.example/llama3", "remote/freeform-server/qwen3:14b"):
+        for name in ("remote/remote-abl-box/llama3:8b", "remote/unruled.example/llama3", "remote/freeform-server/qwen3:14b"):
             with self.subTest(name=name):
                 self.assertFalse(content_rules.is_unrestricted(CONFIG, name))
         for name in ("remote/starfire/model-abl:latest", "remote/starfire/hf.co/someone/Llama-3-Unruled-GGUF:Q4_K_M"):
@@ -523,26 +524,26 @@ class UnrestrictedNames(unittest.TestCase):
 
 class RulesForStarfire(unittest.TestCase):
     def test_the_brain_decides_unrestricted_from_its_own_list(self):
-        told_unrestricted = starfire_rules.rules_for(CONFIG, {"model": "friend-model", "unrestricted": True, "said": WEAPON_REQUEST})
+        told_unrestricted = starfire_rules.rules_for(CONFIG, {"model": "remote-model-a", "unrestricted": True, "said": WEAPON_REQUEST})
         self.assertEqual(told_unrestricted["declined_kind"], "weapons")
         self.assertIn(SAFETY, told_unrestricted["system"])
-        listed_by_the_brain = starfire_rules.rules_for(CONFIG, {"model": "friend-unruled", "said": WEAPON_REQUEST})
+        listed_by_the_brain = starfire_rules.rules_for(CONFIG, {"model": "remote-unruled", "said": WEAPON_REQUEST})
         self.assertIsNone(listed_by_the_brain["declined"])
         self.assertFalse(listed_by_the_brain["safety_rules"])
 
     def test_the_minors_guard_stays_on_for_an_unrestricted_model(self):
         for said, context in MINORS_BLOCKED:
             with self.subTest(said=said):
-                rules = starfire_rules.rules_for(CONFIG, {"model": "friend-unruled", "said": said, "context": context})
+                rules = starfire_rules.rules_for(CONFIG, {"model": "remote-unruled", "said": said, "context": context})
                 self.assertEqual(rules["declined_kind"], "minors")
 
     def test_the_prompt_tells_starfire_s_model_what_it_lacks(self):
-        system = starfire_rules.rules_for(CONFIG, {"model": "friend-model", "said": ""})["system"]
+        system = starfire_rules.rules_for(CONFIG, {"model": "remote-model-a", "said": ""})["system"]
         self.assertIn(starfire_rules.STARFIRE_LIMITS, system)
 
     def test_context_must_be_text(self):
         with self.assertRaises(ApiError):
-            starfire_rules.rules_for(CONFIG, {"model": "friend-model", "said": "", "context": 5})
+            starfire_rules.rules_for(CONFIG, {"model": "remote-model-a", "said": "", "context": 5})
 
 
 class RemoteModelsStayOutOfLocalRoles(unittest.TestCase):
@@ -554,14 +555,14 @@ class RemoteModelsStayOutOfLocalRoles(unittest.TestCase):
 
     def test_the_direct_vision_path_never_picks_a_remote_model(self):
         seeing = {**remote_model(REMOTE), "vision": True}
-        local = {**remote_model("mimo-v2.6:9b"), "vision": True}
+        local = {**remote_model("side-model:9b"), "vision": True}
         with unittest.mock.patch.object(connections, "load_config", return_value=dict(CONFIG)), \
                 unittest.mock.patch.object(models, "find", side_effect=lambda name: {REMOTE: seeing}.get(name)), \
                 unittest.mock.patch.object(models, "installed", return_value=[seeing, local]), \
                 unittest.mock.patch.object(models, "in_arty", return_value=True), \
                 unittest.mock.patch.object(models, "is_separate", return_value=False), \
                 unittest.mock.patch.object(models, "kept_solo", return_value=False):
-            self.assertEqual(attachments.vision_model(REMOTE)["name"], "mimo-v2.6:9b")
+            self.assertEqual(attachments.vision_model(REMOTE)["name"], "side-model:9b")
 
 
 class Approvals(unittest.TestCase):
@@ -587,18 +588,18 @@ class NeverInTheRoom(unittest.TestCase):
 
 class StarfireRules(unittest.TestCase):
     def test_a_restricted_model_gets_persona_and_safety_rules(self):
-        rules = starfire_rules.rules_for(CONFIG, {"model": "friend-model", "unrestricted": False, "said": "hello"})
+        rules = starfire_rules.rules_for(CONFIG, {"model": "remote-model-a", "unrestricted": False, "said": "hello"})
         self.assertIn(PERSONA, rules["system"])
         self.assertIn(SAFETY, rules["system"])
         self.assertIsNone(rules["declined"])
         self.assertTrue(rules["approvals"])
 
     def test_a_weapon_request_is_declined_for_a_restricted_model(self):
-        rules = starfire_rules.rules_for(CONFIG, {"model": "friend-model", "unrestricted": False, "said": WEAPON_REQUEST})
+        rules = starfire_rules.rules_for(CONFIG, {"model": "remote-model-a", "unrestricted": False, "said": WEAPON_REQUEST})
         self.assertEqual(rules["declined_kind"], "weapons")
 
     def test_an_unrestricted_model_gets_the_persona_and_no_safety_block(self):
-        rules = starfire_rules.rules_for(CONFIG, {"model": "friend-unruled", "unrestricted": True, "said": WEAPON_REQUEST})
+        rules = starfire_rules.rules_for(CONFIG, {"model": "remote-unruled", "unrestricted": True, "said": WEAPON_REQUEST})
         self.assertIn(PERSONA, rules["system"])
         self.assertNotIn(SAFETY, rules["system"])
         self.assertIsNone(rules["declined"])

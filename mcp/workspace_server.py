@@ -20,7 +20,7 @@ from remote import (DEFAULT_TIMEOUT, GUI_ENV, PRIVATE_EXIT, PRIVATE_REFUSAL, cli
 from remote import text as remote_text
 
 ARTY_ENGINE_URL = os.environ.get("ARTY_ENGINE_URL", "http://127.0.0.1:11438")
-VISION_MODEL = os.environ.get("VISION_MODEL", "mimo-v2.6:9b")
+VISION_MODEL = os.environ.get("VISION_MODEL", "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS")
 BRAIN_CONFIG = os.environ.get("BRAIN_CONFIG", "/srv/ai/brain/brain.json")
 FALLBACK_CONTEXT_TOKENS = 24576
 SHIFTS_CONTEXT = False
@@ -336,6 +336,11 @@ def context_tokens(model: str) -> int:
     return next((size for size in (own, shared) if is_token_count(size)), FALLBACK_CONTEXT_TOKENS)
 
 
+def looker_keep_alive():
+    settings = brain_settings()
+    return settings.get("keep_alive", -1) if VISION_MODEL == settings.get("model") else 0
+
+
 def for_runner(body: dict) -> dict:
     return {**body, "options": {**(body.get("options") or {}), "num_ctx": context_tokens(body.get("model", ""))},
             "shift": SHIFTS_CONTEXT}
@@ -356,7 +361,7 @@ def look_at_desktop(question: str = "") -> str:
         + (f"Focus on this question: {question}" if question else "")
     )
     body = json.dumps(for_runner({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(shot).decode()],
-                                  "stream": False, "keep_alive": 0})).encode()
+                                  "stream": False, "think": False, "keep_alive": looker_keep_alive()})).encode()
     request = urllib.request.Request(f"{ARTY_ENGINE_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=300) as response:

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_URL = "http://127.0.0.1:11438"
 ENGINE_SETTING = "ARTY_ENGINE_URL"
-VISION_MODEL = "mimo-v2.6:9b"
+VISION_MODEL = "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
 DEPENDENCY_KEYS = ("Wants", "Requires", "After", "Before", "PartOf", "BindsTo", "Upholds", "Requisite", "OnFailure")
 ORDERING_LINE = re.compile(rf"^[ \t]*({'|'.join(DEPENDENCY_KEYS)})=(.*)$", re.M)
 KNOWN_UNITS = {"network-online.target", "network-pre.target", "tool-hub.service", "docker.service", "arty-engine.service",
@@ -19,7 +19,7 @@ MODEL_FAMILY = "".join(("lla", "ma"))
 BANNED_WORDS = (OLD_BACKEND, MODEL_FAMILY + ".cpp", MODEL_FAMILY + "-server", MODEL_FAMILY + "_cpp", MODEL_FAMILY + "cpp",
                 "".join(("gg", "ml")))
 OLD_PORTS = re.compile(r"(?<![0-9])(?:%s)(?![0-9])" % "|".join(("".join(("114", "34")), "".join(("114", "36")))))
-RECORDS = (".claude/history.md", "docs/release-notes-")
+RECORDS = ("".join((".cla", "ude/history.md")), "docs/release-notes-")
 UNIT_FILES = ("services/*.service", "services/*.timer")
 
 

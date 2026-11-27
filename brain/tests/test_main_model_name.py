@@ -35,10 +35,10 @@ class TheMainModelIsCalledArty(Server):
         return json.loads(body)["data"][0]
 
     def test_arty_is_described_as_picking_the_model_for_each_request(self):
-        arty = self.listed_arty({"model": "qwen3:14b", "coding_model": "mimo-v2.6:9b", "vision_model": "mimo-v2.6:9b"})
+        arty = self.listed_arty({"model": "qwen3:14b", "coding_model": "side-model:9b", "vision_model": "side-model:9b"})
         self.assertEqual(arty["model"], "qwen3:14b")
         self.assertEqual(arty["description"],
-                         "Picks the model for each request: qwen3:14b for chat, mimo-v2.6:9b for code and pictures")
+                         "Picks the model for each request: qwen3:14b for chat, side-model:9b for code and pictures")
 
     def test_separate_coding_and_picture_models_are_both_named(self):
         arty = self.listed_arty({"model": "qwen3:14b", "coding_model": "coder:7b", "vision_model": "eyes:7b"})

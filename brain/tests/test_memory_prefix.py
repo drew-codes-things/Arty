@@ -136,7 +136,7 @@ class ClaimCheckKeepsTheChatCached(unittest.TestCase):
         bodies = []
         with self.judged(bodies):
             brain.be_honest("Done.", [], [], request="Turn the lights off.", model="qwen3:14b",
-                            prefix={"model": "mimo-v2.6:9b", "messages": [SYSTEM], "tools": TOOLS})
+                            prefix={"model": "side-model:9b", "messages": [SYSTEM], "tools": TOOLS})
         self.assertEqual([[m["role"] for m in body["messages"]] for body in bodies], [["user"], ["user"]])
         self.assertTrue(all("tools" not in body for body in bodies))
 
@@ -145,7 +145,7 @@ class ClaimCheckKeepsTheChatCached(unittest.TestCase):
         with mock.patch.object(connections, "http_json", side_effect=lambda url, body=None, **kwargs: bodies.append(body) or
                                {"message": {"content": "{\"facts\": []}"}}):
             brain.extract_memories(CONFIG, "hello", "Hi.", save=lambda facts: None,
-                                   prefix={"model": "mimo-v2.6:9b", "messages": [SYSTEM], "tools": TOOLS})
+                                   prefix={"model": "side-model:9b", "messages": [SYSTEM], "tools": TOOLS})
         self.assertEqual([m["role"] for m in bodies[0]["messages"]], ["user"])
         self.assertNotIn("tools", bodies[0])
 

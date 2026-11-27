@@ -48,13 +48,24 @@ def found_model(name: str) -> dict | None:
         raise ApiError(503, ENGINE_DOWN) from error
 
 
-def chosen_model(main: str, requested: str, any_installed: bool) -> str:
+class PickedModelGone(LookupError):
+    def __init__(self, name: str):
+        super().__init__(f"The model you picked ({name}) isn't in the model list just now, so nothing answered. "
+                         "Pick it again or pick another model in the model list.")
+
+    def __str__(self) -> str:
+        return self.args[0]
+
+
+def chosen_model(main: str, requested: str, any_installed: bool, by_hand: bool = True) -> str:
     if not requested.startswith(models.DROPDOWN_PREFIX):
         return main
     name = requested[len(models.DROPDOWN_PREFIX):]
     chosen = found_model(name)
-    if models.usable(chosen):
+    if models.usable(chosen) or models.is_picked_remote(chosen):
         return chosen["name"]
+    if not any_installed and by_hand:
+        raise PickedModelGone(name)
     if not any_installed:
         return main
     if chosen is None:
@@ -132,9 +143,9 @@ def session_keep_alive(model: str, otherwise):
     return AGENT_KEEP_ALIVE if main_model_return.keeps(model) else otherwise
 
 
-def use_requested_model(config: dict, requested: str, any_installed: bool, session: bool = False) -> bool:
+def use_requested_model(config: dict, requested: str, any_installed: bool, session: bool = False, by_hand: bool = True) -> bool:
     main_config = dict(config)
-    config["model"] = chosen_model(config["model"], requested, any_installed)
+    config["model"] = chosen_model(config["model"], requested, any_installed, by_hand)
     if config["model"] == main_config["model"]:
         return False
     config["keep_alive"] = AGENT_KEEP_ALIVE if session else session_keep_alive(config["model"], OTHER_MODEL_KEEP_ALIVE)
@@ -184,15 +195,18 @@ def arty_description(config: dict, main: dict | None) -> str:
     coding_name, vision_name = config.get("coding_model", ""), config.get("vision_model", "")
     if not coding_name and not vision_name:
         return models.summary(main)
+    shown = models.display_name
+    if coding_name == main["name"] and vision_name == main["name"]:
+        return f"{shown(main['name'])} for chat, code and pictures"
     if coding_name == main["name"]:
         coding_name = ""
-        jobs = [f"{main['name']} for chat and code"]
+        jobs = [f"{shown(main['name'])} for chat and code"]
     else:
-        jobs = [f"{main['name']} for chat"]
+        jobs = [f"{shown(main['name'])} for chat"]
     if coding_name and coding_name == vision_name:
-        jobs.append(f"{coding_name} for code and pictures")
+        jobs.append(f"{shown(coding_name)} for code and pictures")
     else:
-        jobs += [f"{name} for {job}" for name, job in ((coding_name, "code"), (vision_name, "pictures")) if name]
+        jobs += [f"{shown(name)} for {job}" for name, job in ((coding_name, "code"), (vision_name, "pictures")) if name]
     return "Picks the model for each request: " + ", ".join(jobs)
 
 

@@ -61,7 +61,14 @@ function shownText(card) {
 
 function loadQuestions(t, extra = {}) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
-  const context = { document: { createElement: (tag) => new FakeElement(tag) }, Date, setTimeout, ...extra };
+  const keyListeners = [];
+  const document = { createElement: (tag) => new FakeElement(tag), addEventListener: (kind, listener) => keyListeners.push(listener) };
+  const context = { document, Date, setTimeout, ...extra };
+  context.pressKey = (key, target = {}) => {
+    const event = { key, target, prevented: false, preventDefault() { this.prevented = true; } };
+    keyListeners.forEach((listener) => listener(event));
+    return event;
+  };
   vm.createContext(context);
   vm.runInContext(read('questions.js'), context);
   return context;
@@ -120,6 +127,74 @@ test('the second only starts once the question is on screen', (t) => {
   t.mock.timers.tick(QUESTION_PAUSE_MS);
   button(card, 'Allow').listeners.click();
   assert.deepEqual(answers, [true]);
+});
+
+function pagerLabel(card) {
+  return allElements(card).find((element) => element.tagName === 'span' && /^\d+ of \d+$/.test(element.textContent))?.textContent ?? null;
+}
+
+function pagerButton(card, label) {
+  return allElements(card).find((element) => element.getAttribute('aria-label') === label) ?? null;
+}
+
+function showingCards(cards) {
+  return cards.filter((card) => !card.hidden);
+}
+
+test('several waiting questions are paged with a count and previous and next buttons', (t) => {
+  const { stepQuestionCard } = loadQuestions(t);
+  const cards = ['one', 'two', 'three'].map((name) => stepQuestionCard(`Arty wants to ${name}`, () => {}));
+  assert.deepEqual(showingCards(cards), [cards[0]]);
+  assert.equal(pagerLabel(cards[0]), '1 of 3');
+  assert.equal(pagerButton(cards[0], 'Previous question').getAttribute('aria-disabled'), 'true');
+  assert.equal(pagerButton(cards[0], 'Next question').getAttribute('aria-disabled'), 'false');
+  pagerButton(cards[0], 'Next question').listeners.click();
+  assert.deepEqual(showingCards(cards), [cards[1]]);
+  assert.equal(pagerLabel(cards[1]), '2 of 3');
+  pagerButton(cards[1], 'Next question').listeners.click();
+  pagerButton(cards[2], 'Next question').listeners.click();
+  assert.deepEqual(showingCards(cards), [cards[2]]);
+  assert.equal(pagerButton(cards[2], 'Next question').getAttribute('aria-disabled'), 'true');
+  pagerButton(cards[2], 'Previous question').listeners.click();
+  assert.deepEqual(showingCards(cards), [cards[1]]);
+});
+
+test('a single waiting question shows no pager', (t) => {
+  const { stepQuestionCard } = loadQuestions(t);
+  const card = stepQuestionCard('Arty wants to open a page', () => {});
+  const bar = allElements(card).find((element) => element.className === 'card-pager');
+  assert.equal(bar.hidden, true);
+  assert.equal(card.hidden, false);
+});
+
+test('the left and right arrow keys page the questions', (t) => {
+  const { stepQuestionCard, pressKey } = loadQuestions(t);
+  const cards = ['one', 'two'].map((name) => stepQuestionCard(`Arty wants to ${name}`, () => {}));
+  assert.equal(pressKey('ArrowRight').prevented, true);
+  assert.deepEqual(showingCards(cards), [cards[1]]);
+  pressKey('ArrowLeft');
+  assert.deepEqual(showingCards(cards), [cards[0]]);
+  assert.equal(pressKey('ArrowRight', { tagName: 'TEXTAREA' }).prevented, false);
+  assert.deepEqual(showingCards(cards), [cards[0]]);
+  assert.equal(pressKey('a').prevented, false);
+});
+
+test('answering a question moves on to the next one and the count drops', (t) => {
+  const { stepQuestionCard } = loadQuestions(t);
+  const answers = [];
+  const cards = ['one', 'two', 'three'].map((name) => stepQuestionCard(`Arty wants to ${name}`, (ok) => answers.push([name, ok])));
+  pagerButton(cards[0], 'Next question').listeners.click();
+  t.mock.timers.tick(QUESTION_PAUSE_MS);
+  button(cards[1], 'Not now').listeners.click();
+  assert.deepEqual(answers, [['two', false]]);
+  assert.deepEqual(showingCards(cards), [cards[1], cards[2]]);
+  assert.equal(pagerLabel(cards[2]), '2 of 2');
+  assert.equal(cards[0].hidden, true);
+  button(cards[2], 'Allow').listeners.click();
+  assert.deepEqual(answers, [['two', false], ['three', true]]);
+  assert.deepEqual(showingCards(cards), cards);
+  assert.equal(cards[0].hidden, false);
+  assert.equal(pagerLabel(cards[0]), '1 of 1');
 });
 
 test('the window loads the question cards before the app and uses them for every question', () => {

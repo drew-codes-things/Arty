@@ -96,7 +96,7 @@ class SoloListing(unittest.TestCase):
         with listed, found:
             entries = models.solo_entries()
         self.assertEqual(entries, [{"id": "solo/side-model:12b", "name": "side-model:12b (on its own: no Arty, no memory)",
-                                    "object": "model", "owned_by": "home", "model": "side-model:12b",
+                                    "label": "side-model:12b", "object": "model", "owned_by": "home", "model": "side-model:12b",
                                     "description": "Talks straight to the model, like starfire. Nothing is saved to Arty's memory."}])
 
 

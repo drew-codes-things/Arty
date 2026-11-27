@@ -1,6 +1,7 @@
 package app.arty.data
 
 import app.arty.core.Attachment
+import app.arty.core.MainModel
 import app.arty.core.TurnReport
 import app.arty.core.TurnStatus
 import org.json.JSONArray
@@ -30,7 +31,7 @@ data class Conversation(
     val pendingJobId: String? = null,
 ) {
     companion object {
-        const val DEFAULT_MODEL = TurnStatus.AUTO_ID
+        const val DEFAULT_MODEL = MainModel.ID
         const val TITLE_LENGTH = 40
     }
 }

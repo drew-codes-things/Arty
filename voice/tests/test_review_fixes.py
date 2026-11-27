@@ -386,9 +386,11 @@ def test_a_crash_after_a_long_healthy_run_waits_the_shortest_delay_again(monkeyp
 class RecordingBrainHttp:
     def __init__(self):
         self.sent = {}
+        self.timeout = None
 
-    def post(self, url, json=None, **_):
+    def post(self, url, json=None, timeout=None, **_):
         self.sent = json
+        self.timeout = timeout
         return self
 
     async def __aenter__(self):
@@ -414,3 +416,26 @@ def test_the_brain_is_told_the_voice_assistant_is_asking():
     pieces, sent = asyncio.run(run())
     assert pieces == ["Hi."]
     assert sent["client"] == "voice"
+
+
+def test_a_slow_spoken_answer_is_waited_for_as_long_as_the_brain_works():
+    async def run():
+        http = RecordingBrainHttp()
+        assistant = arty_voice.Assistant(FakeSenses(), RecordingOutput(), http)
+        [piece async for piece in assistant.ask_brain("hello")]
+        return http.timeout
+
+    timeout = asyncio.run(run())
+    assert timeout.total is None or timeout.total > 1800
+    assert timeout.sock_read is not None and timeout.sock_read < 1800
+
+
+def test_the_headset_and_speakers_show_thinking_while_the_answer_is_written():
+    async def run():
+        output = RecordingOutput()
+        assistant = arty_voice.Assistant(FakeSenses(), output, RecordingBrainHttp())
+        await assistant.carry_out("what is the capital of france")
+        return output
+
+    output = asyncio.run(run())
+    assert "thinking" in output.states

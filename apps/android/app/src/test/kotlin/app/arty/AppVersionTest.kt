@@ -8,16 +8,16 @@ import kotlin.test.assertTrue
 
 class AppVersionTest {
     @Test
-    fun `this release is Arty 1_7_0 with build number 15`() {
-        assertEquals("1.7.0", BuildConfig.VERSION_NAME)
-        assertEquals(15, BuildConfig.VERSION_CODE)
+    fun `this release is Arty 1_8_0 with build number 16`() {
+        assertEquals("1.8.0", BuildConfig.VERSION_NAME)
+        assertEquals(16, BuildConfig.VERSION_CODE)
     }
 
     @Test
     fun `the app compares its own version with the tag of the latest release`() {
-        assertTrue(AppUpdate.isNewer(AppUpdate.releaseVersion("""{"tag_name": "v1.7.1"}"""), BuildConfig.VERSION_NAME))
-        assertFalse(AppUpdate.isNewer(AppUpdate.releaseVersion("""{"tag_name": "v1.7.0"}"""), BuildConfig.VERSION_NAME))
-        assertEquals("Version 1.7.1 is available", AppUpdate.noticeFor("1.7.1", BuildConfig.VERSION_NAME, null, enabled = true)?.text)
+        assertTrue(AppUpdate.isNewer(AppUpdate.releaseVersion("""{"tag_name": "v1.8.1"}"""), BuildConfig.VERSION_NAME))
+        assertFalse(AppUpdate.isNewer(AppUpdate.releaseVersion("""{"tag_name": "v1.8.0"}"""), BuildConfig.VERSION_NAME))
+        assertEquals("Version 1.8.1 is available", AppUpdate.noticeFor("1.8.1", BuildConfig.VERSION_NAME, null, enabled = true)?.text)
     }
 
     @Test

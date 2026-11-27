@@ -138,11 +138,11 @@ export class ArtyApi {
   }
 
   async models() {
-    const reply = await this.request("GET", "/v1/models");
+    const reply = await this.request("GET", "/v1/models?remote=1");
     const listed = reply.auto ? [reply.auto, ...(reply.data ?? [])] : (reply.data ?? []);
     return listed.map((model) => ({
       id: model.id, name: model.name || model.id, model: model.model || "", description: model.description || "",
-      available: model.available !== false,
+      available: model.available !== false, label: model.label || "", private: model.private === true,
     }));
   }
 
@@ -196,7 +196,7 @@ export class ArtyApi {
 
   async startChat(messages, model) {
     const history = messages.map((message) => ({ role: message.role, content: messageContent(message) }));
-    const reply = await this.request("POST", "/v1/chat/jobs", { model, messages: history, client: CLIENT_NAME });
+    const reply = await this.request("POST", "/v1/chat/jobs", { model, messages: history, client: CLIENT_NAME, arty_named_model: true });
     return reply.id;
   }
 

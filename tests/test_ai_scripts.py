@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "bin"
 TOOLS_MODEL = {"name": "qwen3:14b", "size": 9_300_000_000, "capabilities": ["completion", "tools", "thinking"]}
-VISION_MODEL = {"name": "mimo-v2.6:9b", "size": 6_100_000_000, "capabilities": ["completion", "vision", "tools"]}
+VISION_MODEL = {"name": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "size": 6_100_000_000, "capabilities": ["completion", "vision", "tools"]}
 PLAIN_MODEL = {"name": "gemma3:4b", "size": 3_300_000_000, "capabilities": ["completion"]}
 PULLABLE = {"gemma3:12b": {"name": "gemma3:12b", "size": 4_900_000_000, "capabilities": ["completion", "tools"]}}
 PULLED_BY_OTHERS = {"qwen3:14b"}
@@ -181,7 +181,7 @@ class AiScripts(unittest.TestCase):
         self.engine = FakeEngine([TOOLS_MODEL, VISION_MODEL, PLAIN_MODEL, NOT_RUNNABLE])
         self.addCleanup(self.engine.stop)
         self.config = self.folder / "brain.json"
-        self.write_config({"model": "qwen3:14b", "arty_models": ["qwen3:14b", "mimo-v2.6:9b", "gemma3:4b", "gemma3:12b",
+        self.write_config({"model": "qwen3:14b", "arty_models": ["qwen3:14b", "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "gemma3:4b", "gemma3:12b",
                                                                  "split-model:7b"]})
         self.env = {**os.environ, "ARTY_ENGINE_URL": self.engine.url, "BRAIN_CONFIG": str(self.config)}
 
@@ -197,7 +197,7 @@ class AiScripts(unittest.TestCase):
     def test_ai_models_lists_what_the_engine_has(self):
         finished = self.run_script("ai-models")
         self.assertEqual(0, finished.returncode, finished.stderr)
-        for name in ("qwen3:14b", "mimo-v2.6:9b", "gemma3:4b"):
+        for name in ("qwen3:14b", "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "gemma3:4b"):
             self.assertIn(name, finished.stdout)
         self.assertIn("ai-models rm <model>", finished.stdout)
 
@@ -257,7 +257,7 @@ class AiScripts(unittest.TestCase):
         finished = self.run_script("ai-pull")
         self.assertEqual(0, finished.returncode, finished.stderr)
         self.assertIn("Usage: ai-pull", finished.stdout)
-        self.assertIn("mimo-v2.6:9b", finished.stdout)
+        self.assertIn("hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", finished.stdout)
 
     def test_ai_pull_help_options_show_the_help_and_download_nothing(self):
         for arguments in (("--help",), ("-h",), ("qwen3:14b", "--help"), ("-h", "--from", NAMED_SOURCE)):
@@ -269,9 +269,9 @@ class AiScripts(unittest.TestCase):
         self.assertEqual([], self.engine.posted("/api/pull"))
 
     def test_ai_use_switches_to_an_installed_tool_model(self):
-        finished = self.run_script("ai-use", "mimo-v2.6:9b")
+        finished = self.run_script("ai-use", "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS")
         self.assertEqual(0, finished.returncode, finished.stderr)
-        self.assertEqual("mimo-v2.6:9b", self.config_value("model"))
+        self.assertEqual("hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", self.config_value("model"))
         self.assertIn("can also see images", finished.stdout)
         self.assertEqual([], self.engine.posted("/api/pull"))
 

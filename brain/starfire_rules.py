@@ -503,6 +503,10 @@ class KeptVerdict:
     verdict: tuple[str, str] | None
 
 
+def is_a_real_verdict(verdict: tuple[str, str] | None) -> bool:
+    return verdict is None or verdict[1] != content_screen.CANT_CHECK_REPLY
+
+
 class JudgedRequests:
     def __init__(self, kept: int):
         self.kept = kept
@@ -518,6 +522,8 @@ class JudgedRequests:
                 self.verdicts.move_to_end(key)
                 return kept.verdict
         verdict = screen_review.declined(config, model, said, earlier)
+        if not is_a_real_verdict(verdict):
+            return verdict
         with self.lock:
             self.verdicts[key] = KeptVerdict(judge, verdict)
             self.verdicts.move_to_end(key)

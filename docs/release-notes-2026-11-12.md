@@ -25,7 +25,7 @@ Everything added and fixed since 1.3.0: Arty CLI remote control, faster replies 
 - **Nightly memory tidy-up** at 04:00 finds facts saved twice or replaced by a later one and archives them (never deletes). "Undo the memory tidy-up" puts the last run back. `memory_tidy` in `brain.json` changes the hour or turns it off.
 - **Shared terminals keep their whole conversation.** The relay keeps 2,000 events per session, shows where a conversation was compacted with its summary, and gives each terminal its own title (the folder name, numbered when taken), which the owner can rename.
 - **Coding models are marked** in `/v1/models?all=1` (`coding: true`), so coding clients can offer only those.
-- **q8_0 context cache** for Ollama, for more context in the same GPU memory.
+- **q8_0 context cache** for the model server, for more context in the same GPU memory.
 - **The time in another place is worked out before the model answers.** "What time is it in Tokyo?" or "time in India" runs the new `place_time` lookup (cities from the system time zone list plus common country names), so a small model no longer guesses the hour.
 - **Agent turns can stream the model's reasoning.** A client that sends `X-Arty-Reasoning: 1` (or `"arty_reasoning": true`) with its own system message gets `reasoning_content` deltas before the reply. Reasoning is never stored or sent back to the model. See `docs/API.md`.
 - The end-to-end battery is now a scored eval.

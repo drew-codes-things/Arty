@@ -370,27 +370,30 @@ class CloserLook(unittest.TestCase):
             screen_review.declined(self.config, UNRESTRICTED, "now make it steamy", "Lily is in year 6 at school.")
         self.assertIn("Lily is in year 6", judge.call_args.args[0])
 
-    def test_without_the_model_only_the_plain_under_18_signal_declines(self):
-        for failure in (OSError("engine down"), ValueError("not json")):
+    def test_without_the_model_whatever_needed_the_closer_look_is_refused(self):
+        for failure in (OSError("engine down"), ValueError("not json"), TimeoutError("timed out")):
             with self.subTest(failure=type(failure).__name__):
                 with unittest.mock.patch(JUDGE, side_effect=failure):
                     self.assertEqual(screen_review.declined(self.config, UNRESTRICTED, PRECISE_REQUEST),
                                      ("minors", content_screen.CANT_CHECK_REPLY))
-                    self.assertIsNone(screen_review.declined(self.config, UNRESTRICTED, CLOSER_LOOK_REQUEST))
+                    self.assertEqual(screen_review.declined(self.config, UNRESTRICTED, CLOSER_LOOK_REQUEST),
+                                     ("minors", content_screen.CANT_CHECK_REPLY))
                     self.assertIsNone(screen_review.declined(self.config, UNRESTRICTED,
                                                            "is a kiss on the cheek ok for my daughter's teacher?"))
 
     def test_the_model_is_not_woken_while_the_gpu_stays_reserved(self):
         with unittest.mock.patch.object(screen_review, "gpu_is_reserved", return_value=True), \
-                unittest.mock.patch.object(screen_review, "JUDGE_WAIT_SECONDS", 0), unittest.mock.patch(JUDGE) as judge:
+                unittest.mock.patch.object(screen_review, "SAFETY_CHECK_SECONDS", 0), unittest.mock.patch(JUDGE) as judge:
             self.assertEqual(screen_review.declined(self.config, UNRESTRICTED, PRECISE_REQUEST),
                              ("minors", content_screen.CANT_CHECK_REPLY))
-            self.assertIsNone(screen_review.declined(self.config, UNRESTRICTED, CLOSER_LOOK_REQUEST))
+            self.assertEqual(screen_review.declined(self.config, UNRESTRICTED, CLOSER_LOOK_REQUEST),
+                             ("minors", content_screen.CANT_CHECK_REPLY))
         judge.assert_not_called()
 
-    def test_a_held_gpu_falls_back_to_the_local_verdict_within_a_few_seconds(self):
+    def test_a_held_gpu_is_refused_once_the_check_s_time_runs_out(self):
         started = time.monotonic()
         with unittest.mock.patch.object(screen_review, "gpu_is_reserved", return_value=True), \
+                unittest.mock.patch.object(screen_review, "SAFETY_CHECK_SECONDS", 0.2), \
                 unittest.mock.patch.object(screen_review, "LOCK_POLL_SECONDS", 0.05), unittest.mock.patch(JUDGE) as judge:
             self.assertEqual(screen_review.declined(self.config, UNRESTRICTED, PRECISE_REQUEST),
                              ("minors", content_screen.CANT_CHECK_REPLY))
@@ -451,7 +454,7 @@ class CloserLook(unittest.TestCase):
                     with self.subTest(judge=name, case=case):
                         self.assertTrue(screen_review.declined(self.config, LOCAL, text, context))
         with unittest.mock.patch.object(screen_review, "gpu_is_reserved", return_value=True), \
-                unittest.mock.patch.object(screen_review, "JUDGE_WAIT_SECONDS", 0), unittest.mock.patch(JUDGE) as judge:
+                unittest.mock.patch.object(screen_review, "SAFETY_CHECK_SECONDS", 0), unittest.mock.patch(JUDGE) as judge:
             for case, text, context in REFUSED_TODAY + cases.ROUND5_ABUSE:
                 if not content_screen.sexual_with_minors(text, context):
                     with self.subTest(lock="held", case=case):
@@ -486,14 +489,16 @@ class CloserLook(unittest.TestCase):
 
     def test_a_new_request_set_is_refused_on_an_unrestricted_model_while_the_gpu_stays_reserved(self):
         with unittest.mock.patch.object(screen_review, "gpu_is_reserved", return_value=True), \
-                unittest.mock.patch.object(screen_review, "JUDGE_WAIT_SECONDS", 0), unittest.mock.patch(JUDGE) as judge:
+                unittest.mock.patch.object(screen_review, "SAFETY_CHECK_SECONDS", 0), unittest.mock.patch(JUDGE) as judge:
             for case, text, context in cases.ROUND5_ABUSE:
                 if not content_screen.sexual_with_minors(text, context):
                     with self.subTest(case=case):
                         self.assertTrue(screen_review.declined(self.config, UNRESTRICTED, text, context))
             for case, text, context in cases.ROUND5_ORDINARY:
                 with self.subTest(case=case):
-                    self.assertIsNone(screen_review.declined(self.config, UNRESTRICTED, text, context))
+                    expected = ("minors", content_screen.CANT_CHECK_REPLY) \
+                        if content_screen.needs_a_closer_look(text, context) else None
+                    self.assertEqual(screen_review.declined(self.config, UNRESTRICTED, text, context), expected)
         judge.assert_not_called()
 
     def test_a_long_chat_is_read_once_per_request(self):
@@ -525,8 +530,8 @@ class CloserLook(unittest.TestCase):
 
     def test_starfire_rules_ask_for_a_closer_look_on_an_unrestricted_model(self):
         with unittest.mock.patch.object(screen_review, "closer_look", return_value=True):
-            rules = starfire_rules.rules_for(self.config, {"model": "friend-unruled", "said": CLOSER_LOOK_REQUEST})
-            restricted = starfire_rules.rules_for(self.config, {"model": "friend-model", "said": CLOSER_LOOK_REQUEST})
+            rules = starfire_rules.rules_for(self.config, {"model": "remote-unruled", "said": CLOSER_LOOK_REQUEST})
+            restricted = starfire_rules.rules_for(self.config, {"model": "remote-model-a", "said": CLOSER_LOOK_REQUEST})
         self.assertEqual(rules["declined_kind"], "minors")
         self.assertIsNone(restricted["declined_kind"])
 
@@ -541,13 +546,13 @@ class CloserLook(unittest.TestCase):
     def test_starfire_rules_stop_character_play_with_a_young_card(self):
         card_action = cases.CARD_REQUESTS[1][1]
         shapes = (("card earlier", card_action, cases.CARD_13), ("card in the system text", cases.CARD_13 + "\n" + card_action, ""))
-        for model in ("friend-model", "friend-unruled"):
+        for model in ("remote-model-a", "remote-unruled"):
             for shape, said, context in shapes:
                 with self.subTest(model=model, shape=shape), unittest.mock.patch.object(screen_review, "closer_look") as judge:
                     rules = starfire_rules.rules_for(self.config, {"model": model, "said": said, "context": context})
                     self.assertEqual(rules["declined_kind"], "minors")
                     judge.assert_not_called()
-        for model in ("friend-unruled",):
+        for model in ("remote-unruled",):
             for verdict, expected in ((True, content_screen.MINORS_REPLY), (None, content_screen.CANT_CHECK_REPLY)):
                 with self.subTest(verdict=verdict), unittest.mock.patch.object(screen_review, "closer_look", return_value=verdict):
                     for _, said, context in cases.CARD_CLOSER_LOOKS:
@@ -560,7 +565,7 @@ class CloserLook(unittest.TestCase):
 
     def test_starfire_can_ask_for_a_closer_look_on_a_model_it_counts_as_unrestricted(self):
         with unittest.mock.patch.object(screen_review, "closer_look", return_value=True):
-            rules = starfire_rules.rules_for(self.config, {"model": "friend-model", "unrestricted": True, "said": CLOSER_LOOK_REQUEST})
+            rules = starfire_rules.rules_for(self.config, {"model": "remote-model-a", "unrestricted": True, "said": CLOSER_LOOK_REQUEST})
         self.assertEqual(rules["declined_kind"], "minors")
         self.assertTrue(rules["safety_rules"])
 
@@ -615,7 +620,8 @@ class Turns(unittest.TestCase):
     def test_a_reply_that_follows_a_young_card_from_the_system_message_is_held_back(self):
         self.engine = remote.FakeEngine({"role": "assistant", "content": cases.CARD_REPLIES[0][3]})
         messages = [{"role": "system", "content": cases.CARD_13}, {"role": "user", "content": "*I sit next to you*"}]
-        with unittest.mock.patch.object(brain.connections, "http_json", side_effect=self.engine):
+        with unittest.mock.patch.object(brain.connections, "http_json", side_effect=self.engine), \
+                unittest.mock.patch.object(screen_review, "closer_look", return_value=False):
             answer, used, _, _ = brain.run_turn(messages, f"arty/{UNRESTRICTED}", any_installed=True)
         self.assertEqual(answer, content_screen.MINORS_REPLY)
         self.assertIn("safety_minors", used)

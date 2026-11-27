@@ -96,20 +96,21 @@ def job_tool_call(name: str, arguments: dict) -> str:
     return connections.hub.call(name, arguments, limit=JOB_RESULT_CHARS)
 
 
-def job_services() -> Services:
+def job_services(send=notify.send) -> Services:
     config = connections.load_config()
     settings = config.get("jobs") or {}
     if not connections.hub.routes:
         connections.hub.refresh()
     return Services(call_tool=job_tool_call,
-                    complete=complete_text, send=notify.send,
+                    complete=complete_text, send=send,
                     record_chat=lambda user_text, answer: archive_turn(config, user_text, answer, []),
                     settings=settings, gate=GpuGate.from_settings(settings), mailbox=inbox_tidy.connected(),
                     place=config.get("weather"), read_price=shopping.read_price)
 
 
 def run_job(schedule: dict, now: datetime):
-    guarded(f"job {schedule['id']}", lambda: jobs.run(schedule, job_services(), now))
+    guarded(f"job {schedule['id']}",
+            lambda: jobs.run(schedule, job_services(notify.send), now))
 
 
 def start_style_refresh():
@@ -180,6 +181,10 @@ def scheduler_loop():
 
 
 def send_briefing(title: str, kind: str):
+    build_and_send_briefing(title, kind, notify.send)
+
+
+def build_and_send_briefing(title: str, kind: str, send):
     try:
         if not connections.hub.routes:
             connections.hub.refresh()
@@ -187,4 +192,4 @@ def send_briefing(title: str, kind: str):
     except Exception as error:  # a broken briefing must still say something, never vanish
         log.exception("%s briefing failed", kind)
         text = f"I couldn't put your {kind} briefing together ({error})."
-    notify.send(title, text, category=notify.ARTY)
+    send(title, text, category=notify.ARTY)

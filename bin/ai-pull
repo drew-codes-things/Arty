@@ -49,8 +49,8 @@ installed under the short name given (a model already installed from the same so
 another source it is replaced once the new download has been checked, and the old copy's template, system
 prompt and parameters are not carried over). Ctrl-C stops the download.
 Good fits for the RTX 3060 (12 GB):
-  qwen3:14b          the brain: chat, code and tool use (recommended first)
-  mimo-v2.6:9b       pictures, so Arty can look at the screen and your photos
+  qwen3:14b          a smaller model to pick by hand: chat, code and tool use
+  qwen2.5vl:7b       pictures for qwen3:14b when it is picked
   nomic-embed-text   embeddings, for searching the document library by meaning
 Models above 14B run partly on the CPU and are slow.
 

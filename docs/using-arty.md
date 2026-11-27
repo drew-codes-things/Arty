@@ -17,13 +17,42 @@ Day-to-day use of a running Arty: chatting, models, pictures, approvals, documen
   A download shows its progress,
   Ctrl-C (or stopping the script with a signal) stops it in the engine too, and it gives up after
   `AI_PULL_MAX_SECONDS` (6 hours unless set) or when nothing arrives for `AI_PULL_STALL_SECONDS` (5 minutes unless set).
-- **Pictures**: `vision_model` in `brain.json` names the model that looks at pictures (`mimo-v2.6:9b`). If it isn't
+- **Naming a model in a message**: in Arty Desktop, the phone apps and starfire's chat, a message that starts a
+  sentence with "use qwen3:14b to summarise this", "use the 14B for this", "with the 35B, write ..." or "ask the
+  remote model to ..." runs that turn on the named model, with the same access as the model list (a model you
+  can't pick gets "That model isn't available to you."). Only what you typed counts: quoted text, code, screen
+  descriptions, attached or mentioned files and other API callers never switch the model. A name has to be the
+  model's whole name, its friendly name (`model_labels`) or a short form of it: the size ("the 14B"), the size with
+  the rest of the friendly name, or the rest of the friendly name with "model" or "one" ("the coder one").
+  "From now on use X", "switch to X" or "go back to X" also moves the app's model list to X, so it stays until you
+  pick another model. When two models match the reply asks "Which one did you mean: A or B?"; anything else is
+  answered normally, and `helper_models` can't be named. The reply's model note names the model that answered.
+- **A picked model that's gone**: if the model you picked is no longer in the list, the reply says so in one line
+  instead of quietly answering on the main model.
+- **One model**: with `one_model` on (the default), the main model also writes code, answers room code turns and
+  takes picture chats once the engine reports that it can see, so nothing else is loaded on the card.
+  No other model ever answers in its place: when the main model fails to load or errors, the reply says "The main
+  model couldn't answer just now (reason). Try again in a moment, or pick ... in the model list", naming the other
+  `arty_models`, and a room turn passes. Other models run only when someone picks them. A request for the main model
+  that arrives while the main is still writing a long reply for something else waits for the engine, and after 10
+  minutes ends with the engine's busy error. `helper_models` (`qwen2.5vl:7b`) are never
+  offered in a model list.
+- **Safety check time**: `safety_check_seconds` in `brain.json` (300 unless set, not scaled by
+  `side_job_seconds_scale`) is how long the safety check may take, including the wait while background GPU work holds
+  `jobs.gpu_lock` and loading the main model back onto the card. A request that needs the check and can't get it in
+  that time is refused with "I can't check this request right now". With `jobs.trainer_url` set to the training
+  controller (the same address as the engine's `trainer_url`), the controller hears that Arty is in use for the
+  whole wait and the check, so background work that yields to Arty lets go of the card, and hears that the check is
+  over once it has finished or given up.
+- **Pictures**: `vision_model` in `brain.json` names the model that looks at pictures when the main model can't see.
+  A picked model that can't see (such as `qwen3:14b`) has its pictures described by the first `helper_models` entry
+  that can see (`qwen2.5vl:7b`), and a picked model that can see describes its own. If it isn't
   downloaded, the first downloaded Arty model that can see is used (never a solo model). The main model and the vision
   model don't fit on the 12 GB card together, so with `route_picture_chats` (on by default) a chat with plain `Arty`
   that brings a new picture is answered by the vision model too, when it can use tools, instead of swapping the main
   model back in for the answer. A picture uploaded through the apps starts the vision model loading while you type.
   Set it to `false` to keep picture answers on the main model.
-- **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (`qwen3:14b`, the main model). For
+- **Picking a model per job**: Arty CLI's agent mode runs on `coding_model` (the main model). For
   anything else the main model can hand a job to another model in `arty_models` with `ask_other_model`;
   `model_strengths` says what each one is best at. A model that isn't downloaded is never picked: Arty falls back to
   the coding model in agent mode, or the main model, and logs it.

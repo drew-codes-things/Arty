@@ -8,9 +8,57 @@ const ONE_DECIMAL = 10;
 const CONTEXT_WARN_PERCENT = 75;
 const CONTEXT_FULL_PERCENT = 90;
 
-function replyModelLabel(arty) {
+const PICKER_TAB_NAMES = ['Arty', 'Choose a model'];
+const ARTY_TAB_INDEX = 0;
+const PICKER_REMOTE_NAME = 'Remote';
+const PICKER_EMPTY_NOTE = 'No models here for this key.';
+const ARTY_GROUP_IDS = ['Arty', 'auto'];
+
+function pickerGroup(model) {
+  return model.group || (ARTY_GROUP_IDS.includes(model.id) ? 'arty' : 'choose');
+}
+
+function pickerSections(models) {
+  const inGroup = (group) => models.filter((model) => pickerGroup(model) === group);
+  return {
+    tabs: [{ name: PICKER_TAB_NAMES[0], models: inGroup('arty') }, { name: PICKER_TAB_NAMES[1], models: inGroup('choose') }],
+    remote: inGroup('remote'),
+    remoteName: PICKER_REMOTE_NAME,
+  };
+}
+
+function drawnPickerTabs(tabs) {
+  return tabs.map((tab, index) => ({ ...tab, index })).filter((tab) => tab.index !== ARTY_TAB_INDEX || tab.models.length);
+}
+
+function pickerTabFor(models, current) {
+  if (!models.some((model) => pickerGroup(model) === 'arty')) return 1;
+  const found = models.find((model) => model.id === current);
+  return found && pickerGroup(found) === 'choose' ? 1 : 0;
+}
+
+function pickerEmptyNote() {
+  return PICKER_EMPTY_NOTE;
+}
+
+const ENGINE_ID_PREFIX = 'hf.co/';
+const ENGINE_FILE_SUFFIX = /-GGUF$/i;
+
+function readableModelName(id) {
+  if (!id.startsWith(ENGINE_ID_PREFIX)) return id;
+  return id.split('/').pop().split(':')[0].replace(ENGINE_FILE_SUFFIX, '');
+}
+
+function answeringModelName(id, models) {
+  const listed = models.find((model) => model.model === id || model.id === id || model.id === `arty/${id}`);
+  const label = listed?.label && listed.label !== id ? listed.label : '';
+  return label || readableModelName(id);
+}
+
+function replyModelLabel(arty, models = []) {
   if (!arty?.model) return '';
-  return arty.auto && arty.role ? `${arty.model} · ${AUTO_MODEL_NAME}: ${arty.role}` : arty.model;
+  const name = answeringModelName(arty.model, models);
+  return arty.auto && arty.role ? `${name} · ${AUTO_MODEL_NAME}: ${arty.role}` : name;
 }
 
 function shortCount(count) {
@@ -67,4 +115,8 @@ function matchingEntities(entities, query) {
 function likelyOwner(entities) {
   const people = entities.filter((entity) => entity.entityType === 'person');
   return [...people].sort((a, b) => (b.observations?.length ?? 0) - (a.observations?.length ?? 0))[0]?.name ?? '';
+}
+
+function movesThePicker(arty) {
+  return arty?.persist === true && typeof arty.pick === 'string' && arty.pick !== '';
 }

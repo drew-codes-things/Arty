@@ -81,7 +81,7 @@ Tested with unit tests only; real Discord on your own computer has not been trie
 
 For general knowledge quizzes and trivia (not graded tests), ask Arty to do the quiz in its own browser or yours.
 `quiz_answer` reads the question and its choices from the page (and, when the question depends on a picture, has
-the picture described by the picture model), then asks `qwen3:14b` through Arty's brain to answer, checking facts
+the picture described by the picture model), then asks Arty's main model through Arty's brain to answer, checking facts
 with Arty's web search. Arty tells you the answer, how sure it is and the source. When it is not sure it says so
 and doesn't pick anything unless you choose. It clicks an answer only after you allow that exact choice, every time.
 

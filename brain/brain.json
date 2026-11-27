@@ -1,5 +1,6 @@
 {
-  "model": "qwen3:14b",
+  "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS",
+  "one_model": true,
   "think": "auto",
   "think_for": [
     "quiz",
@@ -7,17 +8,15 @@
   ],
   "arty_models": [],
   "solo_models": [],
-  "vision_model": "mimo-v2.6:9b",
+  "vision_model": "qwen2.5vl:7b",
   "audio_model": "",
-  "coding_model": "qwen3:14b",
+  "coding_model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS",
   "route_coding_chats": true,
   "route_picture_chats": true,
   "example_checks": [
     "c"
   ],
-  "model_strengths": {
-    "mimo-v2.6:9b": "writing, fixing and testing code across several files, and reading pictures and screenshots"
-  },
+  "model_strengths": {},
   "vram_budget_mb": 11500,
   "system_prompt_file": "/srv/ai/brain/system-prompt.md",
   "keep_alive": -1,
@@ -49,7 +48,7 @@
     "repeat_penalty": 1.1
   },
   "agent_options": {
-    "num_predict": 4096,
+    "num_predict": 8192,
     "repeat_penalty": 1.0,
     "sampling": "card",
     "steady": {
@@ -62,8 +61,8 @@
         "top_p": 0.95,
         "presence_penalty": 0.0
       },
-      "mimo-v2.6:9b": {
-        "temperature": 0.6,
+      "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS": {
+        "temperature": 0.3,
         "top_k": 20,
         "top_p": 0.95,
         "presence_penalty": 0.0
@@ -85,9 +84,7 @@
   },
   "model_windows": {
     "enabled": false,
-    "num_ctx": {
-      "mimo-v2.6:9b": 49152
-    }
+    "num_ctx": {}
   },
   "persona_file": "/srv/ai/brain/persona.md",
   "conversations_dir": "/srv/ai/memory/conversations",
@@ -98,7 +95,8 @@
   "tool_budget": "auto",
   "tool_budget_by_size": {
     "4": 24,
-    "16": 40
+    "16": 40,
+    "40": 40
   },
   "always_tools": [
     "recall_conversations",
@@ -1038,5 +1036,12 @@
   "starter_deck": [],
   "room": {
     "seconds_per_hour": 1800
-  }
+  },
+  "model_labels": {
+    "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS": "Qwen3.6 35B"
+  },
+  "side_job_seconds_scale": 3,
+  "helper_models": [
+    "qwen2.5vl:7b"
+  ]
 }

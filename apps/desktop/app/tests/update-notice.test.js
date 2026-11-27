@@ -151,8 +151,8 @@ test('the window wires the notice, its dismiss button and the setting in the tra
   assert.ok(JSON.parse(read('package.json')).build.files.includes('update-notice.js'));
 });
 
-test('this release is Arty Desktop 1.7.0', () => {
-  assert.equal(JSON.parse(read('package.json')).version, '1.7.0');
+test('this release is Arty Desktop 1.8.0', () => {
+  assert.equal(JSON.parse(read('package.json')).version, '1.8.0');
 });
 
 test('the notice wording has no em dash', () => {

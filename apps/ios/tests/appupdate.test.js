@@ -25,8 +25,8 @@ function memoryStorage() {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)), removeItem: (key) => values.delete(key) };
 }
 
-test("the iPhone app is 1.7.0", () => {
-  assert.equal(APP_VERSION, "1.7.0");
+test("the iPhone app is 1.8.0", () => {
+  assert.equal(APP_VERSION, "1.8.0");
 });
 
 test("versions compare as numbers and tolerate a v or a tag prefix", () => {
@@ -80,7 +80,7 @@ test("it checks shortly after start, then once a day, and logs one line when it 
   const lines = [];
   let fails = true;
   const checker = createUpdateChecker({
-    fetch: async () => { if (fails) throw new TypeError("Load failed"); return answer(manifest("1.8.0")); },
+    fetch: async () => { if (fails) throw new TypeError("Load failed"); return answer(manifest("1.9.0")); },
     location: SITE, settings: () => ({ enabled: true, dismissed: "" }), show: (notice) => shown.push(notice), log: (line) => lines.push(line), timers,
   });
   checker.start();
@@ -91,7 +91,7 @@ test("it checks shortly after start, then once a day, and logs one line when it 
   assert.equal(waiting[0].delay, CHECK_EVERY_MS);
   fails = false;
   await waiting.shift().callback();
-  assert.deepEqual(shown, [{ version: "1.8.0", text: "Version 1.8.0 is available" }]);
+  assert.deepEqual(shown, [{ version: "1.9.0", text: "Version 1.9.0 is available" }]);
 });
 
 test("the setting is on by default and the dismissed version is remembered", () => {
@@ -115,5 +115,5 @@ test("the page has the notice, the More screen the switch, and the worker caches
   assert.match(app, /target: "_blank"/);
   assert.match(worker, /"js\/appupdate\.js"/);
   assert.match(worker, /"js\/version\.js"/);
-  assert.match(worker, /arty-ios-v18/);
+  assert.match(worker, /arty-ios-v20/);
 });

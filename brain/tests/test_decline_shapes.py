@@ -23,7 +23,7 @@ LONG_RUN = 50_000
 LONG_RUN_SECONDS = 1.0
 
 
-def rules(said, model="friend-model", **extra):
+def rules(said, model="remote-model-a", **extra):
     return starfire_rules.rules_for(CONFIG, {"model": model, "said": said, **extra})
 
 
@@ -39,7 +39,7 @@ class EverythingStarfireSendsIsChecked(unittest.TestCase):
         self.assertEqual(rules(lead + WEAPON_REQUEST)["declined_kind"], "weapons")
 
     def test_a_cry_for_help_after_padding_gets_the_help_reply_on_any_model(self):
-        self.assertEqual(rules(PADDING + SELF_HARM_REQUEST, model="friend-unruled")["declined_kind"], "self_harm")
+        self.assertEqual(rules(PADDING + SELF_HARM_REQUEST, model="remote-unruled")["declined_kind"], "self_harm")
 
     def test_ordinary_long_text_is_not_declined(self):
         self.assertIsNone(rules("tell me about otters. " * 5000)["declined"])
@@ -52,12 +52,12 @@ class EverythingStarfireSendsIsChecked(unittest.TestCase):
 
 class StarfireMayOnlyNarrowUnrestricted(unittest.TestCase):
     def test_a_name_the_brain_lists_keeps_the_safety_rules_when_starfire_says_restricted(self):
-        told = rules(WEAPON_REQUEST, model="friend-unruled", unrestricted=False)
+        told = rules(WEAPON_REQUEST, model="remote-unruled", unrestricted=False)
         self.assertEqual(told["declined_kind"], "weapons")
         self.assertTrue(told["safety_rules"])
 
     def test_a_name_the_brain_lists_is_unrestricted_when_starfire_agrees(self):
-        told = rules(WEAPON_REQUEST, model="friend-unruled", unrestricted=True)
+        told = rules(WEAPON_REQUEST, model="remote-unruled", unrestricted=True)
         self.assertIsNone(told["declined"])
         self.assertFalse(told["safety_rules"])
 

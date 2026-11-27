@@ -7,8 +7,9 @@ Know these before relying on it:
 - **Small models are riskier** - models under about 7B follow instructions and Arty's rules less reliably and are
   easier to steer with text hidden in a web page, an email, a file or the screen (prompt injection). The approval
   checks in code still apply whatever the model, but with tools that act on your PC, browser and accounts a small
-  model makes a wrong or manipulated action more likely, so don't use one as the main model. Arty is built and tested
-  on `qwen3:14b` (main), `mimo-v2.6:9b` (code and pictures) and `qwen2.5vl:7b` (pictures), all in the recommended
+  model makes a wrong or manipulated action more likely, so don't use one as the main model. Arty runs on the
+  Qwen3.6 35B (main, code and pictures), with `qwen3:14b` to pick by hand and `qwen2.5vl:7b` for its pictures; it was
+  first built and tested on `qwen3:14b` (main) and `mimo-v2.6:9b` (code and pictures). All are in the recommended
   range; a bigger model is safer but not immune, so the approvals stay on either way.
 - **It can still be wrong** - outside the things handled in code, it can misunderstand a request, pick the wrong
   tool or state something false with confidence. Check anything important, and read commands before running them.

@@ -444,7 +444,10 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun finishTurn(conversationId: String, reply: StoredMessage) {
         val conversation = (if (current.id == conversationId) current else store.load(conversationId)) ?: return
-        val updated = conversation.copy(messages = conversation.messages + reply, pendingJobId = null, updated = System.currentTimeMillis())
+        val switched = reply.report?.persistedPick()
+        if (switched != null) prefs.edit().putString(PREF_MODEL_CHOICE, switched).apply()
+        val updated = conversation.copy(messages = conversation.messages + reply, pendingJobId = null, updated = System.currentTimeMillis(),
+            model = switched ?: conversation.model)
         if (!reply.failed) ArtyWidget.setLatest(getApplication(), reply.content)
         // Away from the app: "Arty has replied" with its first few words, like other assistants do.
         if (!onScreen) Announcements.showReply(getApplication(), conversationId, reply.content, reply.failed)
@@ -533,6 +536,9 @@ class ArtyViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshModels() = viewModelScope.launch {
         try {
             models = withContext(Dispatchers.IO) { client.models() }
+            if (current.messages.isEmpty() && models.isNotEmpty() && models.none { it.id == current.model }) {
+                current = current.copy(model = TurnStatus.defaultModel(models))
+            }
         } catch (error: ArtyException) {
             notice = error.message
         }

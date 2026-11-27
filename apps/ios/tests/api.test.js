@@ -30,7 +30,7 @@ const KEYS = { apiKey: "app-key", accessId: "id.access", accessSecret: "secret" 
 test("every request carries the app key and the Cloudflare service token", async () => {
   const { calls, fetchImpl } = fakeFetch(reply(200, { data: [{ id: "Arty" }] }));
   await new ArtyApi(KEYS, { base: "https://arty.example/", fetchImpl }).models();
-  assert.equal(calls[0].url, "https://arty.example/v1/models");
+  assert.equal(calls[0].url, "https://arty.example/v1/models?remote=1");
   assert.equal(calls[0].headers.Authorization, "Bearer app-key");
   assert.equal(calls[0].headers["CF-Access-Client-Id"], "id.access");
   assert.equal(calls[0].headers["CF-Access-Client-Secret"], "secret");
@@ -53,6 +53,15 @@ test("models keep their ids and fall back to the id as the name", async () => {
     ["Arty", "Arty"],
     ["solo/side-model:12b", "side-model:12b (on its own: no Arty, no memory)"],
   ]);
+});
+
+test("the brain's labels and private marks reach the picker", async () => {
+  const { fetchImpl } = fakeFetch(reply(200, { data: [
+    { id: "arty/big:35b", name: "Arty (Big 35B)", label: "Big 35B", model: "big:35b", private: true },
+    { id: "arty/qwen3:14b", name: "Arty (qwen3:14b)", model: "qwen3:14b" },
+  ] }));
+  const models = await new ArtyApi(KEYS, { fetchImpl }).models();
+  assert.deepEqual(models.map((m) => [m.label, m.private]), [["Big 35B", true], ["", false]]);
 });
 
 test("the brain's Arty Auto entry comes first in the models", async () => {
@@ -104,6 +113,7 @@ test("a chat starts a job as the ios client with files as content parts", async 
   const sent = JSON.parse(calls[0].body);
   assert.equal(sent.client, CLIENT_NAME);
   assert.equal(sent.model, "solo/side-model:12b");
+  assert.equal(sent.arty_named_model, true);
   assert.deepEqual(sent.messages[0].content, [
     { type: "text", text: "what's this?" },
     { type: "file", file: { file_id: "f1", filename: "photo.jpg" } },

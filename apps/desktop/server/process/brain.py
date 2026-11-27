@@ -28,18 +28,23 @@ RETIRED_MAIN_MODEL = "assistant-core"
 AUTO_MODEL = "auto"
 AUTO_NAME = "Arty Auto"
 AUTO_HINT = "Picks the best model for each message"
-NOW_AUTO = {MAIN_MODEL, RETIRED_MAIN_MODEL, ""}
+NOW_MAIN = {RETIRED_MAIN_MODEL, ""}
 NAMED_BY_MODEL = ("arty/", "solo/")
 OFFLINE_SUFFIX = " (offline)"
+PICKER_TABS = ("Arty", "Choose a model")
+REMOTE_SECTION = "Remote"
+REMOTE_PREFIXES = ("remote/", "arty/remote/")
+HELPER_MODELS = ("qwen2.5vl",)
 MEMORY_ACTIONS = {"add", "edit", "delete"}
 
 
 def as_current_name(model_id):
-    return AUTO_MODEL if model_id in NOW_AUTO else model_id
+    return MAIN_MODEL if model_id in NOW_MAIN else model_id
 
 
-MODEL = as_current_name(str(_brain.get("model") or AUTO_MODEL))
+MODEL = as_current_name(str(_brain.get("model") or MAIN_MODEL))
 CLIENT_NAME = "desktop"
+SCREEN_NOTE_TAG = "<screen>"
 TIMEOUT_SECONDS = float(_brain.get("timeout_seconds", 600))
 # The conversation sent with each message: HISTORY_TURNS to HISTORY_TURNS + HISTORY_STEP_TURNS exchanges.
 HISTORY_TURNS = int(_brain.get("history_turns", 8))
@@ -97,7 +102,7 @@ class Activity(str):
 
     def __new__(cls, label, where, confirm=None):
         piece = super().__new__(cls, "")
-        piece.label, piece.where, piece.confirm = _without_angle_brackets(label), where, confirm
+        piece.label, piece.where, piece.confirm = (label if confirm else _without_angle_brackets(label)), where, confirm
         return piece
 
 
@@ -112,7 +117,7 @@ def turn_numbers(reports, computer_steps):
     known = [report for report in reports if isinstance(report, dict)]
     if not known:
         return None
-    combined = {key: known[0][key] for key in ("model", "role", "auto", "context_window") if key in known[0]}
+    combined = {key: known[0][key] for key in ("model", "role", "auto", "context_window", "persist", "pick") if key in known[0]}
     combined["steps"] = sum(int(report.get("steps") or 0) for report in known) + computer_steps
     measured = [report for report in known if isinstance(report.get("usage"), dict)]
     if measured:
@@ -221,6 +226,16 @@ def _headers(**extra):
     return {"Authorization": f"Bearer {API_KEY}", **extra, **route.access_headers()}
 
 
+def _is_a_screen_look(messages):
+    latest = next((message for message in reversed(messages) if message.get("role") == "user"), {})
+    return SCREEN_NOTE_TAG in str(latest.get("content") or "")
+
+
+def _turn_headers(messages):
+    named = {} if _is_a_screen_look(messages) else {"X-Arty-Named-Model": "1"}
+    return {"X-Arty-Client-Tools": "1", "X-Arty-Skip-Groups": "browser,screen,windows", **named}
+
+
 def _stream(messages, offer_tools, lead=""):
     """Asks the brain, yielding the reply's text as it arrives (the brain sends the first sentences while
     the model is still writing), with `lead` in front of the first piece. Returns the whole message."""
@@ -231,7 +246,7 @@ def _stream(messages, offer_tools, lead=""):
         response = requests.post(
             f"{_base()}/chat/completions", json=body, timeout=(10, TIMEOUT_SECONDS), stream=True,
             # This app drives the user's own browser, screen and windows; the brain's versions act on its VM.
-            headers=_headers(**{"X-Arty-Client-Tools": "1", "X-Arty-Skip-Groups": "browser,screen,windows"}),
+            headers=_headers(**_turn_headers(messages)),
         )
     except route.UnprovenBrain as error:
         raise BrainError(str(error)) from None
@@ -365,7 +380,7 @@ def set_model(model_id):
 
 
 def _own_label(entry):
-    model, name = str(entry.get("model") or ""), str(entry.get("name") or entry["id"])
+    model, name = str(entry.get("label") or entry.get("model") or ""), str(entry.get("name") or entry["id"])
     return (model or name) if entry["id"].startswith(NAMED_BY_MODEL) else name
 
 
@@ -374,25 +389,59 @@ def _picker_label(entry):
     return label if entry.get("available") is not False or label.endswith(OFFLINE_SUFFIX) else label + OFFLINE_SUFFIX
 
 
-def picker_models(listed, auto=None):
-    hint = (auto or {}).get("description") or AUTO_HINT
-    picked = [{"id": AUTO_MODEL, "name": AUTO_NAME, "model": "", "description": hint}]
-    seen = set()
-    for entry in listed:
-        if entry.get("id") in (AUTO_MODEL, MAIN_MODEL, None):
-            continue
+def _is_remote(entry):
+    return str(entry["id"]).startswith(REMOTE_PREFIXES) or str(entry.get("model") or "").startswith(REMOTE_PREFIXES)
+
+
+def _is_helper(entry):
+    model = str(entry.get("model") or "")
+    return any(model.startswith(helper) or f"/{helper}" in str(entry["id"]) for helper in HELPER_MODELS)
+
+
+def _is_labelled(entry):
+    label = entry.get("label")
+    return str(entry["id"]).startswith("arty/") and bool(label) and label != entry.get("model")
+
+
+def _picker_entry(entry, name, group):
+    return {"id": entry["id"], "name": name, "model": str(entry.get("model") or ""), "description": entry.get("description", ""),
+            "private": entry.get("private") is True, "group": group}
+
+
+def _once_each(entries, group):
+    picked, seen = [], set()
+    for entry in entries:
         name, model = _picker_label(entry), str(entry.get("model") or "")
         if name in seen or model in seen:
             continue
         seen.update(label for label in (name, model) if label)
-        picked.append({"id": entry["id"], "name": name, "model": model, "description": entry.get("description", "")})
+        picked.append(_picker_entry(entry, name, group))
     return picked
+
+
+def picker_models(listed, auto=None):
+    hint = (auto or {}).get("description") or AUTO_HINT
+    main = [_picker_entry(entry, MAIN_MODEL, "arty") for entry in listed if entry.get("id") == MAIN_MODEL][:1]
+    auto = {"id": AUTO_MODEL, "name": AUTO_NAME, "model": "", "description": hint, "private": False, "group": "arty"}
+    singles = [entry for entry in listed if entry.get("id") not in (AUTO_MODEL, MAIN_MODEL, None) and not _is_helper(entry)]
+    local = [entry for entry in singles if not _is_remote(entry)]
+    arty = main + [auto] if main or local else []
+    chosen = [entry for entry in local if _is_labelled(entry)] + [entry for entry in local if not _is_labelled(entry)]
+    return arty + _once_each(chosen, "choose") + _once_each([entry for entry in singles if _is_remote(entry)], "remote")
+
+
+def usable_model(current, picked):
+    ids = [entry["id"] for entry in picked]
+    if current not in (MAIN_MODEL, AUTO_MODEL) or not picked or current in ids:
+        return current
+    fallback = [entry for entry in picked if entry["group"] == "choose"] + [entry for entry in picked if entry["group"] == "remote"]
+    return fallback[0]["id"] if fallback else AUTO_MODEL
 
 
 def list_models():
     """The brain's models as [{id, name}], or raises BrainError."""
     try:
-        response = requests.get(f"{_base()}/models", timeout=10, headers=_headers())
+        response = requests.get(f"{_base()}/models?remote=1", timeout=10, headers=_headers())
         response.raise_for_status()
         reply = response.json()
     except (requests.RequestException, ValueError) as error:

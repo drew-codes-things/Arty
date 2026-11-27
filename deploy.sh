@@ -74,10 +74,11 @@ pct exec "$1" -- bash -c 'set -e
 cd /root && rm -rf deploy && mkdir deploy && tar xzf ai-deploy.tgz -C deploy && rm ai-deploy.tgz
 live_model=$(jq -r .model /srv/ai/brain/brain.json 2>/dev/null || true)
 live_toolless=$(jq -r ".allow_toolless_models // false" /srv/ai/brain/brain.json 2>/dev/null || echo false)
+live_labels=$(jq -c ".model_labels // {}" /srv/ai/brain/brain.json 2>/dev/null || echo "{}")
 install -m 644 deploy/brain/* /srv/ai/brain/
 install -m 644 deploy/own-apps.json /srv/ai/brain/own-apps.json
 if [ -n "$live_model" ] && [ "$live_model" != null ]; then
-  jq --arg m "$live_model" --argjson t "$live_toolless" ".model = \$m | .allow_toolless_models = \$t" /srv/ai/brain/brain.json > /srv/ai/brain/brain.json.tmp && mv /srv/ai/brain/brain.json.tmp /srv/ai/brain/brain.json
+  jq --arg m "$live_model" --argjson t "$live_toolless" --argjson l "$live_labels" ".model = \$m | .allow_toolless_models = \$t | .model_labels = ((.model_labels // {}) + \$l)" /srv/ai/brain/brain.json > /srv/ai/brain/brain.json.tmp && mv /srv/ai/brain/brain.json.tmp /srv/ai/brain/brain.json
 fi
 mkdir -p /srv/ai/brain/state
 install -m 644 deploy/mcp/* /srv/ai/mcp/

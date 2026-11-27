@@ -4,6 +4,7 @@ import os
 import stat
 import subprocess
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -346,3 +347,25 @@ def test_without_the_brains_settings_it_uses_the_shipped_window(monkeypatch, tmp
     body = looked_at_desktop(monkeypatch, tmp_path, None)
     assert body["options"]["num_ctx"] == ws.FALLBACK_CONTEXT_TOKENS == 24576
     assert body["shift"] is False
+
+
+def test_looking_with_the_main_model_keeps_it_loaded(monkeypatch, tmp_path):
+    monkeypatch.setattr(ws, "VISION_MODEL", "big:35b")
+    body = looked_at_desktop(monkeypatch, tmp_path, {"model": "big:35b", "keep_alive": -1, "options": {"num_ctx": 24576}})
+    assert body["keep_alive"] == -1
+
+
+def test_looking_with_a_separate_picture_model_unloads_it_afterwards(monkeypatch, tmp_path):
+    monkeypatch.setattr(ws, "VISION_MODEL", "looker:7b")
+    body = looked_at_desktop(monkeypatch, tmp_path, {"model": "big:35b", "keep_alive": -1, "options": {"num_ctx": 24576}})
+    assert body["keep_alive"] == 0
+
+
+def test_the_hub_looks_with_the_main_model():
+    hub = json.loads((Path(__file__).resolve().parent / "tool-hub.json").read_text())
+    assert hub["mcpServers"]["workspace"]["env"]["VISION_MODEL"] == "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
+
+
+def test_looking_at_the_desktop_never_thinks_first(monkeypatch, tmp_path):
+    body = looked_at_desktop(monkeypatch, tmp_path, {"options": {"num_ctx": 30000}})
+    assert body["think"] is False

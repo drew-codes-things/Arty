@@ -14,27 +14,27 @@ import connections  # noqa: E402
 import models  # noqa: E402
 
 SHIPPED = Path(__file__).resolve().parents[1] / "brain.json"
-MIMO = "mimo-v2.6:9b"
+SIDE = "side-model:9b"
 QWEN = "qwen3:14b"
 CHAT_WINDOW = 24576
-MIMO_WINDOW = 49152
+SIDE_WINDOW = 49152
 
 
 def windows(enabled=True, **sizes):
     return {"model": QWEN, "options": {"num_ctx": CHAT_WINDOW},
-            "model_windows": {"enabled": enabled, "num_ctx": sizes or {MIMO: MIMO_WINDOW}}}
+            "model_windows": {"enabled": enabled, "num_ctx": sizes or {SIDE: SIDE_WINDOW}}}
 
 
 class PerModelWindow(unittest.TestCase):
     def test_the_shipped_brain_has_it_ready_but_off(self):
         shipped = json.loads(SHIPPED.read_text())
         self.assertIs(shipped["model_windows"]["enabled"], False)
-        self.assertEqual(shipped["model_windows"]["num_ctx"], {MIMO: MIMO_WINDOW})
-        self.assertEqual(models.context_tokens(shipped, MIMO), shipped["options"]["num_ctx"])
+        self.assertEqual(shipped["model_windows"]["num_ctx"], {})
+        self.assertEqual(models.context_tokens(shipped, shipped["model"]), shipped["options"]["num_ctx"])
 
     def test_switched_on_a_listed_model_gets_its_own_window(self):
-        self.assertEqual(models.context_tokens(windows(), MIMO), MIMO_WINDOW)
-        self.assertEqual(models.context_tokens(windows(), f"{MIMO.split(':')[0]}:latest"), CHAT_WINDOW)
+        self.assertEqual(models.context_tokens(windows(), SIDE), SIDE_WINDOW)
+        self.assertEqual(models.context_tokens(windows(), f"{SIDE.split(':')[0]}:latest"), CHAT_WINDOW)
         self.assertEqual(models.context_tokens(windows(), QWEN), CHAT_WINDOW)
         self.assertEqual(models.context_tokens(windows()), CHAT_WINDOW)
 
@@ -42,7 +42,7 @@ class PerModelWindow(unittest.TestCase):
         self.assertEqual(models.context_tokens(windows(coder=32768), "coder:latest"), 32768)
 
     def test_switched_off_every_model_gets_the_chat_window(self):
-        self.assertEqual(models.context_tokens(windows(enabled=False), MIMO), CHAT_WINDOW)
+        self.assertEqual(models.context_tokens(windows(enabled=False), SIDE), CHAT_WINDOW)
 
     def test_a_bad_size_falls_back_to_the_chat_window(self):
         for size in ("lots", 0, -5, True, 1.5):
@@ -50,13 +50,13 @@ class PerModelWindow(unittest.TestCase):
                 self.assertEqual(models.context_tokens(windows(**{"m:1b": size}), "m:1b"), CHAT_WINDOW)
 
     def test_every_call_to_a_model_loads_it_at_that_models_window(self):
-        self.assertEqual(models.for_runner(windows(), {"model": MIMO})["options"]["num_ctx"], MIMO_WINDOW)
+        self.assertEqual(models.for_runner(windows(), {"model": SIDE})["options"]["num_ctx"], SIDE_WINDOW)
         self.assertEqual(models.for_runner(windows(), {"model": QWEN})["options"]["num_ctx"], CHAT_WINDOW)
 
     def test_the_overflow_error_names_the_models_own_window(self):
-        overflow = brain.WindowOverflow(MIMO, models.context_tokens(windows(), MIMO))
-        self.assertEqual(overflow.details()["context_tokens"], MIMO_WINDOW)
-        self.assertIn(str(MIMO_WINDOW), str(overflow))
+        overflow = brain.WindowOverflow(SIDE, models.context_tokens(windows(), SIDE))
+        self.assertEqual(overflow.details()["context_tokens"], SIDE_WINDOW)
+        self.assertIn(str(SIDE_WINDOW), str(overflow))
 
 
 class PerModelWindowInTheList(Server):

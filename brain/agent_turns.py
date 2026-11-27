@@ -1,5 +1,6 @@
 import logging
 
+import attachments
 import connections
 import content_rules
 import content_screen
@@ -32,7 +33,10 @@ def unanswered_user_words(messages: list, client: str) -> str:
 def agent_turn(messages, requested_model, client_tools, on_text, any_installed, on_thinking=None, client=""):
     config = connections.load_config()
     main_config = dict(config)
-    holds_another_model = use_requested_model(config, agent_model(config, requested_model), any_installed, session=True)
+    turn_model = agent_model(config, requested_model)
+    holds_another_model = use_requested_model(config, turn_model, any_installed, session=True,
+                                              by_hand=turn_model == requested_model)
+    attachments.turn_runs_on(config["model"])
     try:
         return agent_reply(config, messages, client_tools, on_text, on_thinking, client)
     finally:

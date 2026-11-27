@@ -2,7 +2,9 @@ import base64
 import functools
 import logging
 import mimetypes
+import threading
 import urllib.error
+from contextlib import contextmanager
 
 import connections
 import media
@@ -19,15 +21,51 @@ log = logging.getLogger("brain")
 
 # ---------- attachments ----------
 
+def sees_with_the_main(config: dict) -> bool:
+    return config.get("one_model") is True and bool(config.get("model")) and config.get("vision_model") == config.get("model")
+
+
+_turn = threading.local()
+
+
+@contextmanager
+def describing_for_the_turn():
+    earlier = getattr(_turn, "model", "")
+    try:
+        yield
+    finally:
+        _turn.model = earlier
+
+
+def turn_runs_on(model: str) -> None:
+    _turn.model = model
+
+
+def seeing_model(name: str):
+    model = models.find(name) if name and not models.is_remote(name) else None
+    return model if model and model["vision"] else None
+
+
+def looker_for_a_picked_model(config: dict):
+    picked = getattr(_turn, "model", "")
+    if not picked or picked == config.get("model"):
+        return None
+    return seeing_model(picked) or next(filter(None, map(seeing_model, models.helper_models())), None)
+
+
 def vision_model(wanted: str = ""):
-    for name in (wanted, connections.load_config().get("vision_model", "")):
+    config = connections.load_config()
+    if picked_looker := looker_for_a_picked_model(config):
+        return picked_looker
+    looker = config.get("vision_model", "")
+    for name in ((looker,) if sees_with_the_main(config) else (wanted, looker)):
         model = models.find(name) if name and not models.is_remote(name) else None
         if model and model["vision"]:
             return model
     model = next((m for m in models.installed() if m["vision"] and models.in_arty(m) and not models.is_separate(m)
                   and not models.kept_solo(m) and not models.is_remote(m["name"])), None)
     if model is None:
-        raise ApiError(400, "No vision model is installed. Run: ai-pull mimo-v2.6:9b")
+        raise ApiError(400, "No vision model is installed. Run: ai-pull qwen2.5vl:7b")
     return model
 
 
@@ -37,8 +75,9 @@ def look(images: list[str], prompt: str, keep_alive=0) -> str:
     options = {k: v for k, v in config.get("options", {}).items() if k == "num_predict"}
     looker = vision_model()["name"]
     models.make_room(looker, models.vram_budget(config))
+    kept = config.get("keep_alive", keep_alive) if looker == config.get("model") else session_keep_alive(looker, keep_alive)
     raw = connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=models.for_runner(config, {
-        "model": looker, "stream": False, "think": False, "options": options, "keep_alive": session_keep_alive(looker, keep_alive),
+        "model": looker, "stream": False, "think": False, "options": options, "keep_alive": kept,
         "messages": [{"role": "user", "content": prompt, "images": images}]}))
     return ((raw or {}).get("message") or {}).get("content", "").strip() or "(the vision model gave no description)"
 

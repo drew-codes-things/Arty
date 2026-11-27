@@ -148,7 +148,7 @@ test("only as many waiting requests are kept as the brain keeps open", async () 
   let cards;
   const api = {
     remoteEvents: async () => {
-      if (reads.length === 1) cards = page.children[3].children.map((card) => texts(card).join(" "));
+      if (reads.length === 1) cards = page.children[3].children.slice(1).map((card) => texts(card).join(" "));
       return reads.shift();
     },
   };

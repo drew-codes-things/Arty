@@ -56,10 +56,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +81,7 @@ import app.arty.core.Activity
 import app.arty.core.ArtyClient
 import app.arty.core.ArtyException
 import app.arty.core.ArtyReply
+import app.arty.core.CardPager
 import app.arty.core.CompactedMark
 import app.arty.core.DiffTone
 import app.arty.core.PermissionAnswers
@@ -168,6 +179,8 @@ private fun SessionView(client: ArtyClient, session: RemoteSession, onBack: () -
     var notice by remember(session.id) { mutableStateOf("") }
     var draft by remember(session.id) { mutableStateOf("") }
     var answers by remember(session.id) { mutableStateOf(PermissionAnswers()) }
+    var pager by remember(session.id) { mutableStateOf(CardPager()) }
+    var typing by remember(session.id) { mutableStateOf(false) }
     var readUpTo by remember(session.id) { mutableLongStateOf(0L) }
     var lastEventAt by remember(session.id) { mutableLongStateOf(System.currentTimeMillis()) }
     var quiet by remember(session.id) { mutableStateOf(false) }
@@ -255,6 +268,9 @@ private fun SessionView(client: ArtyClient, session: RemoteSession, onBack: () -
         act("") { client.remoteMessage(session.id, text) }
     }
     val asking = if (ended) emptyList() else answers.shown(open)
+    val askingIds = asking.map { it.requestId }
+    val paging = pager.sync(askingIds)
+    LaunchedEffect(askingIds) { pager = pager.sync(askingIds) }
     val activity = RemoteWords.activityOf(transcript, ended, asking.size, if (quiet) RemoteWords.FINISHED_AFTER_MS else 0L)
     val browser = LocalUriHandler.current
     val webOnly = remember(browser) {
@@ -264,14 +280,22 @@ private fun SessionView(client: ArtyClient, session: RemoteSession, onBack: () -
             }
         }
     }
-    Column(Modifier.fillMaxSize().imePadding()) {
+    Column(Modifier.fillMaxSize().imePadding().onPreviewKeyEvent { event ->
+        val delta = pagerStep(event.key)
+        val isPaging = delta != null && event.type == KeyEventType.KeyDown && paging.isPaged && !typing
+        if (isPaging) pager = paging.step(delta!!)
+        isPaging
+    }) {
         SessionHeader(details, connection, connected, onBack)
         Box(Modifier.weight(1f)) {
             CompositionLocalProvider(LocalUriHandler provides webOnly, LocalArtyMedia provides null) {
                 LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(transcript.items, key = { it.id }) { Box(Modifier.arrival(this, arrivals, it.id)) { TranscriptItemView(it) } }
-                    items(asking, key = { "ask-${it.requestId}" }) { request ->
+                    if (paging.isPaged) item(key = "ask-pager") {
+                        CardPagerBar(paging, onPrevious = { pager = paging.step(-1) }, onNext = { pager = paging.step(1) })
+                    }
+                    items(asking.filter { paging.isCurrent(it.requestId) }, key = { "ask-${it.requestId}" }) { request ->
                         PermissionCard(request, Modifier.arrival(this, arrivals, "ask-${request.requestId}"),
                             sending = answers.isSending(request.requestId), problem = answers.problem(request.requestId),
                             onAllow = { answer(request, allow = true) },
@@ -294,7 +318,7 @@ private fun SessionView(client: ArtyClient, session: RemoteSession, onBack: () -
                     keyboardActions = KeyboardActions(onSend = { send() }),
                     shape = RoundedCornerShape(ArtyRadius.ExtraLarge),
                     colors = artyFieldColors(),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).onFocusChanged { typing = it.isFocused },
                 )
                 ArtyButton(onClick = ::send, enabled = !ended) { Text("Send") }
                 if (activity.phase.isBusy) {
@@ -454,6 +478,24 @@ private fun Preview(text: String) {
         modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth().heightIn(max = 240.dp)
             .clip(MaterialTheme.shapes.small).background(ArtyColors.Sunken).border(1.dp, ArtyColors.Line, MaterialTheme.shapes.small)
             .verticalScroll(rememberScrollState()).padding(10.dp))
+}
+
+private fun pagerStep(key: Key): Int? = when (key) {
+    Key.DirectionLeft -> -1
+    Key.DirectionRight -> 1
+    else -> null
+}
+
+@Composable
+private fun CardPagerBar(paging: CardPager, onPrevious: () -> Unit, onNext: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        ArtyOutlinedButton(onClick = onPrevious, enabled = paging.canGoBack,
+            modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Previous question" }) { Text("<") }
+        Text(paging.label, style = MaterialTheme.typography.bodyMedium, color = ArtyColors.TextDim,
+            modifier = Modifier.padding(horizontal = 16.dp).semantics { liveRegion = LiveRegionMode.Polite })
+        ArtyOutlinedButton(onClick = onNext, enabled = paging.canGoForward,
+            modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Next question" }) { Text(">") }
+    }
 }
 
 @Composable

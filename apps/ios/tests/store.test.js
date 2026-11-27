@@ -65,18 +65,18 @@ test("conversations are saved newest first and can be removed", () => {
   assert.equal(store.get("missing"), null);
 });
 
-test("new chats use Arty Auto, and the main model is still called Arty", () => {
+test("new chats use Arty, the main model", () => {
   assert.equal(DEFAULT_MODEL, "Arty");
-  assert.equal(NEW_CHAT_MODEL, "auto");
-  assert.equal(new ConversationStore(memoryStorage(), { newId: () => "c1" }).create().model, "auto");
+  assert.equal(NEW_CHAT_MODEL, "Arty");
+  assert.equal(new ConversationStore(memoryStorage(), { newId: () => "c1" }).create().model, "Arty");
 });
 
-test("a new chat takes the last model picked by hand, else Arty Auto", () => {
-  assert.equal(newChatModel({}), "auto");
-  assert.equal(newChatModel({ modelChoice: null }), "auto");
+test("a new chat takes the last model picked by hand, else Arty", () => {
+  assert.equal(newChatModel({}), "Arty");
+  assert.equal(newChatModel({ modelChoice: null }), "Arty");
   assert.equal(newChatModel({ modelChoice: "arty/qwen3:14b" }), "arty/qwen3:14b");
-  assert.equal(newChatModel({ modelChoice: "assistant-core" }), "auto");
-  assert.equal(newChatModel({ modelChoice: "Arty" }), "auto");
+  assert.equal(newChatModel({ modelChoice: "assistant-core" }), "Arty");
+  assert.equal(newChatModel({ modelChoice: "auto" }), "auto");
 });
 
 test("each chat keeps its own model and reply numbers when saved and read back", () => {
@@ -87,7 +87,7 @@ test("each chat keeps its own model and reply numbers when saved and read back",
   assert.deepEqual(store.get("c1").messages[1].arty, reply.arty);
 });
 
-test("chats saved on the main Arty entry, under either name, open as Arty Auto", () => {
+test("chats saved on the main Arty entry, under either name, open as Arty", () => {
   const storage = memoryStorage();
   storage.setItem(CONVERSATIONS_KEY, JSON.stringify([
     { id: "old", title: "old", model: "assistant-core", messages: [], updated: 3 },
@@ -95,8 +95,8 @@ test("chats saved on the main Arty entry, under either name, open as Arty Auto",
     { id: "picked", title: "picked", model: "arty/qwen3:14b", messages: [], updated: 1 },
   ]));
   const store = new ConversationStore(storage);
-  assert.equal(store.get("old").model, "auto");
-  assert.deepEqual(store.list().map((c) => c.model), ["auto", "auto", "arty/qwen3:14b"]);
+  assert.equal(store.get("old").model, "Arty");
+  assert.deepEqual(store.list().map((c) => c.model), ["Arty", "Arty", "arty/qwen3:14b"]);
 });
 
 test("old conversations beyond the limit are dropped and bad storage reads as empty", () => {

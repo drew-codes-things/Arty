@@ -67,7 +67,7 @@ class ArtyClientTest {
 
     @Test
     fun `sends the API key and Cloudflare Access headers`() {
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty"},{"id":"arty/qwen2.5:3b","name":"Arty (qwen2.5:3b)"}]}"""
+        routes["GET /v1/models?remote=1"] = 200 to """{"data":[{"id":"Arty"},{"id":"arty/qwen2.5:3b","name":"Arty (qwen2.5:3b)"}]}"""
         val models = client.models()
         assertEquals(listOf("Arty", "Arty (qwen2.5:3b)"), models.map { it.name })
         val headers = seen.single().headers
@@ -78,7 +78,7 @@ class ArtyClientTest {
 
     @Test
     fun `the identity check never sends the Cloudflare Access secret to the unproven server`() {
-        routes["GET /v1/models"] = 200 to """{"data":[]}"""
+        routes["GET /v1/models?remote=1"] = 200 to """{"data":[]}"""
         client.models()
         val asked = identityHeaders.single()
         assertNull(asked["cf-access-client-id"])
@@ -88,7 +88,7 @@ class ArtyClientTest {
     @Test
     fun `a device key is proven by the brain keying its proof with the key's SHA-256`() {
         identityKeys = listOf("other-key", sha256Hex("test-key"))
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty"}]}"""
+        routes["GET /v1/models?remote=1"] = 200 to """{"data":[{"id":"Arty"}]}"""
         assertEquals(listOf("Arty"), client.models().map { it.name })
     }
 
@@ -97,7 +97,7 @@ class ArtyClientTest {
 
     @Test
     fun `reads each model's name and description`() {
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty","model":"qwen3:14b","description":"14.8B · all tools"},{"id":"arty/qwen2.5:7b"}]}"""
+        routes["GET /v1/models?remote=1"] = 200 to """{"data":[{"id":"Arty","model":"qwen3:14b","description":"14.8B · all tools"},{"id":"arty/qwen2.5:7b"}]}"""
         val models = client.models()
         assertEquals(ModelOption("Arty", "Arty", "qwen3:14b", "14.8B · all tools"), models[0])
         assertEquals(ModelOption("arty/qwen2.5:7b", "arty/qwen2.5:7b"), models[1])
@@ -105,7 +105,7 @@ class ArtyClientTest {
 
     @Test
     fun `a model the brain marks unavailable is read as unavailable`() {
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"arty/remote/x","model":"remote/x","available":false},{"id":"Arty"}]}"""
+        routes["GET /v1/models?remote=1"] = 200 to """{"data":[{"id":"arty/remote/x","model":"remote/x","available":false},{"id":"Arty"}]}"""
         val models = client.models()
         assertEquals(false, models[0].available)
         assertEquals(true, models[1].available)
@@ -141,7 +141,7 @@ class ArtyClientTest {
 
     @Test
     fun `the brain's Arty Auto entry comes first in the models`() {
-        routes["GET /v1/models"] = 200 to """{"data":[{"id":"Arty","model":"qwen3:14b"}],"auto":{"id":"auto","name":"Arty Auto","description":"Picks the model for each message"}}"""
+        routes["GET /v1/models?remote=1"] = 200 to """{"data":[{"id":"Arty","model":"qwen3:14b"}],"auto":{"id":"auto","name":"Arty Auto","description":"Picks the model for each message"}}"""
         val models = client.models()
         assertEquals(ModelOption("auto", "Arty Auto", "", "Picks the model for each message"), models[0])
         assertEquals("Arty", models[1].id)
@@ -173,6 +173,7 @@ class ArtyClientTest {
         assertEquals("phone", sent.getString("client"))
         assertEquals("device_actions", sent.getJSONArray("features").getString(0))
         assertEquals("camera", sent.getJSONArray("features").getString(1))
+        assertTrue(sent.getBoolean("arty_named_model"))
         val job = client.chatJob(id)
         assertTrue(job.finished)
         assertEquals("Hi", job.answer)

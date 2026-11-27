@@ -13,7 +13,7 @@ import models  # noqa: E402
 
 BUDGET = 11500 * 1024 * 1024
 LOADED = [{"name": "qwen3:14b", "size_vram": BUDGET - 1}]
-REMOTE = "remote/friend/qwen3-14b"
+REMOTE = "remote/remote-a/qwen3-14b"
 
 
 class RemoteModelsTakeNoRoom(unittest.TestCase):

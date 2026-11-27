@@ -9,6 +9,106 @@ const ALLOWED_NOTE = '  (allowed)';
 const NOT_ALLOWED_NOTE = '  (not allowed)';
 const TOO_LATE_NOTE = '  (too late, nothing was done)';
 const LINK_CARD_CLASS = 'link-ask';
+const PAGER_CLASS = 'card-pager';
+const PAGER_KEYS = { ArrowLeft: -1, ArrowRight: 1 };
+const TYPING_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+function createCardPager() {
+  let items = [];
+  let current = null;
+  return {
+    sync(next) {
+      const previousIndex = Math.max(items.indexOf(current), 0);
+      items = [...next];
+      if (items.includes(current)) return;
+      current = items[Math.min(previousIndex, items.length - 1)] ?? null;
+    },
+    step(delta) {
+      const target = items[items.indexOf(current) + delta];
+      if (target !== undefined) current = target;
+    },
+    isCurrent(item) { return item === current; },
+    get count() { return items.length; },
+    get position() { return items.indexOf(current) + 1; },
+    get label() { return `${items.indexOf(current) + 1} of ${items.length}`; },
+    get canGoBack() { return items.indexOf(current) > 0; },
+    get canGoForward() { return items.indexOf(current) < items.length - 1; },
+  };
+}
+
+const pager = createCardPager();
+const pendingCards = [];
+let arrowKeysListening = false;
+
+function pagerButton(symbol, label, delta) {
+  const button = document.createElement('button');
+  button.textContent = symbol;
+  button.setAttribute('aria-label', label);
+  button.addEventListener('click', () => pageCards(delta));
+  return button;
+}
+
+function pagerBar() {
+  const bar = document.createElement('div');
+  bar.className = PAGER_CLASS;
+  const previous = pagerButton('<', 'Previous question', -1);
+  const next = pagerButton('>', 'Next question', 1);
+  const count = document.createElement('span');
+  count.setAttribute('aria-live', 'polite');
+  bar.append(previous, count, next);
+  return { element: bar, previous, next, count };
+}
+
+function showPendingCards() {
+  pager.sync(pendingCards.map((pending) => pending.card));
+  const isPaged = pager.count > 1;
+  for (const pending of pendingCards) {
+    pending.card.hidden = !pager.isCurrent(pending.card);
+    pending.bar.element.hidden = !isPaged;
+    pending.bar.count.textContent = pager.label;
+    pending.bar.previous.setAttribute('aria-disabled', String(!pager.canGoBack));
+    pending.bar.next.setAttribute('aria-disabled', String(!pager.canGoForward));
+  }
+}
+
+function pageCards(delta) {
+  pager.step(delta);
+  showPendingCards();
+}
+
+function isTypingTarget(target) {
+  return Boolean(target) && (TYPING_TAGS.has(target.tagName) || target.isContentEditable === true);
+}
+
+function pageWithArrowKeys(event) {
+  const delta = PAGER_KEYS[event.key];
+  if (delta === undefined || pager.count < 2 || isTypingTarget(event.target)) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  event.preventDefault();
+  pageCards(delta);
+}
+
+function listenForArrowKeys() {
+  if (arrowKeysListening) return;
+  arrowKeysListening = true;
+  document.addEventListener('keydown', pageWithArrowKeys);
+}
+
+function startPaging(card) {
+  const bar = pagerBar();
+  card.append(bar.element);
+  pendingCards.push({ card, bar });
+  listenForArrowKeys();
+  showPendingCards();
+}
+
+function stopPaging(card) {
+  const index = pendingCards.findIndex((pending) => pending.card === card);
+  if (index < 0) return;
+  const [{ bar }] = pendingCards.splice(index, 1);
+  bar.element.remove();
+  showPendingCards();
+}
 
 function answerGuard(clock = () => Date.now()) {
   let seenAt = null;
@@ -79,6 +179,7 @@ function questionCard(text, onPress) {
     const button = answerButton(label, guard, () => {
       card.classList.add('done');
       actions.remove();
+      stopPaging(card);
       onPress(ok, question);
     });
     if (ok) button.className = 'allow';
@@ -86,7 +187,9 @@ function questionCard(text, onPress) {
   });
   actions.append(...buttons);
   card.append(question, actions);
-  return flashNewQuestion(card, buttons, guard);
+  flashNewQuestion(card, buttons, guard);
+  startPaging(card);
+  return card;
 }
 
 function stepQuestionCard(text, onAnswer) {

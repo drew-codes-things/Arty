@@ -1062,7 +1062,6 @@ ARTYCODE_REFUSALS = (
 OUTPUT_LIKE_A_REFUSAL = ("Plan mode is on: nothing may be changed\nremoved 14 files\n",
                          "The user didn't allow that. Welcome to our site.",
                          "A permission rule in the settings forbids this, so it wasn't done.\nUpdated 3 rules.")
-CODING_CLIENT = BRAIN_FOLDER.parent / "apps" / "beta" / "code"
 
 
 def refused_by_the_client(text: str) -> list[dict]:
@@ -1146,14 +1145,6 @@ class RefusedCallsAreNotRun(ClientTurns):
                 self.assertEqual([name for name, _ in failed], ["run_command"])
                 self.assertFalse(honesty.some_tool_worked(used, failed))
                 self.assertEqual(agent_loop.tools_that_ran(conversation), [])
-
-    @unittest.skipUnless(CODING_CLIENT.is_dir(), "the coding client is not in this tree")
-    def test_the_coding_clients_own_refusal_texts_are_recognised(self):
-        with unittest.mock.patch.object(sys, "path", [str(CODING_CLIENT), *sys.path]):
-            from arty_code import permissions
-        for text in (permissions.REFUSED, permissions.PLAN_REFUSAL):
-            with self.subTest(refusal=text[:30]):
-                self.assertTrue(honesty.did_not_work(text))
 
     def test_the_command_line_clients_refusal_texts_are_recognised(self):
         for text in ARTYCODE_REFUSALS:

@@ -27,7 +27,7 @@ It comes in two builds from the same code:
 | APK | Package | Where it finds Arty |
 |---|---|---|
 | `release/Arty.apk` | `app.arty` | Built in from `~/.arty-android.properties` - the owner's own copy. **Keep it private**: anyone with the file can reach your Arty. |
-| `release/Arty-<version>.apk` (e.g. `Arty-1.7.0.apk`) | `app.arty.shareable` | Nothing built in. It asks on first launch, so one APK works for anyone's Arty and is safe to share. |
+| `release/Arty-<version>.apk` (e.g. `Arty-1.8.0.apk`) | `app.arty.shareable` | Nothing built in. It asks on first launch, so one APK works for anyone's Arty and is safe to share. |
 
 Both can be installed side by side.
 
@@ -103,9 +103,9 @@ internet, a fake server on another Wi-Fi could pass the challenge on to the real
 
 ## Download
 
-Download `Arty-<version>.apk` (e.g. `Arty-1.7.0.apk`) from the [Releases](../../../../releases) page, or build it into `release/` from source:
+Download `Arty-<version>.apk` (e.g. `Arty-1.8.0.apk`) from the [Releases](../../../../releases) page, or build it into `release/` from source:
 
-- Over USB: `adb install -r Arty-1.7.0.apk` (or `release/Arty.apk` for your own copy, which has your keys built in:
+- Over USB: `adb install -r Arty-1.8.0.apk` (or `release/Arty.apk` for your own copy, which has your keys built in:
   never share that one).
 - Or copy it to the phone, open it and allow installing from that app when Android asks.
 
@@ -122,7 +122,7 @@ Android 9 (API 28) or newer.
 ```
 
 The APKs land in `app/build/outputs/apk/<build>/release/`; copy them to `release/` (which isn't committed), naming the
-shareable one after its version, e.g. `Arty-1.7.0.apk`.
+shareable one after its version, e.g. `Arty-1.8.0.apk`.
 
 The personal build reads its details from `~/.arty-android.properties` (mode 600), never from this repo:
 

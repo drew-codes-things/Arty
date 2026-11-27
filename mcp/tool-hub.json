@@ -4,7 +4,7 @@
     "time": {"command": "mcp-server-time", "args": ["--local-timezone", "Europe/London"]},
     "fetch": {"command": "mcp-server-fetch"},
     "sequential-thinking": {"command": "mcp-server-sequential-thinking"},
-    "workspace": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/workspace_server.py"], "env": {"ARTY_ENGINE_URL": "http://127.0.0.1:11438", "VISION_MODEL": "mimo-v2.6:9b"}},
+    "workspace": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/workspace_server.py"], "env": {"ARTY_ENGINE_URL": "http://127.0.0.1:11438", "VISION_MODEL": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"}},
     "research": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/research_server.py"], "env": {"ARTY_ENGINE_URL": "http://127.0.0.1:11438"}},
     "homelab": {"command": "/opt/ai-mcp/bin/python", "args": ["/srv/ai/mcp/homelab_server.py"]}
   }

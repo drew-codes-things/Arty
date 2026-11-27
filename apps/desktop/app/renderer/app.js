@@ -335,6 +335,7 @@ function handle(event, stream) {
       break;
     case 'numbers':
       stream.numbers = event.arty;
+      if (movesThePicker(event.arty)) loadModels();
       break;
     case 'done':
       stream.replying = false;
@@ -569,6 +570,7 @@ $('call-mute').addEventListener('click', toggleMute);
 // ---------- header controls ----------
 
 let modelsLoaded = false;
+let listedModels = [];
 
 function modelOption(model, current) {
   const option = document.createElement('button');
@@ -580,7 +582,7 @@ function modelOption(model, current) {
   const title = document.createElement('span');
   title.className = 'model-title';
   title.textContent = model.name;
-  if (model.id === AUTO_MODEL_ID) {
+  if (model.id === MAIN_MODEL_ID) {
     const tag = document.createElement('span');
     tag.className = 'model-tag';
     tag.textContent = 'Default';
@@ -600,19 +602,58 @@ function modelOption(model, current) {
 }
 
 const AUTO_MODEL_ID = 'auto';
+const MAIN_MODEL_ID = 'Arty';
+let pickerTab = null;
 
 function showModel(model, id) {
   const name = modelNameForAudience(model, presentation.on);
-  $('model-name').textContent = name ?? (id === AUTO_MODEL_ID ? AUTO_MODEL_NAME : id || AUTO_MODEL_NAME);
+  $('model-name').textContent = name ?? (id === AUTO_MODEL_ID ? AUTO_MODEL_NAME : id || MAIN_MODEL_ID);
+}
+
+function modelTabs(tabs, shown) {
+  const row = document.createElement('div');
+  row.className = 'model-tabs';
+  row.setAttribute('role', 'tablist');
+  drawnPickerTabs(tabs).forEach((tab) => {
+    const button = document.createElement('button');
+    button.className = 'model-tab';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(tab.index === shown));
+    button.textContent = tab.name;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      pickerTab = tab.index;
+      loadModels();
+    });
+    row.append(button);
+  });
+  return row;
+}
+
+function modelNote(className, text) {
+  const note = document.createElement('p');
+  note.className = className;
+  note.textContent = text;
+  return note;
+}
+
+function modelMenuItems(models, current) {
+  const { tabs, remote, remoteName } = pickerSections(models);
+  const shown = pickerTab ?? pickerTabFor(models, current);
+  const choices = tabs[shown].models.map((model) => modelOption(model, current));
+  const empty = choices.length ? [] : [modelNote('model-empty', pickerEmptyNote())];
+  const remoteItems = remote.length ? [modelNote('model-section', remoteName), ...remote.map((model) => modelOption(model, current))] : [];
+  return [modelTabs(tabs, shown), ...choices, ...empty, ...remoteItems];
 }
 
 async function loadModels() {
   try {
     const { models, current } = await (await api(`/models`)).json();
+    listedModels = models;
     showModel(models.find((model) => model.id === current), current);
     const shown = modelsForAudience(models, presentation.on);
     if (!shown.length) return;
-    $('model-menu').replaceChildren(...shown.map((model) => modelOption(model, current)));
+    $('model-menu').replaceChildren(...modelMenuItems(shown, current));
     modelsLoaded = true;
   } catch { /* shown as offline by refreshHealth */ }
 }
@@ -620,6 +661,7 @@ async function loadModels() {
 function toggleModelMenu(open) {
   $('model-menu').hidden = !open;
   $('model').setAttribute('aria-expanded', String(open));
+  pickerTab = null;
   if (open) loadModels();
 }
 
@@ -1093,7 +1135,7 @@ function replyTagText(sentAt, label) {
 }
 
 function labelReply(element, numbers, sentAt) {
-  const label = replyModelLabel(numbers);
+  const label = replyModelLabel(numbers, listedModels);
   const text = replyTagText(sentAt, label);
   if (!element || !text) return;
   const tag = document.createElement('div');

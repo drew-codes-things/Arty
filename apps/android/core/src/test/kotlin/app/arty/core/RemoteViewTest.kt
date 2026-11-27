@@ -118,4 +118,12 @@ class RemoteViewTest {
         assertEquals(RemotePoll(7, 20), RemoteView.nextPoll(RemotePoll(4, 20), 7, 20))
         assertEquals(RemotePoll(4, 20), RemoteView.nextPoll(RemotePoll(4, 20), 0, 20))
     }
+
+    @Test
+    fun `a permission prompt keeps angle brackets as written`() {
+        val question = "Let Arty click <img src=x onerror=alert(1)> 3 < 5 > 2?"
+        val prompt = RemoteView.permissionPrompt(PermissionRequest("r1", "", "$question\nline <b>two</b>"))
+        assertEquals(question, prompt.heading)
+        assertEquals("line <b>two</b>", prompt.preview)
+    }
 }

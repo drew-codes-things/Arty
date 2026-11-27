@@ -67,7 +67,7 @@ class TasksSchedulesAndHandoffsFromTheModel(Server):
 
     def test_a_weapon_handoff_never_reaches_the_other_model(self):
         with unittest.mock.patch.object(models, "ask") as ask:
-            reply = self.run_tool("ask_other_model", {"model": "mimo-v2.6:9b", "prompt": WEAPON_REQUEST})
+            reply = self.run_tool("ask_other_model", {"model": "side-model:9b", "prompt": WEAPON_REQUEST})
         self.assertEqual(reply, safety.WEAPONS_REPLY)
         ask.assert_not_called()
 
@@ -75,7 +75,7 @@ class TasksSchedulesAndHandoffsFromTheModel(Server):
         self.assertIn("Started background task", self.run_tool("start_background_task", {"instructions": "Sort my photos by year."}))
         self.assertIn("Scheduled #", self.run_tool("schedule_task", {"reminder_text": "stretch", "when": "in 10 minutes"}))
         with unittest.mock.patch.object(models, "ask", return_value="def add(a, b): return a + b") as ask:
-            reply = self.run_tool("ask_other_model", {"model": "mimo-v2.6:9b", "prompt": "write an add function"})
+            reply = self.run_tool("ask_other_model", {"model": "side-model:9b", "prompt": "write an add function"})
         self.assertEqual(reply, "def add(a, b): return a + b")
         ask.assert_called_once()
 

@@ -292,6 +292,7 @@ def _stream_reply(user_text, speak=True, look=False, note="", arty_started=False
                     break
                 if isinstance(delta, brain.TurnNumbers):
                     numbers = delta.report
+                    _follow_a_staying_switch(numbers)
                     yield _ndjson({"type": "numbers", "arty": numbers})
                     continue
                 if isinstance(delta, brain.Activity):
@@ -864,7 +865,8 @@ def calendar_remove(event_id: int):
 @app.get("/models")
 def models():
     try:
-        return {"models": brain.list_models(), "current": brain.current_model()}
+        picked = brain.list_models()
+        return {"models": picked, "current": brain.usable_model(brain.current_model(), picked)}
     except brain.BrainError as error:
         return {"models": [], "current": brain.current_model(), "error": str(error)}
 
@@ -873,11 +875,20 @@ class ModelIn(BaseModel):
     id: str
 
 
+def _remember_model(model_id):
+    brain.set_model(model_id)
+    cfg.set_value("brain", "model", brain.current_model())
+
+
+def _follow_a_staying_switch(numbers):
+    if numbers.get("persist") is True and isinstance(numbers.get("pick"), str) and numbers["pick"]:
+        _remember_model(numbers["pick"])
+
+
 @app.post("/model")
 def model_set(body: ModelIn):
     """Switches the brain model this app uses, and remembers it in the config."""
-    brain.set_model(body.id)
-    cfg.set_value("brain", "model", brain.current_model())
+    _remember_model(body.id)
     return {"current": brain.current_model()}
 
 

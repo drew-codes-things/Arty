@@ -1,4 +1,5 @@
 import { answerGuard, flashNewQuestion } from "./answerguard.js";
+import { cardDeck } from "./cardpager.js";
 import { fill, h, sectionHead, showToast } from "./dom.js";
 import {
   COMPACTED_LINE, NO_SUMMARY_SHOWN, addedSince, sessionTitle,
@@ -153,7 +154,7 @@ function transcriptView(element) {
   };
 }
 
-function permissionCard(api, sessionId, request, answered, readUpTo) {
+function permissionCard(api, sessionId, request, answered, readUpTo, onAnswered) {
   const problem = h("p", { class: "notice error-text" });
   problem.hidden = true;
   let sending = false;
@@ -168,6 +169,7 @@ function permissionCard(api, sessionId, request, answered, readUpTo) {
       await api.remoteAnswer(sessionId, request.request_id, allow);
       answered.set(request.request_id, readUpTo());
       card.hidden = true;
+      onAnswered(card);
       showToast(allow ? "Allowed" : "Said no");
     } catch (error) {
       problem.textContent = error.message;
@@ -196,7 +198,7 @@ function forgetAnswersAskedAgain(events, answered, cards) {
   }
 }
 
-function shownCards(api, sessionId, open, cards, answered, readUpTo) {
+function shownCards(api, sessionId, open, cards, answered, readUpTo, onAnswered) {
   const waitingIds = new Set(open.map((request) => request.request_id));
   for (const requestId of cards.keys()) {
     if (!waitingIds.has(requestId)) cards.delete(requestId);
@@ -205,7 +207,7 @@ function shownCards(api, sessionId, open, cards, answered, readUpTo) {
     if (!waitingIds.has(requestId)) answered.delete(requestId);
   }
   return open.filter((request) => !answered.has(request.request_id)).map((request) => {
-    if (!cards.has(request.request_id)) cards.set(request.request_id, permissionCard(api, sessionId, request, answered, readUpTo));
+    if (!cards.has(request.request_id)) cards.set(request.request_id, permissionCard(api, sessionId, request, answered, readUpTo, onAnswered));
     return cards.get(request.request_id);
   });
 }
@@ -316,6 +318,7 @@ export async function followComputer(page, api, sessionId, onBack) {
   let recheck = null;
   const cards = new Map();
   const answered = new Map();
+  const deck = cardDeck(waiting);
   const showActivity = () => dock.show(activityOf(transcript.model, { ended, waiting: waitingCount, quietMs: Date.now() - lastEventAt }));
   showActivity();
   try {
@@ -345,8 +348,8 @@ export async function followComputer(page, api, sessionId, onBack) {
       open = openRequests(open, fresh).slice(-MAX_OPEN_REQUESTS);
       forgetAnswersAskedAgain(fresh, answered, cards);
       poll = nextPoll(poll, read, WAIT_SECONDS);
-      const asking = read.ended ? [] : shownCards(api, sessionId, open, cards, answered, () => poll.after);
-      waiting.replaceChildren(...asking);
+      const asking = read.ended ? [] : shownCards(api, sessionId, open, cards, answered, () => poll.after, deck.drop);
+      deck.show(asking);
       waitingCount = asking.length;
       ended = Boolean(read.ended);
       header.show(read.session, ended ? "Session ended" : "Live", ended ? "" : "live");

@@ -17,6 +17,7 @@ import docs_reading
 import example_checks
 import fresh_answer
 import hidden_notes
+import main_calls
 import models
 import policy
 import private_check
@@ -149,6 +150,7 @@ def turn_rounds(raw: dict | None) -> list[dict]:
 
 
 ENGINE_FAULT_STATUS = 500
+REPLY_SECONDS = 1800
 MODEL_FAILED_ANSWER = "Sorry, the model failed while writing this answer. Please try again."
 AFTER_TOOLS_FAILED_ANSWER = ("Sorry, the model failed while writing this answer{reason}. These steps had already run, "
                              "so I have not repeated them:\n{steps}")
@@ -156,7 +158,7 @@ RAN_RESULT_CHARS = 200
 PLAIN_REASON = re.compile(r"[\w ,.:;'()/-]{1,120}")
 REFUSED_RESULT = "Refused:"
 ENGINE_FAILED_KEY = "engine_failed"
-WINDOW_OVERFLOW = re.compile(r"context (size|length|window)|exceeds the available context|longer than the context", re.IGNORECASE)
+WINDOW_OVERFLOW = main_calls.WINDOW_OVERFLOW
 OVERFLOW_STATUS = 413
 OVERFLOW_TYPE = "context_length_exceeded"
 
@@ -241,9 +243,11 @@ def cut_short_note(config: dict, raw: dict, agent: bool) -> str:
 
 
 def engine_reply(body: dict, draft, risky, on_thinking) -> dict:
-    if draft:
-        return connections.stream_chat(body, lambda piece: draft.feed(piece, risky), on_thinking=on_thinking)
-    return connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body)
+    with main_calls.writing_the_reply():
+        if draft:
+            return connections.stream_chat(body, lambda piece: draft.feed(piece, risky), timeout=REPLY_SECONDS,
+                                           on_thinking=on_thinking)
+        return connections.http_json(f"{ARTY_ENGINE_URL}/api/chat", body=body, timeout=REPLY_SECONDS)
 
 
 def acted(message: dict) -> bool:
@@ -295,15 +299,53 @@ def overflowed_reply(config: dict, reason: str, ran: list[tuple[str, str]]) -> d
     raise message_too_long(config, reason)
 
 
+def without_oldest_turns(messages) -> list | None:
+    if not isinstance(messages, list):
+        return None
+    lead = 0
+    while lead < len(messages) and isinstance(messages[lead], dict) and messages[lead].get("role") == "system":
+        lead += 1
+    turns = messages[lead:]
+    kept = turns[len(turns) // 2:]
+    while kept and not (isinstance(kept[0], dict) and kept[0].get("role") == "user"):
+        kept = kept[1:]
+    if not kept or len(kept) >= len(turns):
+        return None
+    return messages[:lead] + kept
+
+
+def trimmed_reply(body: dict, config: dict, draft, risky, on_thinking, reason: str) -> dict | None:
+    shorter = without_oldest_turns(body.get("messages"))
+    if shorter is None:
+        return None
+    log.warning("a chat did not fit %s's window (%s); sending it again without its oldest %d message(s)",
+                config["model"], reason, len(body["messages"]) - len(shorter))
+    try:
+        return engine_reply({**body, "messages": shorter}, draft, risky, on_thinking)
+    except (urllib.error.HTTPError, RuntimeError) as error:
+        if not WINDOW_OVERFLOW.search(engine_error_text(error)):
+            raise
+        return None
+
+
 def model_reply(body: dict, config: dict, draft, risky, on_thinking, agent: bool, ran: list[tuple[str, str]]) -> dict:
     try:
         return engine_reply(body, draft, risky, on_thinking)
+    except main_calls.MainModelDown as down:
+        if ran:
+            log.warning("%s could not answer after %d tool call(s) ran (%s)", config["model"], len(ran), down.reason)
+            return failed_after_tools_reply(ran, down.reason)
+        if not down.server_fault:
+            raise
+        log.warning("%s could not answer (%s); asking it once more", config["model"], down.reason)
     except (urllib.error.HTTPError, RuntimeError) as error:
         reason = engine_error_text(error)
         overflowed = bool(WINDOW_OVERFLOW.search(reason))
         if overflowed and agent:
             log.warning("an agent conversation did not fit %s's window: %s", config["model"], reason)
             raise WindowOverflow(config["model"], models.context_tokens(config, config["model"])) from None
+        if overflowed and not ran and (trimmed := trimmed_reply(body, config, draft, risky, on_thinking, reason)):
+            return trimmed
         if overflowed:
             return overflowed_reply(config, reason, ran)
         if not is_an_engine_fault(error) or draft and draft.raw:
@@ -315,6 +357,8 @@ def model_reply(body: dict, config: dict, draft, risky, on_thinking, agent: bool
         log.warning("the engine failed a reply from %s (%s); trying once more", config["model"], reason)
     try:
         return engine_reply(body, draft, risky, on_thinking)
+    except main_calls.MainModelDown:
+        raise
     except (urllib.error.HTTPError, RuntimeError, OSError) as error:
         log.warning("the engine failed the retry too (%s); answering that the model failed", engine_error_text(error))
         return failed_model_reply()
